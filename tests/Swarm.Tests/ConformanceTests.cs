@@ -91,38 +91,7 @@ public sealed class ConformanceTests
     [Fact]
     public void AbiVersionMatches()
     {
-        // Load the freshly built kernel DLL by its absolute path, then let the
-        // DllImport above bind to the already-loaded module by name.
-        nint handle;
-        try
-        {
-            handle = NativeLibrary.Load(Build.DllPath);
-        }
-        catch (DllNotFoundException ex) when (IsPolicyBlock(ex))
-        {
-            // Device Guard / Smart App Control blocks freshly built unsigned
-            // modules on some hosts. CI (which sets SWARM_REQUIRE_NATIVE) has
-            // no such policy and must run this; a dev machine may skip it.
-            if (Environment.GetEnvironmentVariable("SWARM_REQUIRE_NATIVE") == "1")
-            {
-                throw;
-            }
-            Assert.Skip("native DLL load blocked by local execution policy (SWARM_REQUIRE_NATIVE not set)");
-            return;
-        }
-
-        try
-        {
-            Assert.Equal(ExpectedAbiVersion, swarm_version());
-        }
-        finally
-        {
-            NativeLibrary.Free(handle);
-        }
+        _ = NativeKernel.Handle; // load the freshly built DLL (or skip on a local policy block)
+        Assert.Equal(ExpectedAbiVersion, swarm_version());
     }
-
-    private static bool IsPolicyBlock(Exception ex) =>
-        ex.Message.Contains("0x800711C7", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("Device Guard", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("application control", StringComparison.OrdinalIgnoreCase);
 }
