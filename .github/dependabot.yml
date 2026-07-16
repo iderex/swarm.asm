@@ -1,7 +1,5 @@
-# Dependabot — weekly maintenance for the GitHub Actions SHA pins.
-#
-# The nuget ecosystem is added by the PR that introduces the tests/ harness;
-# configuring it before a manifest exists only produces noise.
+# Dependabot — weekly maintenance for the GitHub Actions SHA pins and the
+# test-harness NuGet packages.
 
 version: 2
 
@@ -16,6 +14,20 @@ updates:
     open-pull-requests-limit: 5
     groups:
       actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: nuget
+    directory: "/tests/Swarm.Tests"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      nuget-minor-and-patch:
         update-types:
           - minor
           - patch

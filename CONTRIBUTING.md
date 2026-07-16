@@ -28,8 +28,13 @@ Issue-driven, gate-driven:
 
 ```powershell
 .\build.ps1        # bootstraps the pinned FASM on first run, assembles to build/
-dotnet test        # once tests/ exists: reference equivalence + conformance
+dotnet test        # reference equivalence + conformance fitness tests
+npx --yes prettier@3.9.5 --check "**/*.{md,yml,yaml}"   # docs formatting gate
 ```
+
+CI additionally reports the binary size budget (`swarm.exe` ≤ 64 KiB) and
+restores NuGet in locked mode — if you bump a package, commit the regenerated
+`tests/Swarm.Tests/packages.lock.json` with it.
 
 All repo artifacts — code, comments, commits, PRs, issues — are written in
 English.
