@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <!-- net9.0 per the masterplan. CI installs the 9.0.x runtime explicitly
+         (ci.yml); the dev machine carries only newer runtimes, which the
+         roll-forward covers. -->
+    <RollForward>Major</RollForward>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+
+    <!-- Microsoft Testing Platform, not VSTest. VSTest spawns a freshly built
+         testhost.exe, which Device Guard / Smart App Control blocks on the dev
+         machine; the MTP runner executes in-process under the trusted dotnet
+         host, so `dotnet test` behaves identically here and in CI. -->
+    <OutputType>Exe</OutputType>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+  </ItemGroup>
+
+</Project>
