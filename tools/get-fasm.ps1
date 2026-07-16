@@ -19,7 +19,16 @@ if (Test-Path $Exe) {
 
 $zip = Join-Path ([IO.Path]::GetTempPath()) "fasmw-$Version.zip"
 Write-Host "Downloading fasm $Version from $Url"
-Invoke-WebRequest -Uri $Url -OutFile $zip
+try {
+    Invoke-WebRequest -Uri $Url -OutFile $zip
+} catch {
+    # The origin server's TLS configuration is legacy and current CI runners
+    # refuse the handshake. Integrity does not depend on the channel - the
+    # pinned SHA-256 below is the gate - so plain HTTP is a sound fallback.
+    $fallback = $Url -replace '^https:', 'http:'
+    Write-Host "https failed ($($_.Exception.Message)); retrying via $fallback"
+    Invoke-WebRequest -Uri $fallback -OutFile $zip
+}
 
 $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $Sha256) {
