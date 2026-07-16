@@ -1,8 +1,8 @@
 # CI — fast, fail-closed pull-request gate.
 #
 # Runs only on pull requests to `main`, so the mainline scaffolding push does
-# not trigger it. Every PR must assemble, smoke-run, and (once tests/ exists)
-# pass the .NET harness before it can merge.
+# not trigger it. Every PR must assemble, smoke-run, and pass the .NET
+# conformance harness before it can merge.
 #
 # step-security/harden-runner is deliberately absent: it does not support
 # Windows runners, and this build needs Windows to execute the produced PE.
@@ -28,13 +28,25 @@ jobs:
     # it stable.
     name: build
     runs-on: windows-latest
+    # A hung smoke-run or test host fails in minutes, not the 360-minute
+    # GitHub default.
+    timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      # CI has no application-control policy, so the native DLL must actually
+      # load — the ABI conformance test is required here, never skipped.
+      SWARM_REQUIRE_NATIVE: "1"
     steps:
       - name: Check out the source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "9.0.x"
 
       - name: Bootstrap the pinned assembler (SHA-256-verified)
         run: ./tools/get-fasm.ps1
@@ -43,14 +55,12 @@ jobs:
         run: ./build.ps1
 
       - name: Smoke-run
-        # swarm.exe is a GUI-subsystem PE: PowerShell does not wait for GUI
-        # processes started with `&`, so Start-Process -Wait is required for a
-        # reliable exit code.
+        # swarm.exe is a GUI-subsystem PE: -smoke renders a fixed number of
+        # frames and exits, which is what a smoke gate needs. Start-Process
+        # -Wait is required for a reliable exit code from a GUI process.
         run: |
-          $p = Start-Process -FilePath .\build\swarm.exe -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "swarm.exe exited with $($p.ExitCode)" }
+          $p = Start-Process -FilePath .\build\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "swarm.exe -smoke exited with $($p.ExitCode)" }
 
-      # Placeholder until the M0 test net lands: the harness step is added by
-      # the PR that introduces tests/ (reference equivalence, determinism
-      # goldens, conformance fitness tests), and becomes part of this required
-      # check automatically.
+      - name: Test (conformance harness)
+        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo
