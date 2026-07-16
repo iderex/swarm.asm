@@ -1,0 +1,19 @@
+# Build output — everything under build/ is reproducible from src/ via build.ps1.
+build/
+
+# Bootstrapped toolchain — tools/get-fasm.ps1 re-creates it deterministically
+# (SHA-256-pinned download); the binaries never enter history.
+tools/fasm/
+
+# Future .NET test-harness output.
+bin/
+obj/
+
+# Local maintainer tooling and working notes - never in the public tree.
+.claude/
+CLAUDE.md
+docs/internal/
+
+# Editor litter.
+.vs/
+*.user

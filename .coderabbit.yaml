@@ -1,0 +1,69 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/reference/configuration
+#
+# Assertive profile with request-changes workflow: a review does not resolve
+# until every finding has a disposition, which matches the repo rule that no
+# finding is merged past silently. Decoration that would edit maintainer-authored
+# PR bodies is disabled. path_instructions encode this project's standing
+# engineering invariants per area so the review checks against them explicitly.
+language: en-US
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: false
+  poem: false
+  review_status: false
+  sequence_diagrams: false
+  changed_files_summary: false
+  estimate_code_review_effort: false
+  in_progress_fortune: false
+  auto_review:
+    enabled: true
+  # Skip build output and the bootstrapped toolchain; everything else
+  # (including docs) stays in review.
+  path_filters:
+    - "!build/**"
+    - "!tools/fasm/**"
+  path_instructions:
+    - path: "src/kernel/**"
+      instructions: |
+        Pure simulation kernel in x64 assembly. It must contain NO API calls,
+        no I/O, and no global mutable state beyond the world buffers — flag any
+        import reference or OS interaction as an architecture regression. Every
+        routine carries a register-contract header (inputs, outputs, clobbers,
+        alignment); verify the declared clobbers against the code — an
+        undeclared clobbered register is a blocking finding even if nothing
+        crashes today. Check SIMD loop tails (remainder handling and masking),
+        alignment assumptions vs. the instructions used (aligned moves require
+        proven alignment), signed/unsigned mixups, and anything that breaks
+        bit-exact determinism (reassociated accumulation, FTZ/DAZ changes,
+        uninitialized lanes).
+    - path: "src/**"
+      instructions: |
+        Hand-written x64 assembly. At Win64 ABI seams (platform layer,
+        exported DLL functions): shadow space reserved, stack aligned to 16 at
+        call, callee-saved registers including xmm6-xmm15 preserved, vzeroupper
+        before returning to ABI code from AVX paths. Window/GDI code must
+        release what it acquires (DCs, GDI objects). Input parsing is
+        fail-closed: a preset/config that does not validate is rejected with a
+        clear error, never partially applied; flag any parse path that guesses
+        or continues after a validation failure.
+    - path: "tests/**"
+      instructions: |
+        The C# harness is the oracle. Every fail-closed branch needs an
+        explicit NEGATIVE test asserting the reject path. Every structural
+        property (import allowlist, no CRT, kernel purity, contract headers,
+        size budget, determinism) is locked in by a conformance fitness test —
+        flag a structural change that does not extend the conformance suite,
+        and any kernel change whose only tests exercise the happy path.
+    - path: ".github/workflows/**"
+      instructions: |
+        CI workflows. Every action is pinned to a full commit SHA (no floating
+        tags). permissions: {} at the workflow top with minimal per-job grants.
+        Flag a dropped gate (assemble, smoke-run, harness, conformance) or an
+        over-broad token.
+    - path: "tools/**"
+      instructions: |
+        Toolchain bootstrap. The FASM download must stay pinned to an exact
+        SHA-256 and fail closed on mismatch (delete the artifact, non-zero
+        exit). Flag any download without hash verification, any hash algorithm
+        weaker than SHA-256, and any vendored binary entering the tree.

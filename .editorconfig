@@ -1,0 +1,28 @@
+# Editor defaults, so files are consistent before any formatter runs.
+# https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# Assembly sources: 8-column indentation carries the traditional
+# label / mnemonic / operands / comment column layout.
+[*.{asm,inc}]
+indent_size = 8
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[*.ps1]
+indent_size = 4
+end_of_line = crlf
+
+# Trailing whitespace is significant in Markdown (a two-space hard line break),
+# so it is not trimmed there.
+[*.md]
+indent_size = 2
+trim_trailing_whitespace = false

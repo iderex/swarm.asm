@@ -1,0 +1,56 @@
+# CI — fast, fail-closed pull-request gate.
+#
+# Runs only on pull requests to `main`, so the mainline scaffolding push does
+# not trigger it. Every PR must assemble, smoke-run, and (once tests/ exists)
+# pass the .NET harness before it can merge.
+#
+# step-security/harden-runner is deliberately absent: it does not support
+# Windows runners, and this build needs Windows to execute the produced PE.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+# One in-flight run per PR; a newer push cancels the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Fail closed: no ambient token scope at the top level; the job re-grants the
+# minimum it needs.
+permissions: {}
+
+jobs:
+  build:
+    # The job name is the required-check context in the branch ruleset - keep
+    # it stable.
+    name: build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Bootstrap the pinned assembler (SHA-256-verified)
+        run: ./tools/get-fasm.ps1
+
+      - name: Assemble
+        run: ./build.ps1
+
+      - name: Smoke-run
+        # swarm.exe is a GUI-subsystem PE: PowerShell does not wait for GUI
+        # processes started with `&`, so Start-Process -Wait is required for a
+        # reliable exit code.
+        run: |
+          $p = Start-Process -FilePath .\build\swarm.exe -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "swarm.exe exited with $($p.ExitCode)" }
+
+      # Placeholder until the M0 test net lands: the harness step is added by
+      # the PR that introduces tests/ (reference equivalence, determinism
+      # goldens, conformance fitness tests), and becomes part of this required
+      # check automatically.
