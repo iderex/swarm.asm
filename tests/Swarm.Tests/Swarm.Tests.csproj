@@ -10,6 +10,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <!-- The committed lock file pins package hashes; CI restores in locked
+         mode and keys its NuGet cache on it. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
 
     <!-- Microsoft Testing Platform, not VSTest. VSTest spawns a freshly built
          testhost.exe, which Device Guard / Smart App Control blocks on the dev

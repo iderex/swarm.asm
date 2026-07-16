@@ -55,6 +55,36 @@ public sealed class ConformanceTests
             $"swarm.exe is {pe.FileSize} bytes, over the {SizeBudgetBytes}-byte budget");
     }
 
+    [Fact]
+    public void NuGetLockFileCommitted()
+    {
+        // Locked-mode restore only enforces against a lock file that exists,
+        // and the implicit restore silently REGENERATES a missing one before
+        // any test runs (empirically verified) — so probing the disk cannot
+        // pin this invariant. The git index is the state CI checked out: a
+        // PR that drops the lock file fails here even after restore has
+        // self-healed the working tree.
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = Build.RepoRoot,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("ls-files");
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add("tests/Swarm.Tests/packages.lock.json");
+
+        using var git = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("could not start git");
+        var tracked = git.StandardOutput.ReadToEnd().Trim();
+        git.WaitForExit();
+
+        Assert.Equal(0, git.ExitCode);
+        Assert.False(
+            string.IsNullOrEmpty(tracked),
+            "tests/Swarm.Tests/packages.lock.json is not tracked by git - dependency versions would float silently");
+    }
+
     [DllImport("swarm.kernel.dll", CallingConvention = CallingConvention.StdCall)]
     private static extern uint swarm_version();
 

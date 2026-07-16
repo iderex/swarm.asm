@@ -1,8 +1,9 @@
 # CI — fast, fail-closed pull-request gate.
 #
 # Runs only on pull requests to `main`, so the mainline scaffolding push does
-# not trigger it. Every PR must assemble, smoke-run, and pass the .NET
-# conformance harness before it can merge.
+# not trigger it. Every PR must assemble, stay inside the size budget,
+# smoke-run, pass the .NET conformance harness (locked-mode restore), and be
+# Prettier-clean before it can merge.
 #
 # step-security/harden-runner is deliberately absent: it does not support
 # Windows runners, and this build needs Windows to execute the produced PE.
@@ -47,12 +48,25 @@ jobs:
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "9.0.x"
+          # Keyed on the committed lock file; restore runs in locked mode
+          # below, so the cache can never mask a drifted dependency.
+          cache: true
+          cache-dependency-path: tests/Swarm.Tests/packages.lock.json
 
       - name: Bootstrap the pinned assembler (SHA-256-verified)
         run: ./tools/get-fasm.ps1
 
       - name: Assemble
         run: ./build.ps1
+
+      - name: Report the size budget
+        # The conformance test enforces the same bound; this step makes the
+        # number visible on every PR without opening the test log. The 65536
+        # literal must track SizeBudgetBytes in ConformanceTests.cs.
+        run: |
+          $size = (Get-Item .\build\swarm.exe).Length
+          Write-Host "swarm.exe: $size bytes of the 65536-byte budget ($([math]::Round(100 * $size / 65536, 1))%)"
+          if ($size -gt 65536) { throw "swarm.exe is $size bytes - over the 64 KiB budget" }
 
       - name: Smoke-run
         # swarm.exe is a GUI-subsystem PE: -smoke renders a fixed number of
@@ -63,4 +77,13 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "swarm.exe -smoke exited with $($p.ExitCode)" }
 
       - name: Test (conformance harness)
-        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo
+        # Locked-mode restore: a dependency drifting from the committed lock
+        # file fails the build instead of floating silently.
+        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+
+      - name: Check formatting (Prettier)
+        # Exact-pinned: a floating tag would let a prettier minor change
+        # formatting and break the gate with zero repo change, invisible to
+        # Dependabot (no npm manifest). Same pin as the local gate; bumped
+        # deliberately.
+        run: npx --yes prettier@3.9.5 --check "**/*.{md,yml,yaml}"
