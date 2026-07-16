@@ -21,17 +21,22 @@ assembly is the product.
 
 ## Status
 
-**Design phase.** The architecture is being fixed in
-[docs/MASTERPLAN.md](docs/MASTERPLAN.md) before the first kernel line is
-written. Progress is tracked in the issues and milestones:
+**Design decided, foundation being built.** The full architecture — force
+model, memory layout, SIMD strategy, determinism contract — is recorded with
+rationale in [docs/MASTERPLAN.md](docs/MASTERPLAN.md). Progress is tracked in
+the issues and milestones:
 
-| Milestone              | Deliverable                                           |
-| ---------------------- | ----------------------------------------------------- |
-| M0 — Foundation        | Design, pinned toolchain, CI, test harness            |
-| M1 — First light (50k) | Brute-force AVX2 kernel + live window, 50k particles  |
-| M2 — Scale (500k)      | Spatial grid, 500k particles                          |
-| M3 — One million       | Multithreading + AVX-512 path, 1M particles at 60 fps |
-| M4 — Launch            | Benchmark suite vs. existing ports, presets, write-up |
+| Milestone        | Deliverable                                            |
+| ---------------- | ------------------------------------------------------ |
+| M0 — Foundation  | Design, pinned toolchain, CI, test harness             |
+| M1 — First light | Brute-force AVX2 kernel + live window, 8,192 particles |
+| M2 — Scale       | Spatial grid; 50k and 500k particles at 60 fps         |
+| M3 — One million | Multithreading + AVX-512 path, 1M particles at 60 fps  |
+| M4 — Launch      | Benchmark suite vs. existing ports, presets, write-up  |
+
+(M1 was originally 50k; brute force at 50k is arithmetically impossible at
+60 fps — the reasoning lives in [docs/MASTERPLAN.md](docs/MASTERPLAN.md),
+"M1 amendment". The grid delivers 50k in M2 with room to spare.)
 
 ## Principles
 
