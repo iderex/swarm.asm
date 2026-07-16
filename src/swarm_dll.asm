@@ -41,10 +41,20 @@ swarm_version:
         mov     eax, SWARM_ABI_VERSION
         ret
 
+; rng_fill_core is exported directly as swarm_rng_fill: its kernel-tier
+; contract (rcx seed, rdx out, r8d count) already matches the Win64 argument
+; registers, so no adapter is needed. It is integer-only and touches no
+; nonvolatile register or MXCSR, so it wears no seam — unlike the FP exports
+; that follow, where the MXCSR pin (decision 2) is mandatory. Caller-owned
+; bounds, kernel tier: out must hold count u64 slots — the kernel never
+; bounds-checks, so a short buffer from the harness is a silent OOB write.
+include 'kernel/rng.inc'
+
 section '.edata' export data readable
 
   export 'swarm.kernel.dll',\
-         swarm_version, 'swarm_version'
+         swarm_version,  'swarm_version',\
+         rng_fill_core,  'swarm_rng_fill'
 
 section '.reloc' fixups data readable discardable
 
