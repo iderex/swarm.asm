@@ -225,6 +225,18 @@ is authorized only if the exact-lever measurement (the divider microbench #59
 and the IEEE-exact software-pipelining contingency #61) fails to close the
 headline-preset gap; it does not exist in code today.
 
+**Resolution (2026-07-17):** the gate is resolved. The #59 divider microbench
+measured the AVX2 force loop **throughput-bound**, not latency-bound (a 16x
+increase in in-flight groups moved cost/candidate only ~9.6%), so the
+IEEE-exact software-pipelining contingency (#61) was declined — its expected
+gain is ~0, the loop already hides that latency in the out-of-order window.
+The rsqrt premise (the divider >90% of the loop) is disproven: the divide
+unit is ~half the loop, and the ~33 non-divide FP ops co-limit throughput.
+`force_path = 4` was therefore evaluated and is **not pursued** (#38, closed
+not-pursued); it remains a recorded, unbuilt design option, and the ban above
+stands. M3 worker-pool threading (decision 7) is the determinism-safe lever
+instead. Refs #38 #59 #61.
+
 **Rationale:** Per-particle sums have ≤ ~150 bounded terms; f32 error is
 orders below the oracle epsilon, and f64 accumulation halves lane throughput
 for nothing. FTZ/DAZ: friction decays velocities into the denormal range and
@@ -476,6 +488,14 @@ no corresponding code — it must not be read as implemented. Promotion of path
 4 out of caller-pinned (an auto-default) is explicitly out of scope for this
 amendment and requires its own future maintainer decision.
 
+**Resolution (2026-07-17):** the gate is resolved. #59 measured the force
+loop throughput-bound, not latency-bound, so the software-pipelining
+contingency (#61) was declined (~0 expected gain) and the rsqrt divide-bound
+premise is disproven. `force_path = 4` was therefore evaluated and is **not
+pursued**; this decision's threading lever (worker pool + AVX-512) stands as
+the sole path to the 1M headline, unchanged from the original claim. Path 4
+stays a recorded, unbuilt design option. Refs #38 #59 #61.
+
 ### 8. RNG
 
 **Decision:** splitmix64, alone. One u64 state in the arena header; ~10
@@ -663,6 +683,12 @@ disclosed reference machine only).
    NR unless 1 NR clears the whole matrix with ≥3× margin; a corner that
    still fails is a fail-closed restriction of path 4's accepted preset
    domain, never a widening of the shared epsilon.
+   **Resolution (2026-07-17):** closed by measurement — #59 found the force
+   loop throughput-bound, disproving the divide-bound premise this risk
+   depended on; `force_path = 4` was evaluated and is not pursued (#38), so
+   this risk does not apply to any shipped or planned code. Reopen only if
+   M3 threading proves insufficient and a port-level measurement shows rsqrt
+   would net a real win.
 
 ## Quality gates (fixed)
 
