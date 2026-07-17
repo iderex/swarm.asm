@@ -114,6 +114,51 @@ macro integrate_and_store {
         mov     [r10], r9d
 }
 
+; cache_pass_consts — derive the per-pass scalar constant cache from the params
+; block into the KP_* stack slots. Identical prologue for both pass_scalar and
+; pass_avx2 (they share the KP_* layout), so it lives once here (decision 5).
+;   in:       rcx = arena, rsp = the pass frame (KP_* slots reserved)
+;   out:      [rsp+KP_RMAX2 .. KP_GF] filled
+;   clobbers: rax (eax), r10, xmm0-6
+macro cache_pass_consts {
+        lea     r10, [rcx+AH_PARAMS]
+        movss   xmm0, [r10+SP_RMAX]
+        movaps  xmm1, xmm0
+        mulss   xmm1, xmm0
+        movss   [rsp+KP_RMAX2], xmm1    ; rmax2
+        movss   xmm2, [r10+SP_DT]
+        movaps  xmm3, xmm0
+        divss   xmm3, xmm2
+        movss   [rsp+KP_VMAX], xmm3     ; vmax = rmax/dt
+        xorps   xmm4, xmm4
+        subss   xmm4, xmm3
+        movss   [rsp+KP_NEGVMAX], xmm4  ; -vmax
+        movss   xmm5, [f_one]
+        divss   xmm5, xmm0
+        movss   [rsp+KP_INVRMAX], xmm5  ; 1/rmax
+        movss   xmm5, [f_one]
+        divss   xmm5, [r10+SP_BETA]
+        movss   [rsp+KP_INVBETA], xmm5  ; 1/beta
+        movss   xmm5, [f_one]
+        movaps  xmm6, xmm5
+        subss   xmm6, [r10+SP_BETA]     ; 1 - beta
+        divss   xmm5, xmm6
+        movss   [rsp+KP_INV1MB], xmm5   ; 1/(1-beta)
+        movss   xmm5, [r10+SP_FORCE_SCALE]
+        movss   [rsp+KP_FS], xmm5
+        movss   [rsp+KP_DT], xmm2       ; dt
+        movss   xmm5, [r10+SP_FRICTION]
+        movss   [rsp+KP_FRIC], xmm5
+        movss   xmm5, [r10+SP_BETA]
+        movss   [rsp+KP_BETA], xmm5
+        mov     eax, [rcx+AH_G]         ; cache the grid dim for cell binning
+        mov     [rsp+KP_G], eax
+        dec     eax
+        mov     [rsp+KP_GM1], eax       ; g - 1 (cell wrap mask)
+        cvtsi2ss xmm5, dword [rcx+AH_G]
+        movss   [rsp+KP_GF], xmm5       ; g as f32
+}
+
 ; ------------------------------------------------------------------
 ; build_core — produce bank IN for the next pass. Always copies OUT -> IN
 ; (so the pads carry through unchanged); in grid mode (FLAG_GRID) it then
@@ -184,43 +229,7 @@ pass_scalar:
         mov     r15d, [rcx+AH_PARAMS+SP_N]
         lea     r13, [rcx+AH_PARAMS+SP_MATRIX]
 
-        ; --- derive and cache the scalar constants -----------------------
-        lea     r10, [rcx+AH_PARAMS]
-        movss   xmm0, [r10+SP_RMAX]
-        movaps  xmm1, xmm0
-        mulss   xmm1, xmm0
-        movss   [rsp+KP_RMAX2], xmm1    ; rmax2
-        movss   xmm2, [r10+SP_DT]
-        movaps  xmm3, xmm0
-        divss   xmm3, xmm2
-        movss   [rsp+KP_VMAX], xmm3     ; vmax = rmax/dt
-        xorps   xmm4, xmm4
-        subss   xmm4, xmm3
-        movss   [rsp+KP_NEGVMAX], xmm4  ; -vmax
-        movss   xmm5, [f_one]
-        divss   xmm5, xmm0
-        movss   [rsp+KP_INVRMAX], xmm5  ; 1/rmax
-        movss   xmm5, [f_one]
-        divss   xmm5, [r10+SP_BETA]
-        movss   [rsp+KP_INVBETA], xmm5  ; 1/beta
-        movss   xmm5, [f_one]
-        movaps  xmm6, xmm5
-        subss   xmm6, [r10+SP_BETA]     ; 1 - beta
-        divss   xmm5, xmm6
-        movss   [rsp+KP_INV1MB], xmm5   ; 1/(1-beta)
-        movss   xmm5, [r10+SP_FORCE_SCALE]
-        movss   [rsp+KP_FS], xmm5
-        movss   [rsp+KP_DT], xmm2       ; dt
-        movss   xmm5, [r10+SP_FRICTION]
-        movss   [rsp+KP_FRIC], xmm5
-        movss   xmm5, [r10+SP_BETA]
-        movss   [rsp+KP_BETA], xmm5
-        mov     eax, [rcx+AH_G]         ; cache the grid dim for cell binning
-        mov     [rsp+KP_G], eax
-        dec     eax
-        mov     [rsp+KP_GM1], eax       ; g - 1 (cell wrap mask)
-        cvtsi2ss xmm5, dword [rcx+AH_G]
-        movss   [rsp+KP_GF], xmm5       ; g as f32
+        cache_pass_consts               ; derive KP_* from the params block
 
   .outer:
         cmp     r12d, [rsp+KP_LAST]
@@ -447,43 +456,7 @@ pass_avx2:
         shl     r14, 2                  ; stride
         mov     r15d, [rcx+AH_PARAMS+SP_N]
 
-        ; --- scalar const cache (same layout as pass_scalar) --------------
-        lea     r10, [rcx+AH_PARAMS]
-        movss   xmm0, [r10+SP_RMAX]
-        movaps  xmm1, xmm0
-        mulss   xmm1, xmm0
-        movss   [rsp+KP_RMAX2], xmm1
-        movss   xmm2, [r10+SP_DT]
-        movaps  xmm3, xmm0
-        divss   xmm3, xmm2
-        movss   [rsp+KP_VMAX], xmm3
-        xorps   xmm4, xmm4
-        subss   xmm4, xmm3
-        movss   [rsp+KP_NEGVMAX], xmm4
-        movss   xmm5, [f_one]
-        divss   xmm5, xmm0
-        movss   [rsp+KP_INVRMAX], xmm5
-        movss   xmm5, [f_one]
-        divss   xmm5, [r10+SP_BETA]
-        movss   [rsp+KP_INVBETA], xmm5
-        movss   xmm5, [f_one]
-        movaps  xmm6, xmm5
-        subss   xmm6, [r10+SP_BETA]
-        divss   xmm5, xmm6
-        movss   [rsp+KP_INV1MB], xmm5
-        movss   xmm5, [r10+SP_FORCE_SCALE]
-        movss   [rsp+KP_FS], xmm5
-        movss   [rsp+KP_DT], xmm2
-        movss   xmm5, [r10+SP_FRICTION]
-        movss   [rsp+KP_FRIC], xmm5
-        movss   xmm5, [r10+SP_BETA]
-        movss   [rsp+KP_BETA], xmm5
-        mov     eax, [rcx+AH_G]         ; cache the grid dim for cell binning
-        mov     [rsp+KP_G], eax
-        dec     eax
-        mov     [rsp+KP_GM1], eax       ; g - 1 (cell wrap mask)
-        cvtsi2ss xmm5, dword [rcx+AH_G]
-        movss   [rsp+KP_GF], xmm5       ; g as f32
+        cache_pass_consts               ; same KP_* layout as pass_scalar
 
         ; --- ymm constants that live the whole routine -------------------
         vbroadcastss ymm11, [rsp+KP_RMAX2]
