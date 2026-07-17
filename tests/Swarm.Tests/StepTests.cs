@@ -34,7 +34,7 @@ public sealed unsafe class StepTests
     private const float RMax = 0.2f, Beta = 0.3f, Dt = 0.02f, Friction = 0.71f, ForceScale = 10f;
     private const int AhPadded = 32, AhFrame = 16, AhSize = 512;
 
-    private static (SwarmParams, float[]) Make(uint n, uint species, ulong seed)
+    private static (SwarmParams, float[]) Make(uint n, uint species, ulong seed, uint forcePath = 0)
     {
         var matrix = new float[64];
         // varied, deterministic entries in [-1, 1] so the matrix path matters
@@ -45,10 +45,45 @@ public sealed unsafe class StepTests
         {
             Version = 1, N = n, SpeciesN = species, Seed = seed,
             RMax = RMax, Beta = Beta, Dt = Dt, Friction = Friction, ForceScale = ForceScale,
-            ForcePath = 0, Flags = 0,
+            ForcePath = forcePath, Flags = 0,
         };
         for (int i = 0; i < 64; i++) p.Matrix[i] = matrix[i];
         return (p, matrix);
+    }
+
+    // 1 = AVX2 (a stub aliasing the scalar path until the SIMD loop lands),
+    // 3 = the scalar reference path forced. Each dispatches via AH_PATH and
+    // must reproduce the oracle; when the real AVX2 body lands, force_path=1
+    // exercises it here automatically.
+    [Theory]
+    [InlineData(1u)]
+    [InlineData(3u)]
+    public void ForcedPathMatchesOracle(uint forcePath)
+    {
+        _ = NativeKernel.Handle;
+        const uint n = 200, species = 5;
+        const int steps = 8;
+        var (p, matrix) = Make(n, species, 0x77, forcePath);
+
+        var oracle = new TestOracle.World((int)n, (int)species, 0x77,
+            RMax, Beta, Dt, Friction, ForceScale, matrix);
+        for (int k = 0; k < steps; k++) oracle.Step();
+
+        WithArena(p, arena =>
+        {
+            void* a = (void*)arena;
+            Assert.Equal(0, swarm_init(a, swarm_layout_bytes(in p), in p));
+            Assert.Equal(forcePath, *(uint*)((byte*)a + 12)); // AH_PATH stored
+            swarm_step(a, (uint)steps);
+            var x = new float[n]; var y = new float[n];
+            var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
+            swarm_read_state(a, x, y, vx, vy, sp);
+            for (uint i = 0; i < n; i++)
+            {
+                Assert.True(TorusDist(x[i], oracle.X[i]) < 1e-5f, $"x[{i}] path {forcePath}");
+                Assert.True(MathF.Abs(vx[i] - oracle.Vx[i]) < 1e-4f, $"vx[{i}] path {forcePath}");
+            }
+        });
     }
 
     private static void WithArena(in SwarmParams p, Action<nint> body)
@@ -102,6 +137,41 @@ public sealed unsafe class StepTests
                 Assert.Equal(oracle.S[i], sp[i]);
             }
         });
+    }
+
+    [Fact]
+    public void Avx2AndScalarAgree()
+    {
+        // Both paths approximate the same oracle, so they must agree with each
+        // other within ~2x the single-path epsilon — the per-code-path check.
+        _ = NativeKernel.Handle;
+        const uint n = 300, species = 6;
+        var (pAvx, _) = Make(n, species, 0xF00D, 1);
+        var (pSca, _) = Make(n, species, 0xF00D, 3);
+        var (ax, ay) = RunRead(pAvx, 8);
+        var (sx, sy) = RunRead(pSca, 8);
+        for (uint i = 0; i < n; i++)
+        {
+            Assert.True(TorusDist(ax[i], sx[i]) < 2e-5f, $"x[{i}] avx {ax[i]} vs scalar {sx[i]}");
+            Assert.True(TorusDist(ay[i], sy[i]) < 2e-5f, $"y[{i}]");
+        }
+    }
+
+    private static (float[], float[]) RunRead(SwarmParams p, uint steps)
+    {
+        float[] rx = [], ry = [];
+        WithArena(p, arena =>
+        {
+            void* a = (void*)arena;
+            swarm_init(a, swarm_layout_bytes(in p), in p);
+            swarm_step(a, steps);
+            uint n = p.N;
+            var x = new float[n]; var y = new float[n];
+            var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
+            swarm_read_state(a, x, y, vx, vy, sp);
+            rx = x; ry = y;
+        });
+        return (rx, ry);
     }
 
     [Fact]

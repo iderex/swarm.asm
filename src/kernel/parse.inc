@@ -744,8 +744,8 @@ pp_validate_params:
         jne     .bad
         cmp     dword [r10+SP_FLAGS], 0
         jne     .bad
-        cmp     dword [r10+SP_FORCE_PATH], 2
-        ja      .bad
+        cmp     dword [r10+SP_FORCE_PATH], 3
+        ja      .bad                    ; 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
         xor     r11d, r11d              ; table row index
   .row:
         imul    eax, r11d, KR_SIZE

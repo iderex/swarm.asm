@@ -80,7 +80,7 @@ public sealed class LayoutTests
         Assert.Equal(0ul, swarm_layout_bytes(in bad));
 
         bad = Valid();
-        bad.ForcePath = 3;
+        bad.ForcePath = 4; // 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar; 4 invalid
         Assert.Equal(0ul, swarm_layout_bytes(in bad));
 
         bad = Valid();

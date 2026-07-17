@@ -39,6 +39,55 @@ KP_BETA    = 36
 KP_LAST    = 40                         ; outer-loop bound (dword)
 KP_FRAME   = 64                         ; frame size (16-mod-32 slack, scalar)
 
+; integrate_and_store — semi-implicit Euler + vmax clamp + torus wrap + write
+; OUT[i], shared by both code paths. Consumes the accumulated force for
+; particle i as SCALARS in xmm6 (fx) / xmm7 (fy); xmm8/xmm9 hold xi/yi in their
+; low lane; the KP_* const cache is at [rsp]; r12 = i; rbx = bank base,
+; r14 = stride. Clobbers xmm0-4, xmm10, r9, r10, and (via wrap_scalar) xmm1/3/4.
+macro integrate_and_store {
+        elem_addr r10, AR_VX_IN, r12    ; vx = clamp(vx*fric + fx*dt, +/-vmax)
+        movss   xmm0, [r10]
+        mulss   xmm0, [rsp+KP_FRIC]
+        movaps  xmm1, xmm6
+        mulss   xmm1, [rsp+KP_DT]
+        addss   xmm0, xmm1
+        minss   xmm0, [rsp+KP_VMAX]
+        maxss   xmm0, [rsp+KP_NEGVMAX]  ; xmm0 = vx'
+        elem_addr r10, AR_VY_IN, r12
+        movss   xmm2, [r10]
+        mulss   xmm2, [rsp+KP_FRIC]
+        movaps  xmm3, xmm7
+        mulss   xmm3, [rsp+KP_DT]
+        addss   xmm2, xmm3
+        minss   xmm2, [rsp+KP_VMAX]
+        maxss   xmm2, [rsp+KP_NEGVMAX]  ; xmm2 = vy'
+        movaps  xmm4, xmm0              ; x' = wrap(xi + vx'*dt)
+        mulss   xmm4, [rsp+KP_DT]
+        addss   xmm4, xmm8
+        call    wrap_scalar
+        movaps  xmm10, xmm4             ; stash x' (wrap clobbers xmm1/3/4)
+        movaps  xmm4, xmm2              ; y' = wrap(yi + vy'*dt)
+        mulss   xmm4, [rsp+KP_DT]
+        addss   xmm4, xmm9
+        call    wrap_scalar
+        elem_addr r10, AR_X_OUT, r12
+        movss   [r10], xmm10
+        elem_addr r10, AR_Y_OUT, r12
+        movss   [r10], xmm4
+        elem_addr r10, AR_VX_OUT, r12
+        movss   [r10], xmm0
+        elem_addr r10, AR_VY_OUT, r12
+        movss   [r10], xmm2
+        elem_addr r10, AR_SP_IN, r12    ; species, id pass through IN -> OUT
+        mov     r9d, [r10]
+        elem_addr r10, AR_SP_OUT, r12
+        mov     [r10], r9d
+        elem_addr r10, AR_ID_IN, r12
+        mov     r9d, [r10]
+        elem_addr r10, AR_ID_OUT, r12
+        mov     [r10], r9d
+}
+
 ; ------------------------------------------------------------------
 ; build_core — copy bank OUT -> bank IN (brute-mode build).
 ;   in:       rcx = arena
@@ -61,14 +110,29 @@ build_core:
         ret
 
 ; ------------------------------------------------------------------
-; pass_core — fused force+integrate for particles i in [first, last).
+; pass_core — dispatch the fused force+integrate to the code path the arena
+; resolved at init (AH_PATH: 1 AVX2, 2 AVX-512, 3 scalar). Tail jumps preserve
+; the seam's 0-mod-32 entry, which the SIMD path relies on for aligned spills.
+;   in:       rcx = arena, edx = first, r8d = last
+; ------------------------------------------------------------------
+pass_core:
+        mov     eax, [rcx+AH_PATH]
+        cmp     eax, 3
+        je      pass_scalar
+        jmp     pass_avx2               ; 1 AVX2, and 2 AVX-512 until a real
+                                        ;   512 path exists
+
+; ------------------------------------------------------------------
+; pass_scalar — the reference path: fused force+integrate for i in
+; [first, last), one particle and one neighbour at a time (the semantic anchor).
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   out:      OUT[i].{x,y,vx,vy} integrated; OUT[i].{species,id} = IN[i].*
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
 ;             xmm0-10, flags (kernel tier; the seam saved them)
 ;   MXCSR:    assumes the pinned seam MXCSR (round-nearest, FTZ/DAZ)
+;   align:    rsp = 0 mod 32 at entry (seam / dispatcher tail-jump)
 ; ------------------------------------------------------------------
-pass_core:
+pass_scalar:
         sub     rsp, KP_FRAME
         mov     [rsp+KP_LAST], r8d
         mov     r12d, edx               ; i = first
@@ -194,56 +258,199 @@ pass_core:
         jnz     .inner
 
         ; --- integrate particle i (semi-implicit Euler + clamp + wrap) ----
-        elem_addr r10, AR_VX_IN, r12    ; vx = clamp(vx*fric + fx*dt, +/-vmax)
-        movss   xmm0, [r10]
-        mulss   xmm0, [rsp+KP_FRIC]
-        movaps  xmm1, xmm6
-        mulss   xmm1, [rsp+KP_DT]
-        addss   xmm0, xmm1
-        minss   xmm0, [rsp+KP_VMAX]
-        maxss   xmm0, [rsp+KP_NEGVMAX]  ; xmm0 = vx'
-        elem_addr r10, AR_VY_IN, r12
-        movss   xmm2, [r10]
-        mulss   xmm2, [rsp+KP_FRIC]
-        movaps  xmm3, xmm7
-        mulss   xmm3, [rsp+KP_DT]
-        addss   xmm2, xmm3
-        minss   xmm2, [rsp+KP_VMAX]
-        maxss   xmm2, [rsp+KP_NEGVMAX]  ; xmm2 = vy'
-
-        ; x' = wrap(xi + vx'*dt) ; y' = wrap(yi + vy'*dt)
-        movaps  xmm4, xmm0
-        mulss   xmm4, [rsp+KP_DT]
-        addss   xmm4, xmm8
-        call    wrap_scalar
-        movaps  xmm10, xmm4             ; stash x' (wrap clobbers xmm1/3/4)
-        movaps  xmm4, xmm2
-        mulss   xmm4, [rsp+KP_DT]
-        addss   xmm4, xmm9
-        call    wrap_scalar             ; xmm4 = y'
-
-        ; write OUT[i]: x'=xmm10, y'=xmm4, vx'=xmm0, vy'=xmm2
-        elem_addr r10, AR_X_OUT, r12
-        movss   [r10], xmm10
-        elem_addr r10, AR_Y_OUT, r12
-        movss   [r10], xmm4
-        elem_addr r10, AR_VX_OUT, r12
-        movss   [r10], xmm0
-        elem_addr r10, AR_VY_OUT, r12
-        movss   [r10], xmm2
-        elem_addr r10, AR_SP_IN, r12    ; species, id pass through IN -> OUT
-        mov     r9d, [r10]
-        elem_addr r10, AR_SP_OUT, r12
-        mov     [r10], r9d
-        elem_addr r10, AR_ID_IN, r12
-        mov     r9d, [r10]
-        elem_addr r10, AR_ID_OUT, r12
-        mov     [r10], r9d
+        integrate_and_store
 
         inc     r12d
         jmp     .outer
   .done:
         add     rsp, KP_FRAME
+        ret
+
+; pass_avx2 frame: the scalar const cache (KP_*) plus two 32-aligned ymm spill
+; slots for dx/dy (register pressure relief across the force formula).
+KA_DX    = 64
+KA_DY    = 96
+KA_FRAME = 128
+
+; avx2_force_group — one group of 8 neighbours j at [base+r9]; accumulates into
+; ymm6/ymm7. tail=1 ANDs the mask in ymm5 into `valid`. dx/dy are spilled so
+; the force formula has room; ymm0-5 are the working set, ymm8-15 the persistent
+; broadcasts. Pinned masking: blend r2 to 1.0 on invalid lanes BEFORE the sqrt.
+macro avx2_force_group tail {
+        vmovaps ymm0, [rsi+r9]          ; dx = x[j] - xi ; min-image
+        vsubps  ymm0, ymm0, ymm8
+        vroundps ymm4, ymm0, 0
+        vsubps  ymm0, ymm0, ymm4
+        vmovaps ymm1, [rdi+r9]          ; dy
+        vsubps  ymm1, ymm1, ymm9
+        vroundps ymm4, ymm1, 0
+        vsubps  ymm1, ymm1, ymm4
+        vmovaps [rsp+KA_DX], ymm0       ; spill dx, dy
+        vmovaps [rsp+KA_DY], ymm1
+        vmulps  ymm2, ymm0, ymm0        ; r2 = dx*dx + dy*dy
+        vmulps  ymm4, ymm1, ymm1
+        vaddps  ymm2, ymm2, ymm4
+        vxorps  ymm4, ymm4, ymm4
+        vcmpps  ymm3, ymm2, ymm4, 0x0E  ; r2 > 0
+        vcmpps  ymm4, ymm2, ymm11, 0x11 ; r2 < rmax2
+        vandps  ymm3, ymm3, ymm4        ; valid
+      if tail
+        vandps  ymm3, ymm3, ymm5        ; & tail mask (exclude j >= n / pads)
+      end if
+        vblendvps ymm2, ymm12, ymm2, ymm3  ; r2' = valid ? r2 : 1.0 (pre-sqrt)
+        vsqrtps ymm2, ymm2              ; r
+        vmulps  ymm4, ymm2, ymm15       ; xn = r * invrmax
+        vbroadcastss ymm0, [rsp+KP_INVBETA]
+        vmulps  ymm0, ymm4, ymm0        ; rep = xn*invbeta - 1
+        vsubps  ymm0, ymm0, ymm12
+        vaddps  ymm1, ymm4, ymm4        ; att: 2xn - 1 - beta
+        vsubps  ymm1, ymm1, ymm12
+        vsubps  ymm1, ymm1, ymm13
+        vandps  ymm1, ymm1, ymm14       ; abs
+        vbroadcastss ymm5, [rsp+KP_INV1MB]
+        vmulps  ymm1, ymm1, ymm5
+        vsubps  ymm1, ymm12, ymm1       ; tt = 1 - |..|*inv1mb
+        vmovaps ymm5, [r11+r9]          ; sj (species indices)
+        vpermps ymm5, ymm5, ymm10       ; a[k] = matrow[sj[k]]
+        vmulps  ymm1, ymm1, ymm5        ; att = tt * a
+        vcmpps  ymm5, ymm4, ymm13, 0x11 ; xn < beta
+        vblendvps ymm0, ymm1, ymm0, ymm5   ; f = (xn<beta) ? rep : att
+        vandps  ymm0, ymm0, ymm3        ; f &= valid (invalid -> 0)
+        vbroadcastss ymm5, [rsp+KP_FS]
+        vmulps  ymm0, ymm0, ymm5        ; q = f*fs / r  (invalid: f=0, r=1 -> 0)
+        vdivps  ymm0, ymm0, ymm2
+        vmovaps ymm5, [rsp+KA_DX]       ; fx += q*dx ; fy += q*dy
+        vmulps  ymm5, ymm0, ymm5
+        vaddps  ymm6, ymm6, ymm5
+        vmovaps ymm5, [rsp+KA_DY]
+        vmulps  ymm0, ymm0, ymm5
+        vaddps  ymm7, ymm7, ymm0
+}
+
+; ------------------------------------------------------------------
+; pass_avx2 — the 8-wide gather force+integrate (masterplan decision 3).
+; For each particle i (scalar), broadcast xi/yi and load its matrix row, then
+; sweep all j eight at a time; the pinned lane-hygiene order (blend r2 to 1.0
+; on the invalid lanes BEFORE the sqrt) makes a NaN structurally impossible.
+; The 8 partial forces reduce with a fixed shuffle order; integration is the
+; shared scalar tail. Matches the oracle within the epsilon tier (its lane
+; reduction order differs from the scalar path — that is the per-code-path
+; golden's whole reason to exist).
+;   in:       rcx = arena, edx = first, r8d = last
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
+;             ymm0-15, flags (kernel tier; the seam saved the nonvolatiles)
+;   MXCSR:    assumes the pinned seam MXCSR
+;   align:    rsp = 0 mod 32 at entry (aligned ymm loads/spills)
+; ------------------------------------------------------------------
+pass_avx2:
+        sub     rsp, KA_FRAME
+        mov     [rsp+KP_LAST], r8d
+        mov     r12d, edx               ; i = first
+        lea     rbx, [rcx+AH_SIZE]      ; bank base
+        mov     r14d, [rcx+AH_PADDED]
+        shl     r14, 2                  ; stride
+        mov     r15d, [rcx+AH_PARAMS+SP_N]
+
+        ; --- scalar const cache (same layout as pass_scalar) --------------
+        lea     r10, [rcx+AH_PARAMS]
+        movss   xmm0, [r10+SP_RMAX]
+        movaps  xmm1, xmm0
+        mulss   xmm1, xmm0
+        movss   [rsp+KP_RMAX2], xmm1
+        movss   xmm2, [r10+SP_DT]
+        movaps  xmm3, xmm0
+        divss   xmm3, xmm2
+        movss   [rsp+KP_VMAX], xmm3
+        xorps   xmm4, xmm4
+        subss   xmm4, xmm3
+        movss   [rsp+KP_NEGVMAX], xmm4
+        movss   xmm5, [f_one]
+        divss   xmm5, xmm0
+        movss   [rsp+KP_INVRMAX], xmm5
+        movss   xmm5, [f_one]
+        divss   xmm5, [r10+SP_BETA]
+        movss   [rsp+KP_INVBETA], xmm5
+        movss   xmm5, [f_one]
+        movaps  xmm6, xmm5
+        subss   xmm6, [r10+SP_BETA]
+        divss   xmm5, xmm6
+        movss   [rsp+KP_INV1MB], xmm5
+        movss   xmm5, [r10+SP_FORCE_SCALE]
+        movss   [rsp+KP_FS], xmm5
+        movss   [rsp+KP_DT], xmm2
+        movss   xmm5, [r10+SP_FRICTION]
+        movss   [rsp+KP_FRIC], xmm5
+        movss   xmm5, [r10+SP_BETA]
+        movss   [rsp+KP_BETA], xmm5
+
+        ; --- ymm constants that live the whole routine -------------------
+        vbroadcastss ymm11, [rsp+KP_RMAX2]
+        vbroadcastss ymm12, [f_one]
+        vbroadcastss ymm13, [rsp+KP_BETA]
+        vmovaps ymm14, yword [f_absmask256]
+        vbroadcastss ymm15, [rsp+KP_INVRMAX]
+
+  .outer:
+        cmp     r12d, [rsp+KP_LAST]
+        jae     .done
+
+        elem_addr r10, AR_X_IN, r12     ; xi, yi broadcast
+        vbroadcastss ymm8, [r10]
+        elem_addr r10, AR_Y_IN, r12
+        vbroadcastss ymm9, [r10]
+        elem_addr r10, AR_SP_IN, r12    ; matrow = matrix[si*8 .. +7]
+        mov     eax, [r10]
+        and     eax, 7                  ; species < species_n <= 8; keep in-table
+        shl     eax, 5                  ; si*8 floats = si*32 bytes
+        lea     r10, [rcx+AH_PARAMS+SP_MATRIX]
+        vmovups ymm10, [r10+rax]
+        vxorps  ymm6, ymm6, ymm6        ; fx partials
+        vxorps  ymm7, ymm7, ymm7        ; fy partials
+
+        imul    rax, r14, AR_X_IN       ; running group bases
+        lea     rsi, [rbx+rax]          ; &IN.x[0]
+        imul    rax, r14, AR_Y_IN
+        lea     rdi, [rbx+rax]          ; &IN.y[0]
+        imul    rax, r14, AR_SP_IN
+        lea     r11, [rbx+rax]          ; &IN.sp[0]
+
+        xor     r9, r9                  ; group byte offset
+        mov     eax, r15d
+        and     eax, -8                 ; nfull = n & ~7
+        lea     rdx, [rax*4]            ; full byte extent
+  .g8:
+        cmp     r9, rdx
+        jae     .tail
+        avx2_force_group 0
+        add     r9, 32
+        jmp     .g8
+  .tail:
+        ; r9 still holds nfull*4 = the tail group's byte offset (the macro reads
+        ; [base+r9]); rcx holds the arena and rsi/rdi/r11 the group bases, so the
+        ; tail count goes in edx (the full-extent value there is now dead).
+        mov     edx, r15d
+        and     edx, 7                  ; tail lanes
+        jz      .reduce
+        mov     eax, 8                  ; tailmask = tailwin[(8-tail) .. +7]
+        sub     eax, edx
+        lea     r8, [f_tailwin]
+        vmovups ymm5, [r8+rax*4]        ; k low lanes = all-ones
+        avx2_force_group 1
+  .reduce:
+        vextractf128 xmm0, ymm6, 1      ; fixed shuffle-reduce: fx -> xmm6[0]
+        vaddps  xmm6, xmm6, xmm0
+        vhaddps xmm6, xmm6, xmm6
+        vhaddps xmm6, xmm6, xmm6
+        vextractf128 xmm0, ymm7, 1      ; fy -> xmm7[0]
+        vaddps  xmm7, xmm7, xmm0
+        vhaddps xmm7, xmm7, xmm7
+        vhaddps xmm7, xmm7, xmm7
+        integrate_and_store             ; xi/yi in xmm8/xmm9 low lane
+
+        inc     r12d
+        jmp     .outer
+  .done:
+        add     rsp, KA_FRAME
         ret
 
 ; ------------------------------------------------------------------
@@ -296,3 +503,10 @@ step_core:
 
 align 4
 f_one     dd 1.0
+
+; AVX2 path constants. The abs mask is a full ymmword (vandps is packed). The
+; tail window is a sliding LUT: loading 8 dwords at offset (8-k) yields k
+; leading all-ones lanes, masking a partial final group down to its real j's.
+align 32
+f_absmask256 dd 8 dup(0x7FFFFFFF)
+f_tailwin    dd 8 dup(0xFFFFFFFF), 8 dup(0)
