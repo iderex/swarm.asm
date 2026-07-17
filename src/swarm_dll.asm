@@ -12,6 +12,7 @@ entry DllEntryPoint
 
 include 'win64a.inc'
 include 'kernel/abi.inc'
+include 'platform/seam.inc'
 
 section '.text' code readable executable
 
@@ -49,12 +50,41 @@ swarm_version:
 ; bounds, kernel tier: out must hold count u64 slots — the kernel never
 ; bounds-checks, so a short buffer from the harness is a silent OOB write.
 include 'kernel/rng.inc'
+include 'kernel/parse.inc'
+include 'kernel/layout.inc'
+
+; ------------------------------------------------------------------
+; swarm_parse_preset — seam wrapper over parse_preset_core.
+;   in:       rcx text (may be unterminated), edx len, r8 SwarmParams* out
+;   out:      eax = 0 and *out written, or the packed negative error with
+;             *out untouched (fail-closed two-phase commit)
+;   ABI:      full Win64 seam — nonvolatiles + MXCSR saved, pin 0x9FC0,
+;             vzeroupper before return
+; ------------------------------------------------------------------
+swarm_parse_preset:
+        seam_enter
+        call    parse_preset_core
+        seam_leave
+
+; ------------------------------------------------------------------
+; swarm_layout_bytes — seam wrapper over layout_bytes_core.
+;   in:       rcx = SwarmParams*
+;   out:      rax = arena bytes (multiple of 64), or 0 when params are
+;             invalid (fail-closed)
+;   ABI:      full Win64 seam (validation compares under the pinned MXCSR)
+; ------------------------------------------------------------------
+swarm_layout_bytes:
+        seam_enter
+        call    layout_bytes_core
+        seam_leave
 
 section '.edata' export data readable
 
   export 'swarm.kernel.dll',\
-         swarm_version,  'swarm_version',\
-         rng_fill_core,  'swarm_rng_fill'
+         swarm_version,      'swarm_version',\
+         rng_fill_core,      'swarm_rng_fill',\
+         swarm_parse_preset, 'swarm_parse_preset',\
+         swarm_layout_bytes, 'swarm_layout_bytes'
 
 section '.reloc' fixups data readable discardable
 
