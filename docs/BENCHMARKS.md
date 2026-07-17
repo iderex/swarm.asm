@@ -110,11 +110,16 @@ Two consequences on the roadmap:
    that is what collapses the work. It also removes the scalar path's cheap
    skip advantage (a cell's neighbours are mostly in range), so the AVX2 ratio
    should climb well past 2×.
-2. **The shared integrate/store tail still uses SSE encoding** inside the AVX2
-   pass. It runs once per particle, after the n-iteration VEX inner loop, so
-   the VEX↔SSE transition is a small fraction of the pass rather than a
-   hot-loop cost; VEX-encoding it is a tracked cleanup, and this baseline is
-   what a fix is measured against.
+2. **The shared integrate/store tail is now VEX-encoded** inside the AVX2 pass
+   (issue #33). It runs once per particle, after the VEX inner loop. In the
+   **brute** pass the n-iteration force loop dominates, so VEX-encoding the tail
+   is within run-to-run noise — the baseline table above is unchanged. In the
+   **sparse grid** pass it is the reverse: cells hold ~1 neighbour, so the
+   once-per-particle tail dominates the pass, and running it in legacy SSE with
+   dirty ymm upper halves paid a per-instruction merge stall on every tail op.
+   VEX-encoding the tail (bit-identical arithmetic, proven by the per-path
+   goldens and a before/after bit-identity A/B) cut the grid pass ~2.6–2.9× —
+   see the M2 table below.
 
 **Scalar throughput is flat in n** (~684 M interactions/s from 1k to 16k): the
 in-range fraction is constant in n, so the pass stays compute-bound and
@@ -144,10 +149,10 @@ the regime the grid wins in.
 
 | CPU           | n       | rmax  | g   | build ms | pass ms | frame ms | fps   | brute proj |
 | ------------- | ------- | ----- | --- | -------- | ------- | -------- | ----- | ---------- |
-| Ryzen 9 5950X | 50,000  | 1/256 | 256 | 0.295    | 5.923   | 6.219    | 160.8 | 1,977 ms   |
-| Ryzen 9 5950X | 50,000  | 1/512 | 512 | 0.490    | 5.986   | 6.476    | 154.4 | 1,977 ms   |
-| Ryzen 9 5950X | 500,000 | 1/256 | 256 | 3.142    | 84.075  | 87.216   | 11.5  | 197,664 ms |
-| Ryzen 9 5950X | 500,000 | 1/512 | 512 | 3.162    | 62.351  | 65.513   | 15.3  | 197,664 ms |
+| Ryzen 9 5950X | 50,000  | 1/256 | 256 | 0.286    | 2.203   | 2.489    | 401.8 | 1,977 ms   |
+| Ryzen 9 5950X | 50,000  | 1/512 | 512 | 0.423    | 2.062   | 2.484    | 402.5 | 1,977 ms   |
+| Ryzen 9 5950X | 500,000 | 1/256 | 256 | 3.127    | 44.176  | 47.303   | 21.1  | 197,664 ms |
+| Ryzen 9 5950X | 500,000 | 1/512 | 512 | 3.160    | 23.822  | 26.982   | 37.1  | 197,664 ms |
 
 - **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11, **single-threaded**.
 - **Feature path**: AVX2 + FMA, `FLAG_GRID`. **Seed / preset**: `0x5EED`,
@@ -159,26 +164,31 @@ the regime the grid wins in.
   measured AVX2 interaction throughput (~1.28 G/s from the baseline table);
   the O(n²) brute frame is not run at these counts (it would take seconds to
   minutes per frame).
-- **Commit**: the M2 grid kernel (grid build #24 + neighbourhood force #30) ·
-  **Date**: 2026-07-17.
+- **Commit**: the M2 grid kernel (grid build #24 + neighbourhood force #30) with
+  the VEX-encoded integrate tail (#33) · **Date**: 2026-07-17. The pre-#33 grid
+  pass on this machine was 5.923 / 5.986 / 84.075 / 62.351 ms for the four rows;
+  brute is unaffected (the tail is negligible there).
 
 ### Reading the M2 numbers
 
-**50,000 particles hold 60 fps on one core** — 154–161 fps, ~2.5× headroom
-under the 16.67 ms budget — where the brute-force frame would be ~1,977 ms
-(0.5 fps). The grid is **~300× faster than brute at 50k** and turns an
-un-runnable count into a comfortable one.
+**50,000 particles hold 60 fps on one core with room to spare** — ~402 fps,
+~6.7× headroom under the 16.67 ms budget — where the brute-force frame would be
+~1,977 ms (0.5 fps). The grid is **~790× faster than brute at 50k** and turns an
+un-runnable count into a trivial one. (Pre-#33 this was ~155 fps; VEX-encoding
+the integrate tail nearly tripled the sparse-grid pass — see the note above.)
 
-**500,000 particles do not hold 60 fps on one core** — 65 ms/frame at the best
-config (g = 512), ~15 fps — but the grid is still **~3,000× faster than the
-~198 s brute frame**. The gap to 60 fps is ~4×, which is exactly what the M3
-worker-pool fan-out across cores is for: the neighbourhood pass is already
-**split-invariant** (`GridPassSplitInvariance`, `pass(0,n) == pass(0,k);pass(k,n)`
-bit-for-bit), so it parallelises without a determinism change. The counting-sort
-**build is cheap** (0.3 ms at 50k, ~3 ms at 500k) and never the bottleneck; the
-pass dominates, and a larger `g` (sparser cells, smaller `k`) is the lever —
-g = 512 beats g = 256 at 500k (62 vs 84 ms) for that reason.
+**500,000 particles are close to 60 fps on one core** — 27 ms/frame at the best
+config (g = 512), ~37 fps — and the grid is **~7,300× faster than the ~198 s
+brute frame**. The gap to 60 fps is now ~1.6× (pre-#33 it was ~4× at 65 ms/frame),
+which the M3 worker-pool fan-out across cores closes: the neighbourhood pass is
+already **split-invariant** (`GridPassSplitInvariance`,
+`pass(0,n) == pass(0,k);pass(k,n)` bit-for-bit), so it parallelises without a
+determinism change. The counting-sort **build is cheap** (0.3 ms at 50k, ~3 ms
+at 500k) and never the bottleneck; the pass dominates, and a larger `g` (sparser
+cells, smaller `k`) is the lever — g = 512 beats g = 256 at 500k (24 vs 44 ms)
+for that reason.
 
 So M2 delivers the algorithmic win (the grid makes 500k _simulable_ at all, and
-50k interactive) on one core; **500k @ 60 fps is an M3 threading target**, with
-the number above as the baseline to beat.
+50k trivially interactive) on one core; **500k @ 60 fps is an M3 threading
+target**, now within ~1.6× of one core, with the number above as the baseline to
+beat.

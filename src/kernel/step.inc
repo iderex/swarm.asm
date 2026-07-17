@@ -47,46 +47,126 @@ KP_FRAME   = 64                         ; end of the shared const cache
 KN_SCAL_RUNBUF = KP_FRAME               ; 6 * 8 bytes after the const cache
 KN_SCAL_FRAME  = 128                    ; 64 + 48, rounded to a 0-mod-32 frame
 
+; Integrate-tail scalar-FP encoding switch (issue #33). The fused pass runs the
+; per-particle integrate tail once, right after the force loop. In the AVX2 pass
+; ymm8-15 carry dirty upper halves from that VEX loop, so running the tail in
+; legacy-SSE encoding forces a VEX<->SSE transition on every particle. These
+; helpers emit the VEX.128 form when TAIL_VEX=1 (bit-identical scalar arithmetic
+; -- encoding only, so determinism per code path is preserved) and the legacy
+; SSE form otherwise, keeping the AVX2 tail all-VEX while the scalar reference
+; path stays SSE. The scalar path is guaranteed to run without AVX (init.inc:
+; "scalar: always available; no CPU feature required"), so it MUST NOT emit VEX.
+TAIL_VEX = 0
+
+macro t_movss d, s { if TAIL_VEX
+                       vmovss d, s
+                     else
+                       movss d, s
+                     end if }
+macro t_copy d, s  { if TAIL_VEX
+                       vmovaps d, s
+                     else
+                       movaps d, s
+                     end if }
+macro t_mul d, s   { if TAIL_VEX
+                       vmulss d, d, s
+                     else
+                       mulss d, s
+                     end if }
+macro t_add d, s   { if TAIL_VEX
+                       vaddss d, d, s
+                     else
+                       addss d, s
+                     end if }
+macro t_sub d, s   { if TAIL_VEX
+                       vsubss d, d, s
+                     else
+                       subss d, s
+                     end if }
+macro t_min d, s   { if TAIL_VEX
+                       vminss d, d, s
+                     else
+                       minss d, s
+                     end if }
+macro t_max d, s   { if TAIL_VEX
+                       vmaxss d, d, s
+                     else
+                       maxss d, s
+                     end if }
+macro t_cvtt d, s  { if TAIL_VEX
+                       vcvttss2si d, s
+                     else
+                       cvttss2si d, s
+                     end if }
+macro t_round d, s, imm { if TAIL_VEX
+                       vroundss d, s, s, imm
+                     else
+                       roundss d, s, imm
+                     end if }
+macro t_cmplt d, s { if TAIL_VEX
+                       vcmpltss d, d, s
+                     else
+                       cmpltss d, s
+                     end if }
+macro t_and d, s   { if TAIL_VEX
+                       vandps d, d, s
+                     else
+                       andps d, s
+                     end if }
+
 ; integrate_and_store — semi-implicit Euler + vmax clamp + torus wrap + write
 ; OUT[i], shared by both code paths, and the OUT cell id for next frame's grid
 ; build (M2). Consumes the accumulated force for particle i as SCALARS in
 ; xmm6 (fx) / xmm7 (fy); xmm8/xmm9 hold xi/yi in their low lane; the KP_* const
 ; cache is at [rsp] (incl. KP_G/KP_GM1/KP_GF); r12 = i; rbx = bank base,
-; r14 = stride. Clobbers xmm0-4, xmm10, r9, r10, and (via wrap_scalar) xmm1/3/4.
-macro integrate_and_store {
+; r14 = stride. Clobbers xmm0-4, xmm10, r9, r10, and (via the wrap routine)
+; xmm1/3/4. vex=1 VEX-encodes the tail (issue #33): the emitted arithmetic is
+; identical, and the VEX.128 forms additionally zero the upper lanes of the
+; xmm0-4/xmm10 temporaries -- harmless, as none carry live ymm state past the
+; force loop (the persistent ymm6-15 are read but never written here).
+macro integrate_and_store vex {
+        TAIL_VEX = vex
         elem_addr r10, AR_VX_IN, r12    ; vx = clamp(vx*fric + fx*dt, +/-vmax)
-        movss   xmm0, [r10]
-        mulss   xmm0, [rsp+KP_FRIC]
-        movaps  xmm1, xmm6
-        mulss   xmm1, [rsp+KP_DT]
-        addss   xmm0, xmm1
-        minss   xmm0, [rsp+KP_VMAX]
-        maxss   xmm0, [rsp+KP_NEGVMAX]  ; xmm0 = vx'
+        t_movss xmm0, [r10]
+        t_mul   xmm0, [rsp+KP_FRIC]
+        t_copy  xmm1, xmm6
+        t_mul   xmm1, [rsp+KP_DT]
+        t_add   xmm0, xmm1
+        t_min   xmm0, [rsp+KP_VMAX]
+        t_max   xmm0, [rsp+KP_NEGVMAX]  ; xmm0 = vx'
         elem_addr r10, AR_VY_IN, r12
-        movss   xmm2, [r10]
-        mulss   xmm2, [rsp+KP_FRIC]
-        movaps  xmm3, xmm7
-        mulss   xmm3, [rsp+KP_DT]
-        addss   xmm2, xmm3
-        minss   xmm2, [rsp+KP_VMAX]
-        maxss   xmm2, [rsp+KP_NEGVMAX]  ; xmm2 = vy'
-        movaps  xmm4, xmm0              ; x' = wrap(xi + vx'*dt)
-        mulss   xmm4, [rsp+KP_DT]
-        addss   xmm4, xmm8
+        t_movss xmm2, [r10]
+        t_mul   xmm2, [rsp+KP_FRIC]
+        t_copy  xmm3, xmm7
+        t_mul   xmm3, [rsp+KP_DT]
+        t_add   xmm2, xmm3
+        t_min   xmm2, [rsp+KP_VMAX]
+        t_max   xmm2, [rsp+KP_NEGVMAX]  ; xmm2 = vy'
+        t_copy  xmm4, xmm0              ; x' = wrap(xi + vx'*dt)
+        t_mul   xmm4, [rsp+KP_DT]
+        t_add   xmm4, xmm8
+      if vex
+        call    wrap_scalar_avx
+      else
         call    wrap_scalar
-        movaps  xmm10, xmm4             ; stash x' (wrap clobbers xmm1/3/4)
-        movaps  xmm4, xmm2              ; y' = wrap(yi + vy'*dt)
-        mulss   xmm4, [rsp+KP_DT]
-        addss   xmm4, xmm9
+      end if
+        t_copy  xmm10, xmm4             ; stash x' (wrap clobbers xmm1/3/4)
+        t_copy  xmm4, xmm2              ; y' = wrap(yi + vy'*dt)
+        t_mul   xmm4, [rsp+KP_DT]
+        t_add   xmm4, xmm9
+      if vex
+        call    wrap_scalar_avx
+      else
         call    wrap_scalar
+      end if
         elem_addr r10, AR_X_OUT, r12
-        movss   [r10], xmm10
+        t_movss [r10], xmm10
         elem_addr r10, AR_Y_OUT, r12
-        movss   [r10], xmm4
+        t_movss [r10], xmm4
         elem_addr r10, AR_VX_OUT, r12
-        movss   [r10], xmm0
+        t_movss [r10], xmm0
         elem_addr r10, AR_VY_OUT, r12
-        movss   [r10], xmm2
+        t_movss [r10], xmm2
         elem_addr r10, AR_SP_IN, r12    ; species, id pass through IN -> OUT
         mov     r9d, [r10]
         elem_addr r10, AR_SP_OUT, r12
@@ -100,13 +180,13 @@ macro integrate_and_store {
         ; int(coord*g) exact (coord in [0,1) from wrap_scalar, so already
         ; < g); the & (g-1) mask is the belt that keeps cell in [0, g*g)
         ; unconditionally, which is what bounds the histogram/scatter.
-        movaps  xmm0, xmm10             ; x' (still live from the store above)
-        mulss   xmm0, [rsp+KP_GF]
-        cvttss2si r9d, xmm0             ; int(x'*g), truncation = floor for x'>=0
+        t_copy  xmm0, xmm10             ; x' (still live from the store above)
+        t_mul   xmm0, [rsp+KP_GF]
+        t_cvtt  r9d, xmm0               ; int(x'*g), truncation = floor for x'>=0
         and     r9d, [rsp+KP_GM1]       ; cx
-        movaps  xmm0, xmm4              ; y'
-        mulss   xmm0, [rsp+KP_GF]
-        cvttss2si r10d, xmm0
+        t_copy  xmm0, xmm4              ; y'
+        t_mul   xmm0, [rsp+KP_GF]
+        t_cvtt  r10d, xmm0
         and     r10d, [rsp+KP_GM1]      ; cy
         imul    r10d, [rsp+KP_G]        ; cy*g
         add     r9d, r10d               ; cell id
@@ -354,7 +434,7 @@ pass_scalar:
         jnz     .run_loop
 
         ; --- integrate particle i (semi-implicit Euler + clamp + wrap) ----
-        integrate_and_store
+        integrate_and_store 0           ; scalar path: SSE-encoded tail (no AVX)
 
         inc     r12d
         jmp     .outer
@@ -550,7 +630,7 @@ pass_avx2:
         vaddps  xmm7, xmm7, xmm0
         vhaddps xmm7, xmm7, xmm7
         vhaddps xmm7, xmm7, xmm7
-        integrate_and_store             ; xi/yi in xmm8/xmm9 low lane
+        integrate_and_store 1           ; AVX2 path: VEX-encoded tail (issue #33)
 
         inc     r12d
         jmp     .outer
@@ -559,17 +639,35 @@ pass_avx2:
         ret
 
 ; ------------------------------------------------------------------
-; wrap_scalar — p -= floor(p); if p >= 1.0: p = 0.0.
+; wrap_body — p -= floor(p); if p >= 1.0: p = 0.0. One body, two encodings
+; (issue #33): the scalar path calls wrap_scalar (SSE, no AVX guarantee); the
+; AVX2 tail calls wrap_scalar_avx (VEX.128, bit-identical arithmetic) so the
+; once-per-particle wrap does not re-enter legacy SSE with dirty ymm upper
+; halves. TAIL_VEX is set immediately before each body so the t_* helpers pick
+; the right encoding.
+; ------------------------------------------------------------------
+macro wrap_body {
+        t_round xmm1, xmm4, 1           ; floor (round toward -inf)
+        t_sub   xmm4, xmm1              ; p - floor(p)
+        t_copy  xmm3, xmm4              ; mask = (p < 1.0) ? all-ones : 0
+        t_cmplt xmm3, dword [f_one]
+        t_and   xmm4, xmm3              ; p >= 1.0 -> 0
+        ret
+}
+; wrap_scalar — SSE-encoded wrap for the scalar reference path.
 ;   in/out:   xmm4 = p -> wrapped [0,1)
 ;   clobbers: xmm1, xmm3
-; ------------------------------------------------------------------
 wrap_scalar:
-        roundss xmm1, xmm4, 1           ; floor (round toward -inf)
-        subss   xmm4, xmm1              ; p - floor(p)
-        movaps  xmm3, xmm4              ; mask = (p < 1.0) ? all-ones : 0
-        cmpltss xmm3, [f_one]
-        andps   xmm4, xmm3              ; p >= 1.0 -> 0
-        ret
+        TAIL_VEX = 0
+        wrap_body
+; wrap_scalar_avx — VEX.128-encoded wrap for the AVX2 tail (issue #33);
+; bit-identical arithmetic to wrap_scalar, additionally zeroing the upper lanes
+; of ymm1/3/4 (dead registers at this point in the pass).
+;   in/out:   xmm4 = p -> wrapped [0,1)
+;   clobbers: xmm1, xmm3
+wrap_scalar_avx:
+        TAIL_VEX = 1
+        wrap_body
 
 ; ------------------------------------------------------------------
 ; step_core — n_steps x (build + pass over all n), advancing the frame.
