@@ -353,19 +353,31 @@ include 'kernel/plot.inc'
 
 ; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
 ; lands the kernel core at rsp = 0 mod 32 — the same contract the DLL exports
-; carry, so the exe drives the identical, gate-verified code paths.
+; carry, so the exe drives the identical, gate-verified code paths. Clobbers are
+; the wrapped core's (kernel tier); the seam saves/restores the nonvolatiles.
+
+; sim_layout — seam wrapper over layout_bytes_core.
+;   in:       rcx = SwarmParams*
+;   out:      rax = arena bytes (multiple of 64), or 0 when params invalid
 sim_layout:
         seam_enter
         call    layout_bytes_core
         seam_leave
+; sim_init — seam wrapper over init_core.
+;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
+;   out:      eax = 0 on success, else IERR_*
 sim_init:
         seam_enter
         call    init_core
         seam_leave
+; sim_step — seam wrapper over step_core.
+;   in:       rcx arena, edx n_steps
 sim_step:
         seam_enter
         call    step_core
         seam_leave
+; sim_plot — seam wrapper over plot_core.
+;   in:       rcx arena, rdx pixels, r8d w, r9d h
 sim_plot:
         seam_enter
         call    plot_core

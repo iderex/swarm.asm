@@ -5,12 +5,18 @@ namespace Swarm.Tests;
 
 /// <summary>
 /// Source-level structural fitness functions for the simulation kernel
-/// (src/kernel/*.inc). Where <see cref="ConformanceTests"/> pins the shipped
-/// binary, these pin the kernel SOURCE against masterplan decisions 2 and 4:
-/// the kernel is pure computation - no OS seam, imports, writable state, or
+/// (src/kernel/*.inc) and the two shells that host it (src/swarm.asm,
+/// src/swarm_dll.asm). Where <see cref="ConformanceTests"/> pins the shipped
+/// binary, these pin the SOURCE against masterplan decisions 2 and 4: the
+/// kernel is pure computation - no OS seam, imports, writable state, or
 /// MXCSR/AVX-state ownership, and only IEEE-correctly-rounded ops - and every
-/// routine carries a register-contract header. A PR that regresses either fails
-/// the build with the exact offending file, line, and token.
+/// routine (kernel and shell) carries a register-contract header. A PR that
+/// regresses either fails the build with the exact offending file, line, and
+/// token.
+///
+/// The purity scan covers the kernel ONLY: the shells legitimately use
+/// `invoke`/imports (they ARE the OS seam), so they are exempt from purity but
+/// still header-checked.
 /// </summary>
 public sealed class KernelSourceConformanceTests
 {
@@ -19,28 +25,85 @@ public sealed class KernelSourceConformanceTests
     private static string[] KernelIncFiles()
     {
         var dir = Path.Combine(Build.RepoRoot, "src", "kernel");
-        var files = Directory.GetFiles(dir, "*.inc");
+        var incFiles = Directory.GetFiles(dir, "*.inc");
+        Array.Sort(incFiles, StringComparer.Ordinal);
+        Assert.NotEmpty(incFiles); // a moved/renamed kernel dir must fail loudly, not pass vacuously
+
+        // Fail-closed: the kernel dir must hold ONLY .inc sources. A future
+        // src/kernel/foo.asm (or .s) would otherwise slip past the *.inc glob
+        // and go entirely unscanned - a silent purity/contract hole. Make that
+        // a loud failure that forces a human decision, not a quiet gap.
+        var stray = Directory.GetFiles(dir)
+            .Where(f => !f.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
+            .Select(Path.GetFileName)
+            .ToArray();
+        Assert.True(
+            stray.Length == 0,
+            "src/kernel must contain only .inc sources so the *.inc scan covers every kernel " +
+            "file; stray non-.inc file(s): " + string.Join(", ", stray));
+
+        return incFiles;
+    }
+
+    // The shell sources: the exe host (src/swarm.asm) and the test-DLL host
+    // (src/swarm_dll.asm). These are the OS seam - exempt from the purity scan,
+    // but their routines still carry register contracts that must be checked.
+    private static string[] ShellAsmFiles()
+    {
+        var dir = Path.Combine(Build.RepoRoot, "src");
+        var files = Directory.GetFiles(dir, "*.asm");
         Array.Sort(files, StringComparer.Ordinal);
-        Assert.NotEmpty(files); // a moved/renamed kernel dir must fail loudly, not pass vacuously
+        Assert.NotEmpty(files); // a moved/renamed shell must fail loudly, not pass vacuously
         return files;
     }
 
-    // FASM comments run from the first ';' to end of line. Strip them BEFORE any
-    // token match: prose that mentions a banned mnemonic (or the word "section"
-    // inside "non-writable ... section") must never trip the scan, and a banned
-    // instruction can only be flagged where it is real code.
+    // FASM comments run from the first UNQUOTED ';' to end of line. Strip them
+    // BEFORE any token match: prose that mentions a banned mnemonic (or the word
+    // "section" inside "non-writable ... section") must never trip the scan, and
+    // a banned instruction can only be flagged where it is real code. The strip
+    // is quote-aware so a ';' inside a FASM string/char literal (e.g. db ';')
+    // does not truncate real code that follows on the same line (defence in
+    // depth - no such literal exists in the tree today). FASM escapes a quote
+    // inside a same-quoted literal by doubling it ('' or "").
     private static string StripComment(string line)
     {
-        int semi = line.IndexOf(';');
-        return semi < 0 ? line : line[..semi];
+        char quote = '\0';
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (quote != '\0')
+            {
+                if (c == quote)
+                {
+                    if (i + 1 < line.Length && line[i + 1] == quote)
+                    {
+                        i++; // doubled quote = escaped literal quote, stays in the string
+                        continue;
+                    }
+
+                    quote = '\0'; // closing quote
+                }
+            }
+            else if (c == ';')
+            {
+                return line[..i];
+            }
+            else if (c is '\'' or '"')
+            {
+                quote = c; // opening quote
+            }
+        }
+
+        return line;
     }
 
     // Mnemonic/keyword boundary. Assembly identifiers are [A-Za-z0-9_] plus the
     // FASM label punctuation . $ @ ? ~ #. A banned token matches only as a
     // standalone mnemonic/directive - never inside a longer identifier (so the
     // allowed SSE ops movss / mulss / cvttss2si / sqrtss never read as fmul /
-    // fst / fsqrt) and never as a label of the same name (a trailing ':' is
-    // excluded on the right).
+    // fst / fsqrt, and the allowed correctly-rounded sqrtss is never read as the
+    // banned approximate rsqrtss) and never as a label of the same name (a
+    // trailing ':' is excluded on the right).
     private const string BackBoundary = @"(?<![A-Za-z0-9_.$@?~#])";
     private const string FwdBoundary = @"(?![A-Za-z0-9_.$@?~#:])";
 
@@ -54,7 +117,8 @@ public sealed class KernelSourceConformanceTests
         "invoke", "import", "library",              // no OS seam / import table in the kernel
         "ldmxcsr", "stmxcsr", "vzeroupper",         // MXCSR and AVX-state transitions belong to the seam
         "rdtsc", "rdrand", "rdseed",                // no nondeterministic sources; the RNG is owned + seeded
-        "vrsqrtps", "vrsqrtss", "vrcpps", "vrcpss", // approximate reciprocals break IEEE determinism
+        "vrsqrtps", "vrsqrtss", "vrcpps", "vrcpss", // approximate reciprocals (VEX) break IEEE determinism
+        "rsqrtps", "rsqrtss", "rcpps", "rcpss",     // ... and their legacy-SSE encodings, equally approximate
         "fld", "fild", "fst", "fstp", "fadd",       // the x87 stack is banned outright (SoA + SSE/AVX only)
         "fsub", "fmul", "fdiv", "fsqrt", "fabs",
         "fchs", "fxch", "fcom",
@@ -64,7 +128,8 @@ public sealed class KernelSourceConformanceTests
     /// Kernel purity: no OS calls, imports, writable sections, nondeterministic
     /// sources, x87, or approximate-reciprocal ops in src/kernel/*.inc. Comments
     /// are stripped first; the remaining code is matched whole-word so the
-    /// allowed SSE mnemonics are never mistaken for the banned x87 ones.
+    /// allowed SSE mnemonics are never mistaken for the banned x87 ones, and the
+    /// correctly-rounded sqrtss is never mistaken for the banned rsqrtss.
     /// </summary>
     [Fact]
     public void KernelSourcePurityScan()
@@ -109,15 +174,54 @@ public sealed class KernelSourceConformanceTests
             string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// The comment strip ignores a ';' inside a FASM string/char literal, so a
+    /// (future) line carrying both a quoted literal and real code cannot hide a
+    /// banned token behind the literal's semicolon (item 5, defence in depth - no
+    /// such literal exists in the tree today). A naive first-';' split would
+    /// truncate at the quoted semicolon and drop everything after it.
+    /// </summary>
+    [Fact]
+    public void StripCommentIgnoresSemicolonInLiteral()
+    {
+        // A ';' inside a quoted literal is code, not a comment: a banned token
+        // after the literal survives the strip and can still be flagged.
+        const string hidden = "        db ';' rsqrtss xmm0, xmm0";
+        Assert.Contains("rsqrtss", StripComment(hidden));
+        Assert.DoesNotContain("rsqrtss", hidden[..hidden.IndexOf(';')]); // what a naive split would keep
+
+        // Double-quoted literal, same guarantee.
+        Assert.Contains("rcpps", StripComment("        db \";\" rcpps xmm0, xmm0"));
+
+        // A real (unquoted) trailing comment is still stripped; the literal stays.
+        var stripped = StripComment("        db ';'  ; trailing comment");
+        Assert.Contains("db ';'", stripped);
+        Assert.DoesNotContain("trailing", stripped);
+
+        // A doubled quote escapes the delimiter; the ';' inside stays in the string.
+        Assert.Contains("'a''b;c'", StripComment("        db 'a''b;c' ; note"));
+
+        // Ordinary cases unchanged: a leading comment strips to empty, and a
+        // normal trailing comment is removed while the allowed sqrtss is kept.
+        Assert.Equal("", StripComment("; a comment mentioning rsqrtss"));
+        Assert.Contains("sqrtss", StripComment("        sqrtss  xmm4, xmm4 ; r"));
+    }
+
     // A column-0 label: `name:` starting in the first column (a routine or a
     // data-table entry). Local labels (.foo, indented) and constants
     // (NAME = value, no colon) never match. Group 2 is any inline body text.
     private static readonly Regex LabelRegex =
         new(@"^([A-Za-z_][A-Za-z0-9_]*):(.*)$", RegexOptions.CultureInvariant);
 
+    // A `proc NAME ...` definition (win64a.inc macro). The shells declare
+    // WindowProc this way rather than as a bare `name:` label, so the shell scan
+    // recognises it as a routine too. Group 1 is the routine name.
+    private static readonly Regex ProcRegex =
+        new(@"^\s*proc\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.CultureInvariant);
+
     // FASM data-definition / reservation directives. A column-0 label whose
     // first body token is one of these is a DATA table (kr_table, kr_matrix,
-    // swarm_palette), not a routine, and carries no register contract.
+    // swarm_palette, sim_params), not a routine, and carries no register contract.
     private static readonly HashSet<string> DataDirectives = new(StringComparer.OrdinalIgnoreCase)
     {
         "db", "dw", "dd", "dp", "dq", "dt", "du", "file",
@@ -126,28 +230,36 @@ public sealed class KernelSourceConformanceTests
 
     // A register-contract field line inside a banner block: `;   in:`, `; out:`,
     // `; in/out:`, or `; clobbers:` (the routine-contract header convention).
-    // `clobbers:` is present on every routine except the pure tail-dispatch stub
-    // pass_core (step.inc), which declares `in:` only - hence "at least one
-    // field" rather than "clobbers required", so the current tree stays green.
+    // Used by the shell scan, where thin seam wrappers legitimately declare
+    // `in:` only, so "at least one contract field" is the right bar.
     private static readonly Regex ContractField =
         new(@"^\s*;\s*(clobbers|in/out|in|out)\s*:",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // The `; clobbers:` field specifically. Every kernel routine must document
+    // what it clobbers (a wrong/absent clobber list is a bug even when nothing
+    // crashes today - directive 4), so the kernel scan requires exactly this
+    // field rather than merely "some contract field".
+    private static readonly Regex ClobbersField =
+        new(@"^\s*;\s*clobbers\s*:",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex AlignDirective =
         new(@"^align\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Every routine in src/kernel/*.inc carries a register-contract header.
+    /// Every routine in src/kernel/*.inc carries a register-contract header with
+    /// a `clobbers:` field.
     ///
     /// Heuristic: enumerate column-0 `name:` labels. A label is a ROUTINE unless
     /// its first body token is a data directive (then it is a data table). For
     /// each routine, the contiguous comment block immediately above it - blank
     /// and `align` lines are transparent, the first real code/data line ends the
-    /// walk - must contain at least one register-contract field
-    /// (in:/out:/in/out:/clobbers:). This is zero-false-positive on the current
-    /// tree (data tables kr_table/kr_matrix/swarm_palette and every .local label
-    /// are excluded) yet fails if a routine is added as a bare label without a
-    /// header banner.
+    /// walk - must contain a `clobbers:` field. This is zero-false-positive on
+    /// the current tree (data tables kr_table/kr_matrix/swarm_palette and every
+    /// .local label are excluded; every kernel routine, including the
+    /// tail-dispatch stub pass_core, now documents its clobbers) yet fails if a
+    /// routine is added as a bare label without a truthful clobbers line.
     /// </summary>
     [Fact]
     public void RegisterContractHeaderPresent()
@@ -170,9 +282,9 @@ public sealed class KernelSourceConformanceTests
                     continue;
                 }
 
-                if (!HasContractHeader(lines, i))
+                if (!HasHeaderField(lines, i, ClobbersField))
                 {
-                    offenders.Add($"{name}:{i + 1}: routine '{m.Groups[1].Value}' has no register-contract header");
+                    offenders.Add($"{name}:{i + 1}: routine '{m.Groups[1].Value}' has no `clobbers:` contract line");
                 }
             }
         }
@@ -180,7 +292,66 @@ public sealed class KernelSourceConformanceTests
         Assert.True(
             offenders.Count == 0,
             "every routine in src/kernel must carry a register-contract header " +
-            "(a `; ----` banner with in:/out:/clobbers: fields):\n  " +
+            "with a truthful `clobbers:` field:\n  " +
+            string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// Every routine in the shell sources (src/swarm.asm, src/swarm_dll.asm)
+    /// carries a register-contract header. The shells ARE the OS seam - they use
+    /// `invoke`/imports legitimately, so the purity scan does not cover them -
+    /// but the platform routines and DLL export bodies still carry register
+    /// contracts that nothing else header-checks.
+    ///
+    /// Heuristic: routines are column-0 `name:` labels (excluding data tables
+    /// like sim_params) plus `proc NAME` definitions (WindowProc). A thin seam
+    /// wrapper legitimately documents `in:` only, so the bar here is "at least
+    /// one contract field" (in:/out:/in/out:/clobbers:), not clobbers
+    /// specifically. Zero-false-positive on the current tree.
+    /// </summary>
+    [Fact]
+    public void ShellRoutineContractHeaderPresent()
+    {
+        var offenders = new List<string>();
+        foreach (var path in ShellAsmFiles())
+        {
+            var name = Path.GetFileName(path);
+            var lines = File.ReadAllLines(path);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string routine;
+                var label = LabelRegex.Match(lines[i]);
+                if (label.Success)
+                {
+                    if (IsDataLabel(label.Groups[2].Value, lines, i))
+                    {
+                        continue; // data table (sim_params), not a routine
+                    }
+
+                    routine = label.Groups[1].Value;
+                }
+                else
+                {
+                    var proc = ProcRegex.Match(lines[i]);
+                    if (!proc.Success)
+                    {
+                        continue;
+                    }
+
+                    routine = proc.Groups[1].Value;
+                }
+
+                if (!HasHeaderField(lines, i, ContractField))
+                {
+                    offenders.Add($"{name}:{i + 1}: routine '{routine}' has no register-contract header");
+                }
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "every routine in the shell sources (src/*.asm) must carry a register-contract " +
+            "header (a `; ----` banner with an in:/out:/clobbers: field):\n  " +
             string.Join("\n  ", offenders));
     }
 
@@ -200,8 +371,9 @@ public sealed class KernelSourceConformanceTests
     }
 
     // Walk upward from the label over the contiguous banner block; blank and
-    // `align` lines are transparent, the first real code/data line ends it.
-    private static bool HasContractHeader(string[] lines, int labelIndex)
+    // `align` lines are transparent, the first real code/data line ends it. The
+    // block satisfies the contract when a line matches the requested field regex.
+    private static bool HasHeaderField(string[] lines, int labelIndex, Regex field)
     {
         for (int k = labelIndex - 1; k >= 0; k--)
         {
@@ -213,7 +385,7 @@ public sealed class KernelSourceConformanceTests
 
             if (trimmed.StartsWith(';'))
             {
-                if (ContractField.IsMatch(lines[k]))
+                if (field.IsMatch(lines[k]))
                 {
                     return true;
                 }

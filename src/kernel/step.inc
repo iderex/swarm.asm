@@ -152,6 +152,7 @@ build_core:
 ; resolved at init (AH_PATH: 1 AVX2, 2 AVX-512, 3 scalar). Tail jumps preserve
 ; the seam's 0-mod-32 entry, which the SIMD path relies on for aligned spills.
 ;   in:       rcx = arena, edx = first, r8d = last
+;   clobbers: everything pass_scalar/pass_avx2 do (kernel tier; the seam saved it)
 ; ------------------------------------------------------------------
 pass_core:
         mov     eax, [rcx+AH_PATH]
