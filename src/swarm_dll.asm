@@ -56,6 +56,16 @@ include 'kernel/cpuid.inc'
 include 'kernel/init.inc'
 include 'kernel/state.inc'
 include 'kernel/step.inc'
+include 'kernel/plot.inc'
+
+; ------------------------------------------------------------------
+; swarm_plot — seam wrapper over plot_core (FP: x*w needs the pinned MXCSR).
+;   in:       rcx arena, rdx bgra, r8d w, r9d h
+; ------------------------------------------------------------------
+swarm_plot:
+        seam_enter
+        call    plot_core
+        seam_leave
 
 ; build_core is exported directly as swarm_build: 1 arg, integer copy only, it
 ; saves rsi/rdi itself, so it is Win64-clean without the FP seam.
@@ -171,7 +181,8 @@ section '.edata' export data readable
          swarm_read_state,   'swarm_read_state',\
          build_core,         'swarm_build',\
          swarm_pass,         'swarm_pass',\
-         swarm_step,         'swarm_step'
+         swarm_step,         'swarm_step',\
+         swarm_plot,         'swarm_plot'
 
 section '.reloc' fixups data readable discardable
 
