@@ -46,13 +46,13 @@ per-cell matrix editor is a later increment.
 The full architecture — force model, memory layout, SIMD strategy,
 determinism contract — is recorded with rationale in the masterplan. Progress:
 
-| Milestone        | Status | Deliverable                                            |
-| ---------------- | ------ | ------------------------------------------------------ |
-| M0 — Foundation  | done   | Design, pinned toolchain, CI, test harness             |
-| M1 — First light | active | Brute-force AVX2 kernel + live window, 8,192 particles |
-| M2 — Scale       | active | Spatial grid; 50k and 500k particles at 60 fps         |
-| M3 — One million | —      | Multithreading + AVX-512 path, 1M particles at 60 fps  |
-| M4 — Launch      | —      | Benchmark suite vs. existing ports, presets, write-up  |
+| Milestone        | Status | Deliverable                                                                        |
+| ---------------- | ------ | ---------------------------------------------------------------------------------- |
+| M0 — Foundation  | done   | Design, pinned toolchain, CI, test harness                                         |
+| M1 — First light | active | Brute-force AVX2 kernel + live window; ~3,500 live, 8,192 is the acceptance target |
+| M2 — Scale       | active | Spatial grid; 50k and 500k particles at 60 fps                                     |
+| M3 — One million | —      | Multithreading + AVX-512 path, 1M particles at 60 fps                              |
+| M4 — Launch      | —      | Benchmark suite vs. existing ports, presets, write-up                              |
 
 What works today: the deterministic RNG, a fail-closed preset grammar, CPU
 feature detection, arena allocation and seeded init, the scalar and AVX2
