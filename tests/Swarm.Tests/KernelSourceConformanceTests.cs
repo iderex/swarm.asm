@@ -320,10 +320,10 @@ public sealed class KernelSourceConformanceTests
     // register effects of every macro and callee it reaches, a disproportionate
     // effort against a hand-audited kernel. This is a conscious accepted gap, not
     // an oversight: contract accuracy is enforced by the adversarial-review gate
-    // (simd-reviewer reads each routine against its stated contract) and by
-    // CodeRabbit, under prime directive 4 that makes a wrong clobber list a bug
-    // even when nothing crashes today. If that ever proves insufficient, the
-    // follow-up is a body-scanning truthfulness check, tracked as its own issue.
+    // (simd-reviewer reads each routine against its stated contract), under
+    // prime directive 4 that makes a wrong clobber list a bug even when nothing
+    // crashes today. If that ever proves insufficient, the follow-up is a
+    // body-scanning truthfulness check, tracked as its own issue.
 
     /// <summary>
     /// Every routine in src/kernel/*.inc carries a register-contract header with
