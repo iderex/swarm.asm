@@ -37,12 +37,16 @@ KP_DT      = 28
 KP_FRIC    = 32
 KP_BETA    = 36
 KP_LAST    = 40                         ; outer-loop bound (dword)
+KP_G       = 44                         ; grid dim g (u32, M2 cell binning)
+KP_GM1     = 48                         ; g - 1 (cell wrap mask)
+KP_GF      = 52                         ; g as f32
 KP_FRAME   = 64                         ; frame size (16-mod-32 slack, scalar)
 
 ; integrate_and_store — semi-implicit Euler + vmax clamp + torus wrap + write
-; OUT[i], shared by both code paths. Consumes the accumulated force for
-; particle i as SCALARS in xmm6 (fx) / xmm7 (fy); xmm8/xmm9 hold xi/yi in their
-; low lane; the KP_* const cache is at [rsp]; r12 = i; rbx = bank base,
+; OUT[i], shared by both code paths, and the OUT cell id for next frame's grid
+; build (M2). Consumes the accumulated force for particle i as SCALARS in
+; xmm6 (fx) / xmm7 (fy); xmm8/xmm9 hold xi/yi in their low lane; the KP_* const
+; cache is at [rsp] (incl. KP_G/KP_GM1/KP_GF); r12 = i; rbx = bank base,
 ; r14 = stride. Clobbers xmm0-4, xmm10, r9, r10, and (via wrap_scalar) xmm1/3/4.
 macro integrate_and_store {
         elem_addr r10, AR_VX_IN, r12    ; vx = clamp(vx*fric + fx*dt, +/-vmax)
@@ -85,6 +89,21 @@ macro integrate_and_store {
         elem_addr r10, AR_ID_IN, r12
         mov     r9d, [r10]
         elem_addr r10, AR_ID_OUT, r12
+        mov     [r10], r9d
+        ; cell id for next frame's grid build (M2): cell = cy*g + cx,
+        ; cx = int(x'*g) & (g-1), cy = int(y'*g) & (g-1). Power-of-two g makes
+        ; int(coord*g) exact; the mask is the belt against coord == 1.0 in f32.
+        movaps  xmm0, xmm10             ; x' (still live from the store above)
+        mulss   xmm0, [rsp+KP_GF]
+        cvttss2si r9d, xmm0             ; int(x'*g), truncation = floor for x'>=0
+        and     r9d, [rsp+KP_GM1]       ; cx
+        movaps  xmm0, xmm4              ; y'
+        mulss   xmm0, [rsp+KP_GF]
+        cvttss2si r10d, xmm0
+        and     r10d, [rsp+KP_GM1]      ; cy
+        imul    r10d, [rsp+KP_G]        ; cy*g
+        add     r9d, r10d               ; cell id
+        elem_addr r10, AR_CELLID, r12
         mov     [r10], r9d
 }
 
@@ -173,6 +192,12 @@ pass_scalar:
         movss   [rsp+KP_FRIC], xmm5
         movss   xmm5, [r10+SP_BETA]
         movss   [rsp+KP_BETA], xmm5
+        mov     eax, [rcx+AH_G]         ; cache the grid dim for cell binning
+        mov     [rsp+KP_G], eax
+        dec     eax
+        mov     [rsp+KP_GM1], eax       ; g - 1 (cell wrap mask)
+        cvtsi2ss xmm5, dword [rcx+AH_G]
+        movss   [rsp+KP_GF], xmm5       ; g as f32
 
   .outer:
         cmp     r12d, [rsp+KP_LAST]
@@ -382,6 +407,12 @@ pass_avx2:
         movss   [rsp+KP_FRIC], xmm5
         movss   xmm5, [r10+SP_BETA]
         movss   [rsp+KP_BETA], xmm5
+        mov     eax, [rcx+AH_G]         ; cache the grid dim for cell binning
+        mov     [rsp+KP_G], eax
+        dec     eax
+        mov     [rsp+KP_GM1], eax       ; g - 1 (cell wrap mask)
+        cvtsi2ss xmm5, dword [rcx+AH_G]
+        movss   [rsp+KP_GF], xmm5       ; g as f32
 
         ; --- ymm constants that live the whole routine -------------------
         vbroadcastss ymm11, [rsp+KP_RMAX2]
