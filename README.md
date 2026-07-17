@@ -21,18 +21,32 @@ assembly is the product.
 
 ## Status
 
-**Design decided, foundation being built.** The full architecture — force
-model, memory layout, SIMD strategy, determinism contract — is recorded with
-rationale in [docs/MASTERPLAN.md](docs/MASTERPLAN.md). Progress is tracked in
-the issues and milestones:
+**It runs.** The engine simulates and draws a live particle world:
+`build/swarm.exe` opens a window and steps a real multi-species swarm every
+frame. Today it runs the **scalar reference kernel** — the force + integrate
+pass is hand-written x64 that reproduces the pinned physics
+([docs/MASTERPLAN.md](docs/MASTERPLAN.md)) and is checked against an
+independent C# oracle for every step. The AVX2 speed path and interactive
+matrix editing are the current work; the SIMD kernel is what lifts the count
+from the scalar preview toward the headline.
 
-| Milestone        | Deliverable                                            |
-| ---------------- | ------------------------------------------------------ |
-| M0 — Foundation  | Design, pinned toolchain, CI, test harness             |
-| M1 — First light | Brute-force AVX2 kernel + live window, 8,192 particles |
-| M2 — Scale       | Spatial grid; 50k and 500k particles at 60 fps         |
-| M3 — One million | Multithreading + AVX-512 path, 1M particles at 60 fps  |
-| M4 — Launch      | Benchmark suite vs. existing ports, presets, write-up  |
+The full architecture — force model, memory layout, SIMD strategy,
+determinism contract — is recorded with rationale in the masterplan. Progress:
+
+| Milestone        | Status | Deliverable                                            |
+| ---------------- | ------ | ------------------------------------------------------ |
+| M0 — Foundation  | done   | Design, pinned toolchain, CI, test harness             |
+| M1 — First light | active | Brute-force AVX2 kernel + live window, 8,192 particles |
+| M2 — Scale       | —      | Spatial grid; 50k and 500k particles at 60 fps         |
+| M3 — One million | —      | Multithreading + AVX-512 path, 1M particles at 60 fps  |
+| M4 — Launch      | —      | Benchmark suite vs. existing ports, presets, write-up  |
+
+What works today: the deterministic RNG, a fail-closed preset grammar, CPU
+feature detection, arena allocation and seeded init, the scalar force+integrate
+kernel (build / pass / step), the id-ordered state read-back, and the raster —
+each landing behind a green CI gate with oracle-checked tests. What is left for
+M1: the AVX2 gather kernel (the count and the frame budget), and live matrix
+editing.
 
 (M1 was originally 50k; brute force at 50k is arithmetically impossible at
 60 fps — the reasoning lives in [docs/MASTERPLAN.md](docs/MASTERPLAN.md),
