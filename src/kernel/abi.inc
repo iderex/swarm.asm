@@ -20,7 +20,7 @@ SP_BETA        = 24                     ; f32, [0.05, 0.95]
 SP_DT          = 28                     ; f32, (0, 0.1]
 SP_FRICTION    = 32                     ; f32, [0, 1]
 SP_FORCE_SCALE = 36                     ; f32, (0, 100]
-SP_FORCE_PATH  = 40                     ; u32, 0 auto / 1 AVX2 / 2 AVX-512
+SP_FORCE_PATH  = 40                     ; u32, 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
 SP_FLAGS       = 44                     ; u32, reserved — must be 0
 SP_MATRIX      = 48                     ; f32[8][8], row-major, each [-1, 1]
 SP_SIZE        = 304
@@ -53,7 +53,7 @@ PERR_EXTRA_TOKEN  = 12                  ; surplus token on a structural line
 
 AH_MAGIC   = 0                          ; u64, 'SWRM' arena stamp
 AH_ABI     = 8                          ; u32, = SWARM_ABI_VERSION
-AH_PATH    = 12                         ; u32, selected code path (1 AVX2 / 2 AVX-512)
+AH_PATH    = 12                         ; u32, selected code path (1 AVX2 / 2 AVX-512 / 3 scalar)
 AH_FRAME   = 16                         ; u64, step counter (0 at init)
 AH_RNG     = 24                         ; u64, live splitmix64 state
 AH_PADDED  = 32                         ; u32, cached padded_n

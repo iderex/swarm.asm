@@ -47,7 +47,7 @@ init_core:
         call    cpu_paths_core          ; 3. resolve the path (fail-closed)
         mov     r9d, eax                ; supported bits
         mov     r8, [rsp+16]
-        mov     r10d, [r8+SP_FORCE_PATH] ; 0 auto / 1 AVX2 / 2 AVX-512
+        mov     r10d, [r8+SP_FORCE_PATH] ; 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
         test    r10d, r10d
         jnz     .explicit
         test    r9d, CPU_AVX512         ; auto: AVX-512 > AVX2 > fail
@@ -60,6 +60,8 @@ init_core:
         mov     r10d, 1
         jmp     .path_ok
   .explicit:
+        cmp     r10d, 3                 ; scalar: always available (the reference
+        je      .path_ok               ;   path; no CPU feature required)
         cmp     r10d, 1
         jne     .want512
         test    r9d, CPU_AVX2           ; AVX2 requested
