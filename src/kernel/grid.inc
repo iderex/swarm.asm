@@ -184,10 +184,16 @@ NR_LOCALS = 32                           ; 20 used, rounded up
 ; columns (cx-1, cx, cx+1) & (g-1). Cells inside a row are consecutive cell ids
 ; and IN is cell-sorted, so a non-wrapping span is ONE run: base =
 ; cell_start[ry*g + cx-1], count = cell_start[ry*g + cx+2] - base. The torus
-; column seam (cx == 0 or cx == g-1) splits the row into TWO runs; g >= 4 keeps
-; the three columns distinct, so the runs never overlap and no neighbour is
-; double-listed. Empty runs (count 0, sparse cells) are appended too — the
-; caller's tail logic contributes zero for a zero-count run. This is a pure
+; column seam (cx == 0 or cx == g-1) splits that row into TWO runs so the
+; wrapped column becomes its own contiguous span. Disjointness (no neighbour
+; summed twice) needs the 3x3 block to name each cell once, which fails only if
+; the window folds a cell onto itself: the three columns (cx-1, cx, cx+1) & (g-1)
+; must be pairwise distinct AND so must the three rows (cy-1, cy, cy+1) & (g-1) --
+; the floor is g >= 3 on BOTH axes (at g = 2 either window folds -1 onto +1).
+; arena_dims_core clamps g to [4, 512] (layout.inc), so g >= 4 clears both floors
+; and no neighbour is double-listed. Empty runs (count 0, sparse cells) are
+; appended too -- the caller's tail logic contributes zero for a zero-count run.
+; This is a pure
 ; function of (cx, cy, g, cell_start), which is what makes the neighbourhood
 ; force deterministic and pass-split invariant.
 ;   in:       ecx = cx (in [0, g)), edx = cy (in [0, g)), r8d = g,
