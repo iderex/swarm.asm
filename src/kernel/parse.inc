@@ -742,8 +742,8 @@ pp_validate_params:
         mov     r10, rcx
         cmp     dword [r10+SP_VERSION], 1
         jne     .bad
-        cmp     dword [r10+SP_FLAGS], 0
-        jne     .bad
+        test    dword [r10+SP_FLAGS], not SP_FLAGS_VALID   ; any reserved bit set?
+        jnz     .bad
         cmp     dword [r10+SP_FORCE_PATH], 3
         ja      .bad                    ; 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
         xor     r11d, r11d              ; table row index

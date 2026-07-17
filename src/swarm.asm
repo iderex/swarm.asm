@@ -348,6 +348,7 @@ include 'kernel/cpuid.inc'
 include 'kernel/init.inc'
 include 'kernel/state.inc'
 include 'kernel/step.inc'
+include 'kernel/grid.inc'
 include 'kernel/plot.inc'
 
 ; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
