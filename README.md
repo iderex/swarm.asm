@@ -109,6 +109,19 @@ dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
 Issue-driven: every change starts as an issue and lands as a gated PR — see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## AI assistance
+
+swarm.asm is built with AI assistance, and says so openly. Claude (Anthropic)
+helped with the development, the review, and the translation — always on
+individual process steps, never handing over finished work — and every step
+was supervised by a human maintainer and corrected when in doubt.
+
+AI-assisted is not AI-authored: a human is responsible for this project at
+all times. The engineering gates the code actually stands on — a green CI,
+an adversarial multi-lens review on every sensitive change, and the
+maintainer's sign-off before any merge — are the real guarantee; the AI is a
+tool inside that process, not a substitute for it.
+
 ## License
 
 [MIT](LICENSE)
