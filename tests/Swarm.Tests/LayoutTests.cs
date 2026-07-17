@@ -39,7 +39,7 @@ public sealed class LayoutTests
         {
             g *= 2;
         }
-        ulong total = 256 + (ulong)padded * 52 + ((ulong)g * g + 1) * 4;
+        ulong total = 512 + (ulong)padded * 52 + ((ulong)g * g + 1) * 4;
         return (total + 63) & ~63UL;
     }
 

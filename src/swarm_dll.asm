@@ -52,6 +52,23 @@ swarm_version:
 include 'kernel/rng.inc'
 include 'kernel/parse.inc'
 include 'kernel/layout.inc'
+include 'kernel/cpuid.inc'
+include 'kernel/init.inc'
+
+; cpu_paths_core is exported directly as swarm_cpu_paths: it takes no args,
+; returns the path bits in eax, and preserves rbx itself (its only nonvolatile
+; touch), so it is Win64-clean and integer-only — no seam.
+
+; ------------------------------------------------------------------
+; swarm_init — seam wrapper over init_core (FP: the u01 convert needs the pin).
+;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
+;   out:      eax = 0 on success, else IERR_* (arena untouched on failure)
+;   ABI:      full Win64 seam
+; ------------------------------------------------------------------
+swarm_init:
+        seam_enter
+        call    init_core
+        seam_leave
 
 ; ------------------------------------------------------------------
 ; swarm_parse_preset — seam wrapper over parse_preset_core.
@@ -84,7 +101,9 @@ section '.edata' export data readable
          swarm_version,      'swarm_version',\
          rng_fill_core,      'swarm_rng_fill',\
          swarm_parse_preset, 'swarm_parse_preset',\
-         swarm_layout_bytes, 'swarm_layout_bytes'
+         swarm_layout_bytes, 'swarm_layout_bytes',\
+         cpu_paths_core,     'swarm_cpu_paths',\
+         swarm_init,         'swarm_init'
 
 section '.reloc' fixups data readable discardable
 
