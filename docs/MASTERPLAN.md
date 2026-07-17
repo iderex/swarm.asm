@@ -208,11 +208,15 @@ enforced by a forbidden-mnemonic conformance scan.
 
 **Amendment (accepted in principle 2026-07-17, design #38, maintainer
 Conditional-GO — see decision 7 for the gating sequence):** the whitelist
-admits one gated, opt-in, **never-auto-default** exception: `force_path = 4`
-("AVX2-fast" — `vrsqrtps` + one Newton-Raphson refinement), selectable only by
-the caller, exactly like the existing scalar `force_path = 3`. Its
-determinism guarantee is explicitly narrower than paths 1-3 (see the
-Determinism hard constraint above). The IEEE whitelist continues to govern
+reserves one gated, opt-in, **never-auto-default** exception, to be added only
+once the path is built: `force_path = 4` ("AVX2-fast" — `vrsqrtps` + one
+Newton-Raphson refinement), selectable only by the caller, exactly like the
+existing scalar `force_path = 3`. Until it is built, the ban above stands
+unchanged — `vrsqrtps`/`vrcpps` remain forbidden everywhere in `src/kernel/`,
+and narrowing the conformance scan to permit them inside path 4 is part of
+building it, not part of this amendment. Path 4's determinism guarantee will
+be explicitly narrower than paths 1-3 (see the Determinism hard constraint
+above). The IEEE whitelist continues to govern
 every auto-selectable path (1/2/3) unchanged. FMA stays on the whitelist — it
 is IEEE-correctly-rounded and cross-vendor bit-identical, not an
 approximation — and is introduced **only** inside path 4, so path 1's exact
