@@ -1,14 +1,15 @@
 # CodeRabbit configuration — https://docs.coderabbit.ai/reference/configuration
 #
-# Assertive profile with request-changes workflow: a review does not resolve
-# until every finding has a disposition, which matches the repo rule that no
-# finding is merged past silently. Decoration that would edit maintainer-authored
-# PR bodies is disabled. path_instructions encode this project's standing
-# engineering invariants per area so the review checks against them explicitly.
+# Automatic review is DISABLED (maintainer decision, 2026-07-17): the
+# adversarial review gate (four refute-by-default lenses + simd-reviewer, run
+# per PR) is the review of record for this project, so the CodeRabbit bot no
+# longer comments on pull requests. The path_instructions below are retained
+# so that if auto_review is ever re-enabled it checks against this project's
+# standing engineering invariants; they have no effect while it is off.
 language: en-US
 reviews:
   profile: assertive
-  request_changes_workflow: true
+  request_changes_workflow: false
   high_level_summary: false
   poem: false
   review_status: false
@@ -17,7 +18,7 @@ reviews:
   estimate_code_review_effort: false
   in_progress_fortune: false
   auto_review:
-    enabled: true
+    enabled: false
   # Skip build output and the bootstrapped toolchain; everything else
   # (including docs) stays in review.
   path_filters:
