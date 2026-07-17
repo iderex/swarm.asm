@@ -33,8 +33,15 @@ The measured speedup and its honest caveats live in
 the scalar reference on Zen 3 (the vector loop is divider-bound; the scalar
 path cheaply skips the out-of-range pairs the vector path still computes), and
 the larger SIMD win waits on the M2 cell-sorted layout that shrinks the
-candidate set from n² to the in-range neighbours. Interactive matrix editing
-and lifting the live count are the remaining M1 work.
+candidate set from n² to the in-range neighbours.
+
+**It's interactive.** The window is keyboard-driven — **Space** pauses,
+**R** reseeds the world, **M** rerolls the attraction matrix, **Esc** quits —
+with edits applied at step boundaries and the frame paced to a real 60 fps by a
+high-resolution timer. The live count is set to what one core holds at 60 fps
+(brute-force AVX2); **8,192 @ 60 fps waits on the M2 grid / M3 threads** (one
+core is ~19 fps at 8k, [docs/BENCHMARKS.md](docs/BENCHMARKS.md)). A full
+per-cell matrix editor is a later increment.
 
 The full architecture — force model, memory layout, SIMD strategy,
 determinism contract — is recorded with rationale in the masterplan. Progress:
