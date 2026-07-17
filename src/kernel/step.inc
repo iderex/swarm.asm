@@ -92,7 +92,9 @@ macro integrate_and_store {
         mov     [r10], r9d
         ; cell id for next frame's grid build (M2): cell = cy*g + cx,
         ; cx = int(x'*g) & (g-1), cy = int(y'*g) & (g-1). Power-of-two g makes
-        ; int(coord*g) exact; the mask is the belt against coord == 1.0 in f32.
+        ; int(coord*g) exact (coord in [0,1) from wrap_scalar, so already
+        ; < g); the & (g-1) mask is the belt that keeps cell in [0, g*g)
+        ; unconditionally, which is what bounds the histogram/scatter.
         movaps  xmm0, xmm10             ; x' (still live from the store above)
         mulss   xmm0, [rsp+KP_GF]
         cvttss2si r9d, xmm0             ; int(x'*g), truncation = floor for x'>=0
@@ -114,8 +116,9 @@ macro integrate_and_store {
 ;   in:       rcx = arena
 ;   out:      brute: IN = OUT (all six arrays, incl. pads). grid: additionally
 ;             IN[0..n) reordered by ascending cell id, cell_start filled.
-;   clobbers: rax, rcx, r10, flags; saves+restores rbx, rsi, rdi (grid_sort
-;             preserves the remaining nonvolatiles it uses)
+;   clobbers: rax, rcx, r10, flags (grid mode additionally clobbers r11 via
+;             grid_sort); saves+restores rbx, rsi, rdi (grid_sort preserves
+;             the remaining nonvolatiles it uses)
 ;   MXCSR:    untouched (integer copy / sort)
 ; ------------------------------------------------------------------
 build_core:

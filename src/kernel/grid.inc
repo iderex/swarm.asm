@@ -11,7 +11,9 @@
 ; seed_cellids — cell id for the seeded reals [0, n), so the first grid build
 ; sorts by valid keys. cell = cy*g + cx, cx = int(x*g) & (g-1) (decision 3).
 ;   in:       rcx = arena (OUT seeded, AH_G cached)
-;   out:      cellid[0..n) written; pads (>= n) untouched (never read by build)
+;   out:      cellid[0..n) written; cellid pads (>= n) are left uninitialized
+;             and MUST NOT be read (the build only histograms/scatters [0,n);
+;             a later neighbourhood pass that reads pad cells must fill them)
 ;   clobbers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11, xmm0, xmm1, flags;
 ;             saves+restores rbx
 ;   MXCSR:    assumes the pinned seam MXCSR; cvttss2si truncates (RC-independent)
@@ -61,9 +63,9 @@ seed_cellids:
 ;   in:       rcx = arena (IN currently == OUT; cellid[0..n) valid)
 ;   out:      IN[0..n) = OUT reals in ascending cell order; cell_start[0..g*g]
 ;             = the exclusive-prefix run starts (cell_start[g*g] = n)
-;   clobbers: rax, rcx, rdx, r8-r11 (grid-tier); saves+restores rbx, rsi, rdi,
-;             r12-r15 (grid_sort is reached by tail-jump from the swarm_build
-;             export, so it must preserve the Win64 nonvolatiles)
+;   clobbers: rax, rcx, r10, r11, flags (grid-tier); saves+restores rbx, rsi,
+;             rdi, r12-r15 (grid_sort is reached by tail-jump from the
+;             swarm_build export, so it must preserve the Win64 nonvolatiles)
 ;   MXCSR:    untouched (integer counting sort)
 ; ------------------------------------------------------------------
 grid_sort:
