@@ -97,25 +97,32 @@ Console.WriteLine("60 fps needs frame <= 16.67 ms; multi-core is M3.");
 // --- AVX2 force inner loop: cycles/candidate + throughput-vs-latency (#59) ---
 // The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
 // the #38 rsqrt design both rest on: what does one candidate pair cost in the
-// AVX2 force group, and is that group THROUGHPUT-bound (divide-unit saturated)
-// or LATENCY-bound on its vsqrtps/vdivps chain?
+// AVX2 force group, and is that group THROUGHPUT-bound (execution units
+// saturated) or LATENCY-bound on a loop-carried dependency chain?
 //
 // It reuses the same brute AVX2 pass the table above times; there is no separate
 // kernel entry point to isolate the group, so the isolation is arithmetic: at a
 // large n the O(n^2) inner loop is ~all of the pass (the once-per-i integrate
 // tail is 1/n of the work), so ms/pass / n^2 is the per-candidate inner-loop
-// cost to within ~0.01%. The force group processes 8 candidate lanes and runs
-// exactly one vsqrtps + one vdivps, so cost/group = 8 x cost/candidate.
+// cost. At n=16384 the tail is ~0.006% of the pass, so that row is clean. The
+// force group processes 8 candidate lanes and runs exactly one vsqrtps + one
+// vdivps, so cost/group = 8 x cost/candidate.
 //
-// ns/candidate is the clock-free measured primitive. Cycles are derived at the
-// recorded single-core sustained-AVX2 boost clock (per-machine, like every
-// other number here) — edit RefGhz to your host; the classification below does
-// not depend on it. The throughput-vs-latency call is made WITHOUT a clock, by
-// the ILP-saturation test: a latency-bound loop speeds up markedly when far more
-// independent work is in flight; a throughput-bound (unit-saturated) one does
-// not. Between n=1024 and n=16384 the number of independent force groups in
-// flight per particle grows 16x (n/8), so a near-flat cost/candidate across that
-// span is the signature of a throughput-bound loop.
+// ns/candidate is the clock-free measured primitive; cycles are derived at the
+// recorded single-core sustained-AVX2 boost clock (per-machine, like every other
+// number here) — edit RefGhz to your host.
+//
+// The throughput-vs-latency verdict rests on the DEPENDENCY STRUCTURE, not the
+// n-sweep. The only loop-carried dependency across force groups is the fx/fy
+// accumulator add (step.inc: vaddps ymm6/ymm7), ~3-4 cyc/group; the
+// vsqrtps/vdivps chain is recomputed each group from independent neighbour loads
+// and does NOT carry. Measured cost/group (~31 cyc) far exceeds that ~3-4 cyc
+// carried floor, so the binding constraint is execution-unit THROUGHPUT, not the
+// dependency chain. A flat cost/candidate as n grows is NOT a discriminator: a
+// carried-chain-bound loop shows the same flat curve (extra iterations add no
+// exploitable ILP), so the n-sweep below only bounds the per-i amortization
+// term. A true empirical discriminator (e.g. a split-accumulator variant) would
+// need a kernel edit, out of scope for this kernel-read-only bench.
 if (haveAvx2)
 {
     const double RefGhz = 4.9; // 5950X single-core boost under sustained AVX2; recorded per-host
@@ -126,7 +133,7 @@ if (haveAvx2)
     double smallNs = smallMs * 1e6 / ((double)nSmall * nSmall); // ns / candidate pair
     double largeNs = largeMs * 1e6 / ((double)nLarge * nLarge);
     double largeCyc = largeNs * RefGhz;      // cycles / candidate at RefGhz
-    double ilpRatio = smallNs / largeNs;     // >1 means the larger-ILP run is faster
+    double largeGroupCyc = largeCyc * 8;     // cycles / 8-lane force group
 
     Console.WriteLine();
     Console.WriteLine("AVX2 force inner loop (#59): cycles/candidate, throughput vs latency");
@@ -136,23 +143,29 @@ if (haveAvx2)
     Console.WriteLine(
         $"  per 8-lane force group      : {largeNs * 8:0.00} ns  (1x vsqrtps + 1x vdivps per group)");
     Console.WriteLine(
-        $"  at RefGhz = {RefGhz:0.0} GHz          : {largeCyc:0.00} cycles/candidate = {largeCyc * 8:0.0} cycles/group");
+        $"  at RefGhz = {RefGhz:0.0} GHz          : {largeCyc:0.00} cycles/candidate = {largeGroupCyc:0.0} cycles/group");
     Console.WriteLine();
-    Console.WriteLine("  ILP-saturation test (clock-free throughput-vs-latency classifier):");
+    Console.WriteLine("  Throughput-bound, not latency-bound (from the dependency structure):");
     Console.WriteLine(
-        $"    n={nSmall,-6} : {smallNs:0.000} ns/candidate   (~{nSmall / 8} independent groups/particle in flight)");
+        "    loop-carried floor = the fx/fy accumulator add, the only carried dep  ~3-4 cyc/group");
     Console.WriteLine(
-        $"    n={nLarge,-6} : {largeNs:0.000} ns/candidate   (~{nLarge / 8} independent groups/particle in flight)");
+        $"    measured ~{largeGroupCyc:0} cyc/group >> ~3-4 cyc -> execution-unit throughput binds, not the");
     Console.WriteLine(
-        $"    16x more in-flight ILP changes cost/candidate by {(ilpRatio - 1) * 100:0.#}% -> "
-        + (ilpRatio < 1.2 ? "ILP-saturated -> THROUGHPUT-bound" : "latency-sensitive -> re-examine"));
+        "    vsqrtps/vdivps chain (per-group, recomputed from independent loads). Matches ~1.25 G/s.");
+    Console.WriteLine();
+    Console.WriteLine("  Per-i amortization (NOT a latency/throughput discriminator - a flat curve is");
+    Console.WriteLine("  the same signature for both bound classes):");
     Console.WriteLine(
-        "    (a latency-bound loop would speed up markedly with 16x more independent groups; the");
+        $"    n={nSmall,-6} : {smallNs:0.000} ns/candidate   ({1e3 / smallNs:0.0} M/s)");
     Console.WriteLine(
-        "     small residual is dominated by the once-per-i integrate-tail amortization, not latency.)");
+        $"    n={nLarge,-6} : {largeNs:0.000} ns/candidate   ({1e3 / largeNs:0.0} M/s)");
+    Console.WriteLine(
+        $"    the ~{(smallNs / largeNs - 1) * 100:0.#}% span is per-i pipeline serialization at the integrate barrier +");
+    Console.WriteLine(
+        "    the VEX<->SSE tail transition; the exact cause is not isolated here.");
     Console.WriteLine();
     Console.WriteLine(
-        "  The measured group cost is ~2x the published Zen 3 vsqrtps+vdivps ymm divide-pipe");
+        $"  The measured ~{largeGroupCyc:0} cyc/group is ~2x the published Zen 3 vsqrtps+vdivps ymm divide-pipe");
     Console.WriteLine(
         "  throughput (~11-15 cyc/group), so the divide unit is roughly half the loop, not >90%:");
     Console.WriteLine(

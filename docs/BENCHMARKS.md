@@ -210,26 +210,41 @@ so cost/group = 8 × cost/candidate.
   and cost/candidate does not depend on the in-range fraction.
 - **Cycles**: `ns/candidate` is the clock-free measured primitive; cycles are
   derived at `RefGhz = 4.9` (this part's single-core sustained-AVX2 boost) — a
-  recorded per-machine constant, like every number here. The
-  throughput-vs-latency verdict below does **not** depend on it.
+  recorded per-machine constant, like every number here. The verdict below is
+  robust across the plausible boost-clock range: the measured ~28–31 cyc/group
+  (at 4.4–4.9 GHz) stays far above the ~3–4 cyc carried-chain floor at any
+  single-core AVX2 clock.
 - **Commit**: kernel under test `c4a73a0` (the force loop `step.inc` is
   unchanged since the baseline above; the bench harness lands with this row) ·
   **Date**: 2026-07-17.
 
 ### Reading the numbers — throughput-bound, ~2.8× the budget line
 
-**The loop is throughput-bound, not latency-bound**, and this is measured
-without a clock. In the brute pass every candidate group is independent (each
-reads a different `j`), so the number of independent groups in flight per
-particle is `n/8`. Between n = 1024 and n = 16384 that available ILP grows 16×,
-yet cost/candidate falls only **~9.6%** (0.875 → 0.798 ns). A latency-bound
-loop would speed up markedly when handed 16× more independent work; this one is
-already ILP-saturated, so the divide/sqrt latency is fully hidden behind the
-out-of-order window — the group's `vsqrtps → … → vdivps` chain is per-group and
-not loop-carried (the only carried dependency is the `fx`/`fy` accumulate, a
-~3-cycle add). The small residual is dominated by the once-per-i integrate-tail
-amortizing over more neighbours (the same ~10% the baseline table shows), not by
-latency hiding. **Verdict: throughput-bound.**
+**The loop is throughput-bound, not latency-bound.** The verdict rests on the
+loop's dependency structure, not on the n-sweep. Across force groups the _only_
+loop-carried dependency is the `fx`/`fy` accumulator add (`step.inc`, the
+`vaddps ymm6`/`ymm7`) — a ~3–4 cycle chain; the `vsqrtps → … → vdivps` work is
+recomputed each group from independent neighbour loads and does **not** carry
+between groups. A loop bound by its carried chain would cost ~3–4 cyc/group; the
+measured **~31 cyc/group** is ~8× that floor, so the binding constraint is
+execution-unit **throughput**, not the dependency chain — consistent with the
+loop tracking the sustained ~1.25 G/s the baseline table shows.
+
+**The n-sweep is _not_ the discriminator** (the earlier draft that leaned on it
+was wrong). A flat cost/candidate as n grows is the **same** signature for a
+throughput-bound and a latency-bound loop — extra iterations of a carried chain
+add no exploitable ILP either, and the hardware's in-flight window is bounded by
+the reorder buffer, not by `n`. All the n-sweep bounds is the per-i amortization
+term: cost/candidate moves only ~9.6% (0.875 → 0.798 ns) from n = 1024 to
+n = 16384. That residual is **not** the once-per-i integrate tail (which is
+~0.1% of the pass at n = 1024, far too small to shift per-candidate cost by
+~10%); the likelier cause is per-i pipeline serialization at the integrate
+barrier plus the SSE-encoded tail's VEX↔SSE transition (the cleanup the baseline
+section already flags) — the exact split is not isolated here. The
+representative n = 16384 row (tail ~0.006%) is unaffected either way. A true
+empirical latency-vs-throughput discriminator — e.g. a split-accumulator kernel
+variant — would need a kernel edit, out of scope for this kernel-read-only
+bench; the verdict rests on the 31-vs-3–4 cyc argument.
 
 **Cost is ~3.9 cycles/candidate ≈ 31 cycles/group** — about **2.8× the
 masterplan budget line** of ~1.3–1.4 cyc/candidate (~12 cyc/group). That budget
@@ -242,9 +257,10 @@ is roughly twice that. This is already implicit in the baseline throughput
 Open-risk-1's rule is "if measured > 14 cyc/candidate, the fallback is
 software-pipelining two j-groups." Measured **3.9 ≪ 14**, so the threshold is
 not tripped. More fundamentally, software-pipelining two j-groups is a
-_latency_-hiding transform, and this loop's latency is already hidden (it is
-throughput-bound / ILP-saturated). Interleaving two groups by hand cannot lift a
-throughput ceiling the hardware scheduler already reaches — it would only add
+_latency_-hiding transform, and this loop is throughput-bound, not latency-bound
+(the carried chain is ~3–4 cyc/group against a ~31 cyc/group cost). Interleaving
+two groups by hand cannot lift a throughput ceiling the units already set — it
+would only add
 register pressure for ~0 gain. The IEEE-exact pipelining attempt should expect
 no throughput win here; its value, if any, is in relieving a bottleneck the
 measurement does not show.
