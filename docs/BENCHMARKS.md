@@ -183,6 +183,74 @@ So M2 delivers the algorithmic win (the grid makes 500k _simulable_ at all, and
 50k interactive) on one core; **500k @ 60 fps is an M3 threading target**, with
 the number above as the baseline to beat.
 
+## The M3 worker pool (parallel pass; #68)
+
+The M3 worker pool fans the force+integrate pass across a persistent pool of
+one-per-physical-core workers (`CreateThread` once, main participates as
+worker 0, auto-reset events for wake/join). The build (counting sort) stays
+serial in v1. The pass is a pure, split-invariant map, so the threaded result
+is **bit-identical to the serial pass for every thread count**
+(`PassParallelMatchesSerial` asserts exact equality across `T = 1, 2, 4, max`);
+this is pure throughput, no accuracy trade. Work is a static even partition of
+`[0, n)` with every boundary rounded to a multiple of 16 (16 f32 = one 64-byte
+line, so no OUT array is false-shared across workers).
+
+| CPU           | n       | g   | T   | pass ms | frame ms | fps  | pass speedup |
+| ------------- | ------- | --- | --- | ------- | -------- | ---- | ------------ |
+| Ryzen 9 5950X | 500,000 | 512 | 1   | 64.320  | 74.827   | 13.4 | 0.98×        |
+| Ryzen 9 5950X | 500,000 | 512 | 2   | 32.561  | 43.069   | 23.2 | 1.93×        |
+| Ryzen 9 5950X | 500,000 | 512 | 4   | 15.982  | 26.490   | 37.8 | 3.93×        |
+| Ryzen 9 5950X | 500,000 | 512 | 8   | 8.146   | 18.654   | 53.6 | 7.71×        |
+| Ryzen 9 5950X | 500,000 | 512 | 16  | 4.979   | 15.487   | 64.6 | 12.61×       |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11. **T** = worker
+  count; `T = 16` is the auto-detected physical-core count (SMT is not used — a
+  divider-bound AVX2 loop gains nothing from a second sibling on the shared
+  divide/sqrt port). **Feature path**: AVX2 + FMA, `FLAG_GRID`. **Seed /
+  preset**: `0x5EED`, 6 species, `rmax = 1/512`, varied attraction matrix.
+- **pass ms** = the threaded pass (`swarm_pass_mt`), min-of-rounds over the
+  frozen sorted IN bank (identical work every round), so the scaling is clean.
+  **frame** = serial build + threaded pass. **pass speedup** = serial pass ÷
+  threaded pass; the `T = 1` row (0.98×) shows the pool wake/join overhead is
+  negligible against a 60 ms pass.
+- **serial build** here is **10.5 ms** — the counting sort timed on the
+  **initial uniform-random** frame, whose ~1.9 particles across `g² = 262,144`
+  cells scatter the stable backward pass across memory. That is the worst-case
+  build; the settled post-warmup distribution the M2 table times is **~3.2 ms**
+  (clustered cells, better locality). The frame column uses the worst-case
+  build, so a steady-state frame at `T = 16` is nearer **~8 ms (~120 fps)**.
+- **Commit**: the M3 worker pool (`src/platform/pool.inc`, #68) · **Date**:
+  2026-07-18.
+
+### Reading the M3 numbers — 500k @ 60 fps reached
+
+**500,000 particles clear 60 fps on 16 cores.** At `T = 16` the threaded pass
+is **4.98 ms** (a **12.6×** speedup over the 62.8 ms serial pass), and even with
+the worst-case 10.5 ms uniform-frame build the frame is **15.5 ms — 64.6 fps**,
+inside the 16.67 ms budget. Against the settled ~3.2 ms build the steady-state
+frame is ~8 ms (~120 fps). Either way the ~4× gap the M2 baseline recorded is
+closed by threading alone.
+
+**Scaling is near-linear to 8 cores, then tapers.** 1.93× / 3.93× / 7.71× at
+`T = 2 / 4 / 8` is essentially ideal — the 16-aligned partition keeps the seven
+OUT arrays off shared cache lines, so there is no false-sharing collapse. The
+9th–16th cores add 7.71× → 12.6× (a run-to-run 12–15× at the top of the sweep):
+the second CCD reaches the working set across the inter-CCD fabric and the pass
+shifts partly bandwidth-bound past 8 cores, exactly the risk decision 6 flagged.
+It is a scaling taper, not a correctness effect — the state stays bit-identical.
+
+**Determinism is independent of T.** The static split is bit-identical for any
+`T` because each particle's output is a pure function of the frozen IN bank plus
+`cell_start`; the per-thread MXCSR pin (each worker crosses the same seam the
+exports do, pinning `0x9FC0` FTZ/DAZ before any FP op) is what makes that hold
+across threads. `PassParallelMatchesSerial` gates it at `T = 1, 2, 4, 16` on
+both the AVX2 and scalar paths, exact equality.
+
+**1M is still the open target.** At 1M the cells are ~2× denser (`g` clamps at
+512), `k` rises, and the pass grows super-linearly; there is no measured 1M row
+yet. Threads alone may not reach 60 fps at 1M — decision 6 pairs M3 with the
+AVX-512 path for that, and a measured 1M serial baseline is the next step.
+
 ## The AVX2 force inner loop (cycles/candidate; #59)
 
 The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
