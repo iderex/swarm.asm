@@ -59,6 +59,40 @@ foreach (int n in ns)
 }
 Console.WriteLine();
 Console.WriteLine("ms = best (min) per-pass time over 9 rounds; per-machine — record in docs/BENCHMARKS.md.");
+
+// --- M2 grid: build (counting sort) + 3x3 neighbourhood pass at scale -------
+// The grid replaces the O(n^2) sweep with O(n*k). g = the largest power of two
+// with 1/g >= rmax (clamped [4,512]); a small rmax gives a large g, so cells
+// are sparse and k (neighbours per particle) is small — that is the regime the
+// grid wins in. We time the AVX2 grid frame = build (once, OUT frozen) + the
+// neighbourhood pass (build once, then repeat over the frozen sorted IN), so
+// the work is identical every round. The brute-force frame at these counts is
+// O(n^2) and impractical to run, so it is PROJECTED from the measured AVX2
+// interaction throughput (the table above) and clearly labelled as such.
+Console.WriteLine();
+Console.WriteLine("M2 grid (AVX2, FLAG_GRID): build + 3x3 neighbourhood pass");
+double avx2ThroughputMpS = haveAvx2 ? (16384.0 * 16384.0) / (TimePass(16384, Avx2) * 1e3) : 0;
+Console.WriteLine(
+    $"{"n",9} {"rmax",8} {"g",5} {"build ms",10} {"pass ms",10} {"frame ms",10} {"fps",8} {"brute proj",12}");
+Console.WriteLine(new string('-', 80));
+foreach (int n in new[] { 50_000, 500_000 })
+{
+    foreach (float rmax in new[] { 1f / 256f, 1f / 512f })
+    {
+        var (buildMs, passMs) = TimeGrid((uint)n, rmax);
+        double frameMs = buildMs + passMs;
+        double fps = 1000.0 / frameMs;
+        // Projected single-core brute frame: n^2 candidate pairs / measured Mp/s.
+        double bruteProjMs = haveAvx2 ? ((double)n * n) / (avx2ThroughputMpS * 1e3) : double.NaN;
+        int g = GridDim(rmax);
+        Console.WriteLine(
+            $"{n,9} {rmax,8:0.00000} {g,5} {buildMs,10:0.000} {passMs,10:0.000} " +
+            $"{frameMs,10:0.000} {fps,8:0.0} {bruteProjMs,10:0.0} ms");
+    }
+}
+Console.WriteLine();
+Console.WriteLine("frame = build + pass (single core); brute proj = n^2 / measured AVX2 Mp/s (O(n^2) not run).");
+Console.WriteLine("60 fps needs frame <= 16.67 ms; multi-core is M3.");
 return 0;
 
 // --- helpers ---------------------------------------------------------------
@@ -126,6 +160,97 @@ static SwarmParams MakeParams(uint n, uint forcePath)
         Flags = 0,
     };
     // varied, deterministic matrix in [-1,1] so the attraction path is exercised
+    for (uint a = 0; a < 6; a++)
+        for (uint b = 0; b < 6; b++)
+            p.Matrix[(int)(a * 8 + b)] = MathF.Sin(a * 3.1f + b * 1.7f);
+    return p;
+}
+
+// Grid frame cost, split into the counting-sort build and the 3x3
+// neighbourhood pass, each timed over frozen input so the work is identical
+// every round (build once then repeat the pass over the sorted IN; repeat the
+// build over the frozen OUT bank).
+static unsafe (double build, double pass) TimeGrid(uint n, float rmax)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException($"layout rejected n={n} rmax={rmax}");
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        int rc = Native.swarm_init(arena, bytes, in p);
+        if (rc != 0)
+            throw new InvalidOperationException($"init failed rc={rc} n={n} rmax={rmax}");
+
+        Native.swarm_build(arena); // sort IN once; the pass then recomputes from it
+        for (int i = 0; i < 3; i++)
+            Native.swarm_pass(arena, 0, n);
+        double passMs = MinOfRounds(() => Native.swarm_pass(arena, 0, n));
+
+        for (int i = 0; i < 3; i++)
+            Native.swarm_build(arena);
+        double buildMs = MinOfRounds(() => Native.swarm_build(arena));
+
+        return (buildMs, passMs);
+    }
+    finally
+    {
+        NativeMemory.AlignedFree(arena);
+    }
+}
+
+// Best (min) per-call time in ms over 9 rounds, each round sized to run for at
+// least ~120 ms so the Stopwatch resolution is negligible. The minimum is the
+// honest lower bound on a fixed-work kernel call (least perturbed by scheduling
+// and clock transitions).
+static double MinOfRounds(Action work)
+{
+    var est = Stopwatch.StartNew();
+    work();
+    est.Stop();
+    double oneMs = Math.Max(est.Elapsed.TotalMilliseconds, 1e-3);
+    int perRound = Math.Clamp((int)(120.0 / oneMs), 1, 100_000);
+
+    double best = double.MaxValue;
+    for (int round = 0; round < 9; round++)
+    {
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < perRound; i++)
+            work();
+        sw.Stop();
+        best = Math.Min(best, sw.Elapsed.TotalMilliseconds / perRound);
+    }
+    return best;
+}
+
+// Grid dimension for a preset, mirroring arena_dims_core (layout.inc): the
+// largest power of two with 1/g >= rmax, clamped to [4, 512].
+static int GridDim(float rmax)
+{
+    int g = 4;
+    while (g < 512 && 1f / (2 * g) >= rmax)
+        g *= 2;
+    return g;
+}
+
+static SwarmParams MakeGridParams(uint n, float rmax)
+{
+    var p = new SwarmParams
+    {
+        Version = 1,
+        N = n,
+        SpeciesN = 6,
+        Seed = 0x5EED,
+        RMax = rmax,
+        Beta = 0.3f,
+        Dt = 0.02f,
+        Friction = 0.71f,
+        ForceScale = 10f,
+        ForcePath = 1, // AVX2
+        Flags = 1, // FLAG_GRID
+    };
     for (uint a = 0; a < 6; a++)
         for (uint b = 0; b < 6; b++)
             p.Matrix[(int)(a * 8 + b)] = MathF.Sin(a * 3.1f + b * 1.7f);
