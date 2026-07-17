@@ -40,7 +40,12 @@ KP_LAST    = 40                         ; outer-loop bound (dword)
 KP_G       = 44                         ; grid dim g (u32, M2 cell binning)
 KP_GM1     = 48                         ; g - 1 (cell wrap mask)
 KP_GF      = 52                         ; g as f32
-KP_FRAME   = 64                         ; frame size (16-mod-32 slack, scalar)
+KP_FRAME   = 64                         ; end of the shared const cache
+
+; pass_scalar adds a neighbour-run buffer after the const cache: up to 6 runs
+; (three 3x3 rows, each split at most once by the torus seam) of {base, count}.
+KN_SCAL_RUNBUF = KP_FRAME               ; 6 * 8 bytes after the const cache
+KN_SCAL_FRAME  = 128                    ; 64 + 48, rounded to a 0-mod-32 frame
 
 ; integrate_and_store — semi-implicit Euler + vmax clamp + torus wrap + write
 ; OUT[i], shared by both code paths, and the OUT cell id for next frame's grid
@@ -158,6 +163,9 @@ pass_core:
 ; ------------------------------------------------------------------
 ; pass_scalar — the reference path: fused force+integrate for i in
 ; [first, last), one particle and one neighbour at a time (the semantic anchor).
+; Each particle's neighbours come from the resolved run set (grid = the 3x3 cell
+; runs via neighbour_runs, brute = the single run [0, n)), so the scalar path is
+; an independent check of the same neighbourhood the AVX2 path consumes.
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   out:      OUT[i].{x,y,vx,vy} integrated; OUT[i].{species,id} = IN[i].*
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
@@ -166,7 +174,7 @@ pass_core:
 ;   align:    rsp = 0 mod 32 at entry (seam / dispatcher tail-jump)
 ; ------------------------------------------------------------------
 pass_scalar:
-        sub     rsp, KP_FRAME
+        sub     rsp, KN_SCAL_FRAME
         mov     [rsp+KP_LAST], r8d
         mov     r12d, edx               ; i = first
         lea     rbx, [rcx+AH_SIZE]      ; bank base
@@ -224,14 +232,49 @@ pass_scalar:
         xorps   xmm6, xmm6              ; fx
         xorps   xmm7, xmm7              ; fy
 
-        ; inner-loop running source pointers into IN.x / IN.y / IN.species
-        imul    rax, r14, AR_X_IN
+        ; --- resolve the neighbour run set: grid mode = the 3x3 cell runs,
+        ;     brute = the degenerate single run [0, n) (decision 3) ---------
+        mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]  ; arena = bank base - header
+        test    eax, FLAG_GRID
+        jz      .single_run
+        movaps  xmm0, xmm8             ; cx = int(xi*g) & (g-1) (reproduces the
+        mulss   xmm0, [rsp+KP_GF]      ;   cell id the sort used, bit-exact)
+        cvttss2si eax, xmm0
+        and     eax, [rsp+KP_GM1]
+        mov     ecx, eax
+        movaps  xmm0, xmm9             ; cy = int(yi*g) & (g-1)
+        mulss   xmm0, [rsp+KP_GF]
+        cvttss2si eax, xmm0
+        and     eax, [rsp+KP_GM1]
+        mov     edx, eax
+        mov     r8d, [rsp+KP_G]
+        mov     r9d, [rsp+KP_GM1]
+        imul    rax, r14, AR_ARRAYS    ; cell_start base = bank base + 13*stride
+        lea     r10, [rbx+rax]
+        lea     r11, [rsp+KN_SCAL_RUNBUF]
+        call    neighbour_runs         ; eax = run count, buf filled
+        mov     ecx, eax
+        jmp     .runs
+  .single_run:
+        mov     dword [rsp+KN_SCAL_RUNBUF], 0   ; base = 0
+        mov     [rsp+KN_SCAL_RUNBUF+4], r15d    ; count = n
+        mov     ecx, 1
+  .runs:
+        lea     r8, [rsp+KN_SCAL_RUNBUF]        ; run-buffer walk pointer (ecx runs left)
+  .run_loop:
+        mov     edx, [r8]              ; base = particle index of this run
+        imul    rax, r14, AR_X_IN      ; IN.x / IN.y / IN.species at base
         lea     rsi, [rbx+rax]
+        lea     rsi, [rsi+rdx*4]
         imul    rax, r14, AR_Y_IN
         lea     rdi, [rbx+rax]
+        lea     rdi, [rdi+rdx*4]
         imul    rax, r14, AR_SP_IN
-        lea     r11, [rbx+rax]          ; ssp
-        mov     r9d, r15d               ; j counter = n
+        lea     r11, [rbx+rax]
+        lea     r11, [r11+rdx*4]       ; ssp
+        mov     r9d, [r8+4]            ; j counter = run count
+        test    r9d, r9d
+        jz      .run_next              ; empty cell run contributes nothing
 
   .inner:
         movss   xmm0, [rsi]             ; dx = x[j]-xi ; dx -= round(dx)
@@ -295,6 +338,10 @@ pass_scalar:
         add     r11, 4
         dec     r9d
         jnz     .inner
+  .run_next:
+        add     r8, 8
+        dec     ecx
+        jnz     .run_loop
 
         ; --- integrate particle i (semi-implicit Euler + clamp + wrap) ----
         integrate_and_store
@@ -302,25 +349,31 @@ pass_scalar:
         inc     r12d
         jmp     .outer
   .done:
-        add     rsp, KP_FRAME
+        add     rsp, KN_SCAL_FRAME
         ret
 
-; pass_avx2 frame: the scalar const cache (KP_*) plus two 32-aligned ymm spill
-; slots for dx/dy (register pressure relief across the force formula).
-KA_DX    = 64
-KA_DY    = 96
-KA_FRAME = 128
+; pass_avx2 frame: the scalar const cache (KP_*), two 32-aligned ymm spill slots
+; for dx/dy (register pressure relief across the force formula), and the
+; neighbour-run buffer (up to 6 runs of {base, count}).
+KA_DX     = KP_FRAME                    ; first slot after the const cache
+KA_DY     = KA_DX + 32
+KA_RUNBUF = KA_DY + 32                   ; 6 * 8 bytes
+KA_FRAME  = 192                         ; 128 + 48, rounded to a 0-mod-32 frame
 
 ; avx2_force_group — one group of 8 neighbours j at [base+r9]; accumulates into
 ; ymm6/ymm7. tail=1 ANDs the mask in ymm5 into `valid`. dx/dy are spilled so
 ; the force formula has room; ymm0-5 are the working set, ymm8-15 the persistent
 ; broadcasts. Pinned masking: blend r2 to 1.0 on invalid lanes BEFORE the sqrt.
+; The three neighbour loads are vmovups: a run starts at cell_start[c], which is
+; not 8-aligned, so the group base is unaligned (bit-identical to vmovaps when it
+; happens to land aligned, e.g. the brute single run). The dx/dy spill slots are
+; fixed 0-mod-32 frame offsets, so those stay vmovaps.
 macro avx2_force_group tail {
-        vmovaps ymm0, [rsi+r9]          ; dx = x[j] - xi ; min-image
+        vmovups ymm0, [rsi+r9]          ; dx = x[j] - xi ; min-image
         vsubps  ymm0, ymm0, ymm8
         vroundps ymm4, ymm0, 0
         vsubps  ymm0, ymm0, ymm4
-        vmovaps ymm1, [rdi+r9]          ; dy
+        vmovups ymm1, [rdi+r9]          ; dy
         vsubps  ymm1, ymm1, ymm9
         vroundps ymm4, ymm1, 0
         vsubps  ymm1, ymm1, ymm4
@@ -349,7 +402,7 @@ macro avx2_force_group tail {
         vbroadcastss ymm5, [rsp+KP_INV1MB]
         vmulps  ymm1, ymm1, ymm5
         vsubps  ymm1, ymm12, ymm1       ; tt = 1 - |..|*inv1mb
-        vmovaps ymm5, [r11+r9]          ; sj (species indices)
+        vmovups ymm5, [r11+r9]          ; sj (species indices)
         vpermps ymm5, ymm5, ymm10       ; a[k] = matrow[sj[k]]
         vmulps  ymm1, ymm1, ymm5        ; att = tt * a
         vcmpps  ymm5, ymm4, ymm13, 0x11 ; xn < beta
@@ -369,12 +422,15 @@ macro avx2_force_group tail {
 ; ------------------------------------------------------------------
 ; pass_avx2 — the 8-wide gather force+integrate (masterplan decision 3).
 ; For each particle i (scalar), broadcast xi/yi and load its matrix row, then
-; sweep all j eight at a time; the pinned lane-hygiene order (blend r2 to 1.0
-; on the invalid lanes BEFORE the sqrt) makes a NaN structurally impossible.
-; The 8 partial forces reduce with a fixed shuffle order; integration is the
-; shared scalar tail. Matches the oracle within the epsilon tier (its lane
-; reduction order differs from the scalar path — that is the per-code-path
-; golden's whole reason to exist).
+; sweep its neighbour runs eight j at a time: grid mode consumes the 3x3 cell
+; runs from neighbour_runs (the O(n*k) path), brute mode the degenerate single
+; run [0, n). Every run's final vector applies a count-derived tail mask so the
+; unaligned over-read past the run end cannot double-count the next cell. The
+; pinned lane-hygiene order (blend r2 to 1.0 on the invalid lanes BEFORE the
+; sqrt) makes a NaN structurally impossible. The 8 partial forces reduce with a
+; fixed shuffle order across all runs; integration is the shared scalar tail.
+; Matches the oracle within the epsilon tier (its lane reduction order differs
+; from the scalar path — that is the per-code-path golden's whole reason to exist).
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
 ;             ymm0-15, flags (kernel tier; the seam saved the nonvolatiles)
@@ -447,40 +503,70 @@ pass_avx2:
         mov     eax, [r10]
         and     eax, 7                  ; species < species_n <= 8; keep in-table
         shl     eax, 5                  ; si*8 floats = si*32 bytes
-        lea     r10, [rcx+AH_PARAMS+SP_MATRIX]
+        lea     r10, [rbx-AH_SIZE+AH_PARAMS+SP_MATRIX]  ; arena = bank base - header
         vmovups ymm10, [r10+rax]
         vxorps  ymm6, ymm6, ymm6        ; fx partials
         vxorps  ymm7, ymm7, ymm7        ; fy partials
 
-        imul    rax, r14, AR_X_IN       ; running group bases
-        lea     rsi, [rbx+rax]          ; &IN.x[0]
+        ; --- resolve the neighbour run set (decision 3): grid = the 3x3 cell
+        ;     runs, brute = the degenerate single run [0, n) ------------------
+        mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]
+        test    eax, FLAG_GRID
+        jz      .single_run
+        vmulss  xmm0, xmm8, [rsp+KP_GF]  ; cx = int(xi*g) & (g-1) (reproduces the
+        vcvttss2si eax, xmm0             ;   cell id the sort used, bit-exact)
+        and     eax, [rsp+KP_GM1]
+        mov     ecx, eax
+        vmulss  xmm0, xmm9, [rsp+KP_GF]  ; cy = int(yi*g) & (g-1)
+        vcvttss2si eax, xmm0
+        and     eax, [rsp+KP_GM1]
+        mov     edx, eax
+        mov     r8d, [rsp+KP_G]
+        mov     r9d, [rsp+KP_GM1]
+        imul    rax, r14, AR_ARRAYS      ; cell_start base = bank base + 13*stride
+        lea     r10, [rbx+rax]
+        lea     r11, [rsp+KA_RUNBUF]
+        call    neighbour_runs           ; eax = run count, buf filled
+        mov     r13d, eax
+        jmp     .have_runs
+  .single_run:
+        lea     r11, [rsp+KA_RUNBUF]
+        mov     dword [r11], 0           ; base = 0
+        mov     [r11+4], r15d            ; count = n
+        mov     r13d, 1
+  .have_runs:
+        imul    rax, r14, AR_X_IN        ; group bases (recomputed after the call)
+        lea     rsi, [rbx+rax]           ; &IN.x[0]
         imul    rax, r14, AR_Y_IN
-        lea     rdi, [rbx+rax]          ; &IN.y[0]
+        lea     rdi, [rbx+rax]           ; &IN.y[0]
         imul    rax, r14, AR_SP_IN
-        lea     r11, [rbx+rax]          ; &IN.sp[0]
-
-        xor     r9, r9                  ; group byte offset
-        mov     eax, r15d
-        and     eax, -8                 ; nfull = n & ~7
-        lea     rdx, [rax*4]            ; full byte extent
+        lea     r11, [rbx+rax]           ; &IN.sp[0]
+        lea     rcx, [rsp+KA_RUNBUF]     ; run-buffer walk pointer (r13 runs left)
+  .run_loop:
+        mov     r9d, [rcx]               ; base = particle index of this run
+        shl     r9, 2                    ; base byte offset = first group offset
+        mov     eax, [rcx+4]             ; count
+        mov     edx, eax
+        and     edx, -8                  ; nfull = count & ~7 (full groups)
+        lea     r8, [r9+rdx*4]           ; tail group byte offset = base + nfull*4
   .g8:
-        cmp     r9, rdx
-        jae     .tail
+        cmp     r9, r8
+        jae     .g8done
         avx2_force_group 0
         add     r9, 32
         jmp     .g8
-  .tail:
-        ; r9 still holds nfull*4 = the tail group's byte offset (the macro reads
-        ; [base+r9]); rcx holds the arena and rsi/rdi/r11 the group bases, so the
-        ; tail count goes in edx (the full-extent value there is now dead).
-        mov     edx, r15d
-        and     edx, 7                  ; tail lanes
-        jz      .reduce
-        mov     eax, 8                  ; tailmask = tailwin[(8-tail) .. +7]
-        sub     eax, edx
-        lea     r8, [f_tailwin]
-        vmovups ymm5, [r8+rax*4]        ; k low lanes = all-ones
-        avx2_force_group 1
+  .g8done:
+        and     eax, 7                   ; tail lanes = count & 7
+        jz      .run_next                ; run length a lane multiple -> no tail
+        mov     r10d, 8                  ; tailmask = tailwin[(8-tail) .. +7]; masks
+        sub     r10d, eax                ;   the over-read past the run end, which
+        lea     r8, [f_tailwin]          ;   would double-count the next cell's
+        vmovups ymm5, [r8+r10*4]         ;   particles (a genuine wrapped neighbour)
+        avx2_force_group 1               ; r9 already at the tail group offset
+  .run_next:
+        add     rcx, 8
+        dec     r13d
+        jnz     .run_loop
   .reduce:
         vextractf128 xmm0, ymm6, 1      ; fixed shuffle-reduce: fx -> xmm6[0]
         vaddps  xmm6, xmm6, xmm0
