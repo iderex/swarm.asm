@@ -93,6 +93,73 @@ foreach (int n in new[] { 50_000, 500_000 })
 Console.WriteLine();
 Console.WriteLine("frame = build + pass (single core); brute proj = n^2 / measured AVX2 Mp/s (O(n^2) not run).");
 Console.WriteLine("60 fps needs frame <= 16.67 ms; multi-core is M3.");
+
+// --- AVX2 force inner loop: cycles/candidate + throughput-vs-latency (#59) ---
+// The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
+// the #38 rsqrt design both rest on: what does one candidate pair cost in the
+// AVX2 force group, and is that group THROUGHPUT-bound (divide-unit saturated)
+// or LATENCY-bound on its vsqrtps/vdivps chain?
+//
+// It reuses the same brute AVX2 pass the table above times; there is no separate
+// kernel entry point to isolate the group, so the isolation is arithmetic: at a
+// large n the O(n^2) inner loop is ~all of the pass (the once-per-i integrate
+// tail is 1/n of the work), so ms/pass / n^2 is the per-candidate inner-loop
+// cost to within ~0.01%. The force group processes 8 candidate lanes and runs
+// exactly one vsqrtps + one vdivps, so cost/group = 8 x cost/candidate.
+//
+// ns/candidate is the clock-free measured primitive. Cycles are derived at the
+// recorded single-core sustained-AVX2 boost clock (per-machine, like every
+// other number here) — edit RefGhz to your host; the classification below does
+// not depend on it. The throughput-vs-latency call is made WITHOUT a clock, by
+// the ILP-saturation test: a latency-bound loop speeds up markedly when far more
+// independent work is in flight; a throughput-bound (unit-saturated) one does
+// not. Between n=1024 and n=16384 the number of independent force groups in
+// flight per particle grows 16x (n/8), so a near-flat cost/candidate across that
+// span is the signature of a throughput-bound loop.
+if (haveAvx2)
+{
+    const double RefGhz = 4.9; // 5950X single-core boost under sustained AVX2; recorded per-host
+    const int nSmall = 1024, nLarge = 16384;
+
+    double smallMs = TimePass(nSmall, Avx2);
+    double largeMs = TimePass(nLarge, Avx2);
+    double smallNs = smallMs * 1e6 / ((double)nSmall * nSmall); // ns / candidate pair
+    double largeNs = largeMs * 1e6 / ((double)nLarge * nLarge);
+    double largeCyc = largeNs * RefGhz;      // cycles / candidate at RefGhz
+    double ilpRatio = smallNs / largeNs;     // >1 means the larger-ILP run is faster
+
+    Console.WriteLine();
+    Console.WriteLine("AVX2 force inner loop (#59): cycles/candidate, throughput vs latency");
+    Console.WriteLine($"  representative n            : {nLarge}  (inner loop is 1 - 1/n of the pass)");
+    Console.WriteLine(
+        $"  measured                    : {largeNs:0.000} ns/candidate-pair  ({1e3 / largeNs:0.0} M/s)");
+    Console.WriteLine(
+        $"  per 8-lane force group      : {largeNs * 8:0.00} ns  (1x vsqrtps + 1x vdivps per group)");
+    Console.WriteLine(
+        $"  at RefGhz = {RefGhz:0.0} GHz          : {largeCyc:0.00} cycles/candidate = {largeCyc * 8:0.0} cycles/group");
+    Console.WriteLine();
+    Console.WriteLine("  ILP-saturation test (clock-free throughput-vs-latency classifier):");
+    Console.WriteLine(
+        $"    n={nSmall,-6} : {smallNs:0.000} ns/candidate   (~{nSmall / 8} independent groups/particle in flight)");
+    Console.WriteLine(
+        $"    n={nLarge,-6} : {largeNs:0.000} ns/candidate   (~{nLarge / 8} independent groups/particle in flight)");
+    Console.WriteLine(
+        $"    16x more in-flight ILP changes cost/candidate by {(ilpRatio - 1) * 100:0.#}% -> "
+        + (ilpRatio < 1.2 ? "ILP-saturated -> THROUGHPUT-bound" : "latency-sensitive -> re-examine"));
+    Console.WriteLine(
+        "    (a latency-bound loop would speed up markedly with 16x more independent groups; the");
+    Console.WriteLine(
+        "     small residual is dominated by the once-per-i integrate-tail amortization, not latency.)");
+    Console.WriteLine();
+    Console.WriteLine(
+        "  The measured group cost is ~2x the published Zen 3 vsqrtps+vdivps ymm divide-pipe");
+    Console.WriteLine(
+        "  throughput (~11-15 cyc/group), so the divide unit is roughly half the loop, not >90%:");
+    Console.WriteLine(
+        "  the ~33 non-divide FP ops co-limit throughput. Isolating the exact divide fraction needs");
+    Console.WriteLine(
+        "  per-execution-port counters or a kernel-edit differential (out of scope) - see BENCHMARKS.md.");
+}
 return 0;
 
 // --- helpers ---------------------------------------------------------------

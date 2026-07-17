@@ -182,3 +182,87 @@ g = 512 beats g = 256 at 500k (62 vs 84 ms) for that reason.
 So M2 delivers the algorithmic win (the grid makes 500k _simulable_ at all, and
 50k interactive) on one core; **500k @ 60 fps is an M3 threading target**, with
 the number above as the baseline to beat.
+
+## The AVX2 force inner loop (cycles/candidate; #59)
+
+The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
+the gated `force_path = 4` rsqrt design (#38) both rest on: what does one
+candidate pair cost in the AVX2 force group, and is that group
+**throughput-bound** (divide unit saturated) or **latency-bound** on its
+`vsqrtps`/`vdivps` chain? The bench answers it from the same brute AVX2 pass the
+baseline table times — there is no separate kernel entry to isolate the group,
+so the isolation is arithmetic: at a large `n` the O(n²) inner loop is all of
+the pass bar the once-per-i integrate tail (1/n of the work), so
+`ms/pass ÷ n²` is the per-candidate inner-loop cost to within ~0.01%. The group
+processes 8 candidate lanes and runs exactly **one `vsqrtps` + one `vdivps`**,
+so cost/group = 8 × cost/candidate.
+
+| CPU           | n     | ns/candidate | M pairs/s | cyc/candidate | cyc/group |
+| ------------- | ----- | ------------ | --------- | ------------- | --------- |
+| Ryzen 9 5950X | 1024  | 0.875        | 1142.9    | 4.29          | 34.3      |
+| Ryzen 9 5950X | 16384 | 0.798        | 1252.5    | 3.91          | 31.3      |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11, single-threaded.
+- **Feature path**: AVX2 + FMA (no AVX-512), `force_path = 1`, brute (no grid).
+- **Seed / preset**: `0x5EED`, 6 species, `rmax = 0.05`, varied attraction
+  matrix; initial (uniform-random) frame — the AVX2 path has no early exit, so
+  it evaluates the full force formula on every candidate regardless of preset,
+  and cost/candidate does not depend on the in-range fraction.
+- **Cycles**: `ns/candidate` is the clock-free measured primitive; cycles are
+  derived at `RefGhz = 4.9` (this part's single-core sustained-AVX2 boost) — a
+  recorded per-machine constant, like every number here. The
+  throughput-vs-latency verdict below does **not** depend on it.
+- **Commit**: kernel under test `c4a73a0` (the force loop `step.inc` is
+  unchanged since the baseline above; the bench harness lands with this row) ·
+  **Date**: 2026-07-17.
+
+### Reading the numbers — throughput-bound, ~2.8× the budget line
+
+**The loop is throughput-bound, not latency-bound**, and this is measured
+without a clock. In the brute pass every candidate group is independent (each
+reads a different `j`), so the number of independent groups in flight per
+particle is `n/8`. Between n = 1024 and n = 16384 that available ILP grows 16×,
+yet cost/candidate falls only **~9.6%** (0.875 → 0.798 ns). A latency-bound
+loop would speed up markedly when handed 16× more independent work; this one is
+already ILP-saturated, so the divide/sqrt latency is fully hidden behind the
+out-of-order window — the group's `vsqrtps → … → vdivps` chain is per-group and
+not loop-carried (the only carried dependency is the `fx`/`fy` accumulate, a
+~3-cycle add). The small residual is dominated by the once-per-i integrate-tail
+amortizing over more neighbours (the same ~10% the baseline table shows), not by
+latency hiding. **Verdict: throughput-bound.**
+
+**Cost is ~3.9 cycles/candidate ≈ 31 cycles/group** — about **2.8× the
+masterplan budget line** of ~1.3–1.4 cyc/candidate (~12 cyc/group). That budget
+assumed a divider-throughput-limited group; the measurement says the real group
+is roughly twice that. This is already implicit in the baseline throughput
+(~1.25 G/s) the brute projections use — it is stated here in cycle terms so the
+1M budget projection can be re-based on it.
+
+**What it says for the software-pipelining lever (#61 / open-risk-1).**
+Open-risk-1's rule is "if measured > 14 cyc/candidate, the fallback is
+software-pipelining two j-groups." Measured **3.9 ≪ 14**, so the threshold is
+not tripped. More fundamentally, software-pipelining two j-groups is a
+_latency_-hiding transform, and this loop's latency is already hidden (it is
+throughput-bound / ILP-saturated). Interleaving two groups by hand cannot lift a
+throughput ceiling the hardware scheduler already reaches — it would only add
+register pressure for ~0 gain. The IEEE-exact pipelining attempt should expect
+no throughput win here; its value, if any, is in relieving a bottleneck the
+measurement does not show.
+
+**What it says for the rsqrt premise (#38).** The `force_path = 4` case leans on
+the divide unit being **>~90%** of the loop. This measurement does **not**
+support that. The measured ~31 cyc/group is ~2× the published Zen 3 `vsqrtps` +
+`vdivps` ymm divide-pipe reciprocal throughput (~11–15 cyc/group), so the divide
+unit is **roughly half** the loop, not >90% — the ~33 non-divide FP ops
+(`vsubps`/`vmulps`/`vroundps`/`vblendvps`/`vpermps` …) co-limit throughput on the
+FP-ALU ports. Since rsqrt + Newton–Raphson removes divide-pipe pressure but adds
+~4–5 ops onto those already-busy ALU ports, the #38 force-group estimate
+(1.3–1.8×) is likely **optimistic** at the top of its range. Caveat: this
+divide-vs-ALU split rests on published Zen 3 throughput tables, not a
+per-execution-port measurement. Cleanly isolating the divide fraction would need
+hardware perf counters per port, or a kernel-edit differential (assemble a
+variant with the sqrt/div stubbed and re-time) — both out of scope for an
+in-process, kernel-read-only microbench. So the **>90% divider premise is
+unconfirmed and points optimistic**; treat the rsqrt speedup as unproven until
+#61 (whose IEEE-exact result exposes the non-divide headroom directly) or a
+port-level probe reports.
