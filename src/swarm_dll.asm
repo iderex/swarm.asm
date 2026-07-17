@@ -59,6 +59,14 @@ include 'kernel/step.inc'
 include 'kernel/grid.inc'
 include 'kernel/plot.inc'
 
+; The M3 worker pool (platform layer). Included AFTER the kernel so pass_core /
+; build_core are defined; the pool crosses the thread-entry seam (pool_pass) and
+; calls only the pure per-range pass, so kernel purity is unchanged. It adds the
+; DLL's only kernel32 imports (all genuinely kernel32 — the import allowlist the
+; conformance test pins targets swarm.exe, and CreateThread/CreateEventW/etc. are
+; kernel32, so the exe allowlist holds regardless).
+include 'platform/pool.inc'
+
 ; ------------------------------------------------------------------
 ; swarm_plot — seam wrapper over plot_core (FP: x*w needs the pinned MXCSR).
 ;   in:       rcx arena, rdx bgra, r8d w, r9d h
@@ -182,6 +190,11 @@ seam_wrap swarm_layout_bytes, layout_bytes_core
 
 section '.edata' export data readable
 
+  ; The M3 pool exports (swarm_pool_init / swarm_step_mt / swarm_pass_mt /
+  ; swarm_pool_shutdown) drive the real worker pool from the harness so the
+  ; PassParallelMatchesSerial determinism gate can compare several thread counts
+  ; against the serial path. The serial swarm_step / swarm_pass stay intact — no
+  ; threading crosses the P/Invoke boundary; the pool is an in-DLL concern.
   export 'swarm.kernel.dll',\
          swarm_version,      'swarm_version',\
          rng_fill_core,      'swarm_rng_fill',\
@@ -193,12 +206,38 @@ section '.edata' export data readable
          build_core,         'swarm_build',\
          swarm_pass,         'swarm_pass',\
          swarm_step,         'swarm_step',\
-         swarm_plot,         'swarm_plot'
+         swarm_plot,         'swarm_plot',\
+         pool_init,          'swarm_pool_init',\
+         pool_step,          'swarm_step_mt',\
+         pool_pass_all,      'swarm_pass_mt',\
+         pool_shutdown,      'swarm_pool_shutdown'
+
+section '.data' data readable writeable
+
+  ; The worker pool's mutable state (handles, ranges, publish slot). Platform
+  ; state, never the arena — kernel purity is untouched.
+  pool_storage
+
+section '.idata' import data readable writeable
+
+  ; The DLL's only imports — all genuinely kernel32 (WaitOnAddress/WakeByAddress
+  ; are deliberately excluded: they forward through API-MS-Win-Core-Synch-*).
+  library kernel32, 'KERNEL32.DLL'
+  import kernel32,\
+         CreateThread,'CreateThread',\
+         CreateEventW,'CreateEventW',\
+         SetEvent,'SetEvent',\
+         WaitForSingleObject,'WaitForSingleObject',\
+         WaitForMultipleObjects,'WaitForMultipleObjects',\
+         CloseHandle,'CloseHandle',\
+         GetLogicalProcessorInformation,'GetLogicalProcessorInformation',\
+         GetSystemInfo,'GetSystemInfo'
 
 section '.reloc' fixups data readable discardable
 
-  ; The image currently needs no fixups; keep the directory valid with a
-  ; dummy entry so the loader can still rebase the DLL.
+  ; The image is position-independent (every label reference is RIP-relative),
+  ; so it needs no fixups; keep the directory valid with a dummy entry so the
+  ; loader can still rebase the DLL.
   if $=$$
     dd 0,8
   end if

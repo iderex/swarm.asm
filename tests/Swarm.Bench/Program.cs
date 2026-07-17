@@ -94,6 +94,48 @@ Console.WriteLine();
 Console.WriteLine("frame = build + pass (single core); brute proj = n^2 / measured AVX2 Mp/s (O(n^2) not run).");
 Console.WriteLine("60 fps needs frame <= 16.67 ms; multi-core is M3.");
 
+// --- M3 worker pool: parallel 3x3 neighbourhood pass at 500k (issue #68) -----
+// The M2 grid makes 500k simulable but at ~65 ms/frame (~15 fps) on one core;
+// M3 fans the (split-invariant) pass across the pool. We time the AVX2 grid
+// frame = serial build (counting sort, stays serial in v1) + the THREADED pass
+// over the frozen sorted IN bank (swarm_pass_mt), so the measured work is
+// identical every round. The pass is bit-identical to the serial pass for any T
+// (PassParallelMatchesSerial), so this is pure throughput, no accuracy trade.
+// T = 0 asks the pool for the physical-core count (SMT hurts a divider-bound
+// AVX2 loop); we also sweep smaller T to show the scaling curve.
+if (haveAvx2)
+{
+    const int nMt = 500_000;
+    const float rmaxMt = 1f / 512f; // g = 512, the best serial config at 500k
+    Console.WriteLine();
+    Console.WriteLine($"M3 worker pool (AVX2, FLAG_GRID): parallel pass at n={nMt}, g={GridDim(rmaxMt)}");
+
+    double serialPassMs = TimeGridPass((uint)nMt, rmaxMt);
+    double buildMs = TimeGridBuild((uint)nMt, rmaxMt);
+    Console.WriteLine(
+        $"  serial build : {buildMs,8:0.000} ms   serial pass : {serialPassMs,8:0.000} ms   " +
+        $"frame {buildMs + serialPassMs,7:0.000} ms  ({1000.0 / (buildMs + serialPassMs),5:0.0} fps)");
+    Console.WriteLine();
+    Console.WriteLine($"{"T",4} {"pass ms",10} {"frame ms",10} {"fps",8} {"pass x",8}");
+    Console.WriteLine(new string('-', 46));
+    foreach (int t in new[] { 1, 2, 4, 8, 0 })
+    {
+        int actual = Native.swarm_pool_init(t);
+        try
+        {
+            double passMs = TimeGridPassMt((uint)nMt, rmaxMt);
+            double frameMs = buildMs + passMs;
+            string label = t == 0 ? $"{actual}*" : actual.ToString();
+            Console.WriteLine(
+                $"{label,4} {passMs,10:0.000} {frameMs,10:0.000} {1000.0 / frameMs,8:0.0} {serialPassMs / passMs,7:0.00}x");
+        }
+        finally { Native.swarm_pool_shutdown(); }
+    }
+    Console.WriteLine();
+    Console.WriteLine("frame = serial build + threaded pass; pass x = serial pass / threaded pass.");
+    Console.WriteLine("* = physical-core count (auto). Pass is bit-identical to serial for every T.");
+}
+
 // --- AVX2 force inner loop: cycles/candidate + throughput-vs-latency (#59) ---
 // The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
 // the #38 rsqrt design both rest on: what does one candidate pair cost in the
@@ -281,6 +323,62 @@ static unsafe (double build, double pass) TimeGrid(uint n, float rmax)
     }
 }
 
+// Serial grid pass (min-of-rounds over the frozen sorted IN bank), for the M3
+// worker-pool comparison. Mirrors TimeGrid's pass timing in isolation.
+static unsafe double TimeGridPass(uint n, float rmax)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed n={n} rmax={rmax}");
+        Native.swarm_build(arena);
+        for (int i = 0; i < 3; i++)
+            Native.swarm_pass(arena, 0, n);
+        return MinOfRounds(() => Native.swarm_pass(arena, 0, n));
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
+// Serial counting-sort build (min-of-rounds over the frozen OUT bank).
+static unsafe double TimeGridBuild(uint n, float rmax)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed n={n} rmax={rmax}");
+        for (int i = 0; i < 3; i++)
+            Native.swarm_build(arena);
+        return MinOfRounds(() => Native.swarm_build(arena));
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
+// Threaded grid pass (min-of-rounds over the frozen sorted IN bank). The pool
+// must already be initialised by the caller (swarm_pool_init); the pass fans
+// across it and is bit-identical to the serial pass for any T.
+static unsafe double TimeGridPassMt(uint n, float rmax)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed n={n} rmax={rmax}");
+        Native.swarm_build(arena);
+        for (int i = 0; i < 3; i++)
+            Native.swarm_pass_mt(arena);
+        return MinOfRounds(() => Native.swarm_pass_mt(arena));
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
 // Best (min) per-call time in ms over 9 rounds, each round sized to run for at
 // least ~120 ms so the Stopwatch resolution is negligible. The minimum is the
 // honest lower bound on a fixed-work kernel call (least perturbed by scheduling
@@ -407,6 +505,18 @@ internal static unsafe class Native
 
     [DllImport("swarm.kernel.dll")]
     internal static extern int swarm_cpu_paths();
+
+    // M3 worker pool (issue #68). swarm_pool_init(0) auto-detects physical cores
+    // and returns the actual worker count; swarm_pass_mt fans the pass over the
+    // pool; swarm_pool_shutdown joins and closes the threads.
+    [DllImport("swarm.kernel.dll")]
+    internal static extern int swarm_pool_init(int requested);
+
+    [DllImport("swarm.kernel.dll")]
+    internal static extern void swarm_pass_mt(void* arena);
+
+    [DllImport("swarm.kernel.dll")]
+    internal static extern void swarm_pool_shutdown();
 }
 
 // 1:1 mirror of the native SwarmParams seam struct (src/kernel/abi.inc):
