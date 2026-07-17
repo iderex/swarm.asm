@@ -5,6 +5,12 @@ A Particle Life engine written entirely in hand-written x64 assembly.
 **Goal: 1,000,000 interacting particles at 60 fps — no GPU, no dependencies,
 one small `.exe`.**
 
+> [!NOTE]
+>
+> ### 🤝 AI-assisted, human-owned
+>
+> Development here is AI-assisted. Claude (Anthropic) helps with individual process steps — generating and analysing code, running the adversarial security reviews, and translating documentation and comments into English. It never hands over finished, unreviewed work: each step is only a proposal. A human reviews, understands, edits where needed, and signs off on every one — the AI proposes, a person decides, and a human stays responsible for every line that ships, at all times. The review discipline is modelled, as far as is practical for a volunteer project, on the change-control expected of TÜV/BSI-certified software in a critical sector such as healthcare — with no claim to actual certification. In short: nothing lands because a tool suggested it; it lands because a person verified it.
+
 ## What
 
 Particle Life is a simple rule set with startlingly lifelike results: N
@@ -108,19 +114,6 @@ dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
 
 Issue-driven: every change starts as an issue and lands as a gated PR — see
 [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## AI assistance
-
-swarm.asm is built with AI assistance, and says so openly. Claude (Anthropic)
-helped with the development, the review, and the translation — always on
-individual process steps, never handing over finished work — and every step
-was supervised by a human maintainer and corrected when in doubt.
-
-AI-assisted is not AI-authored: a human is responsible for this project at
-all times. The engineering gates the code actually stands on — a green CI,
-an adversarial multi-lens review on every sensitive change, and the
-maintainer's sign-off before any merge — are the real guarantee; the AI is a
-tool inside that process, not a substitute for it.
 
 ## License
 
