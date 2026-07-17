@@ -23,12 +23,18 @@ assembly is the product.
 
 **It runs.** The engine simulates and draws a live particle world:
 `build/swarm.exe` opens a window and steps a real multi-species swarm every
-frame. Today it runs the **scalar reference kernel** — the force + integrate
-pass is hand-written x64 that reproduces the pinned physics
+frame. Both force kernels are in: the **scalar reference** — the semantic
+anchor, hand-written x64 that reproduces the pinned physics
 ([docs/MASTERPLAN.md](docs/MASTERPLAN.md)) and is checked against an
-independent C# oracle for every step. The AVX2 speed path and interactive
-matrix editing are the current work; the SIMD kernel is what lifts the count
-from the scalar preview toward the headline.
+independent C# oracle every step — and the **AVX2 path**, auto-selected on
+AVX2 CPUs and verified to match the scalar result within the oracle's epsilon.
+The measured speedup and its honest caveats live in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md): the brute-force AVX2 pass is ~1.85×
+the scalar reference on Zen 3 (the vector loop is divider-bound; the scalar
+path cheaply skips the out-of-range pairs the vector path still computes), and
+the larger SIMD win waits on the M2 cell-sorted layout that shrinks the
+candidate set from n² to the in-range neighbours. Interactive matrix editing
+and lifting the live count are the remaining M1 work.
 
 The full architecture — force model, memory layout, SIMD strategy,
 determinism contract — is recorded with rationale in the masterplan. Progress:

@@ -81,6 +81,12 @@ jobs:
         # file fails the build instead of floating silently.
         run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
 
+      - name: Build the micro-bench (compile-check only)
+        # The benchmark is run by hand — timing numbers never gate CI (flake).
+        # This step only keeps it compiling against the kernel P/Invoke surface
+        # so it cannot rot between the manual runs recorded in docs/BENCHMARKS.md.
+        run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo
+
       - name: Check formatting (Prettier)
         # Exact-pinned: a floating tag would let a prettier minor change
         # formatting and break the gate with zero repo change, invisible to

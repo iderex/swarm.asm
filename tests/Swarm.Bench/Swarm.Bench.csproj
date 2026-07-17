@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Force-kernel micro-benchmark. Deliberately dependency-free: it drives the
+    native kernel through the SAME in-process P/Invoke path the test harness
+    uses (NativeLibrary.Load of the freshly assembled DLL), because a spawned
+    benchmark host — BenchmarkDotNet's model — is a fresh unsigned PE that
+    Device Guard / Smart App Control blocks on the dev machine (0x800711C7),
+    the same reason the tests run under the trusted dotnet host via MTP. A
+    hand-rolled min-of-rounds Stopwatch loop needs no external package, no lock
+    file, and no separate process. It is NOT part of `dotnet test` (timing
+    numbers never gate CI); CI only compile-checks it so it cannot rot.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OutputType>Exe</OutputType>
+    <!-- Release by default: an optimized managed marshaling stub, and the
+         Smart App Control config-flip trick (-c Debug) is the fallback. -->
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+</Project>
