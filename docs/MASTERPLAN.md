@@ -147,11 +147,18 @@ values. `id` carries original particle identity through every sort permutation
 (the oracle-matching and divergence-localization key). Species is u32 so it
 loads directly as a `vpermps` index. Max N = 2^20. One arena, owned by the
 caller (exe: one `VirtualAlloc`; harness: `NativeMemory.AlignedAlloc(..., 64)`);
-`swarm_layout_bytes(params)` is a pure size function; a 256-byte arena header
-holds magic, ABI version, validated params, RNG state, frame counter, and the
-selected code-path id — **all state lives in the arena**, no globals. Size at
-1M: 2 banks × 6 arrays × 4 B (~48 MB) + cell ids (4 MB) + cell starts (~1 MB)
-≈ 54 MB.
+`swarm_layout_bytes(params)` is a pure size function; a **512-byte arena
+header** (64-aligned; 256 was the original estimate, but the validated 304-byte
+`SwarmParams` copy — which the step pass reads the matrix and constants from —
+does not fit in 256) holds magic, ABI version, the validated params copy, RNG
+state, frame counter, cached padded_n and g, and the selected code-path id —
+**all state lives in the arena**, no globals. Then, each `padded_n * 4 B` and
+64-aligned by construction: bank OUT (x, y, vx, vy : f32; species, id : u32),
+bank IN (same six), the per-particle cell-id array, and the `(g*g + 1) * 4 B`
+cell-start prefix (both grid arrays are M2, allocated from M1 so the layout
+stays stable). Size at 1M: 2 banks × 6 arrays × 4 B (~48 MB) + cell ids (4 MB)
+
+- cell starts (~1 MB) ≈ 54 MB.
 
 **Rationale:** Fixed-role banks delete ping-pong bookkeeping and any mid-frame
 thread barrier (the sorted copy is the double buffer). The explicit +16 tail

@@ -10,6 +10,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- The committed lock file pins package hashes; CI restores in locked
          mode and keys its NuGet cache on it. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
