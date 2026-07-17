@@ -46,13 +46,13 @@ per-cell matrix editor is a later increment.
 The full architecture — force model, memory layout, SIMD strategy,
 determinism contract — is recorded with rationale in the masterplan. Progress:
 
-| Milestone        | Status | Deliverable                                            |
-| ---------------- | ------ | ------------------------------------------------------ |
-| M0 — Foundation  | done   | Design, pinned toolchain, CI, test harness             |
-| M1 — First light | active | Brute-force AVX2 kernel + live window, 8,192 particles |
-| M2 — Scale       | active | Spatial grid; 50k and 500k particles at 60 fps         |
-| M3 — One million | —      | Multithreading + AVX-512 path, 1M particles at 60 fps  |
-| M4 — Launch      | —      | Benchmark suite vs. existing ports, presets, write-up  |
+| Milestone        | Status | Deliverable                                                                        |
+| ---------------- | ------ | ---------------------------------------------------------------------------------- |
+| M0 — Foundation  | done   | Design, pinned toolchain, CI, test harness                                         |
+| M1 — First light | active | Brute-force AVX2 kernel + live window; ~3,500 live, 8,192 is the acceptance target |
+| M2 — Scale       | active | Spatial grid; 50k and 500k particles at 60 fps                                     |
+| M3 — One million | —      | Multithreading + AVX-512 path, 1M particles at 60 fps                              |
+| M4 — Launch      | —      | Benchmark suite vs. existing ports, presets, write-up                              |
 
 What works today: the deterministic RNG, a fail-closed preset grammar, CPU
 feature detection, arena allocation and seeded init, the scalar and AVX2
@@ -91,9 +91,18 @@ Windows 10/11 x64. PowerShell:
 
 The build script bootstraps the pinned assembler ([FASM](https://flatassembler.net/))
 into `tools/fasm/` on first run — the download is verified against a pinned
-SHA-256 before it is unpacked. Output lands in `build/swarm.exe`.
+SHA-256 before it is unpacked. Output lands in `build/swarm.exe` and
+`build/swarm.kernel.dll` — `swarm.asm` (platform + kernel) assembles to the
+shipped exe, `swarm_dll.asm` (kernel + seam shims) assembles to the DLL the
+test harness P/Invokes; both include the same `src/kernel/*.inc`, so the
+tested kernel is the shipped kernel.
 
-The test harness (from M0 onward) needs the .NET 9 SDK: `dotnet test`.
+The test harness (from M0 onward) needs the .NET 9 SDK. Run `.\build.ps1`
+first — `dotnet test` loads the freshly built `swarm.kernel.dll`:
+
+```powershell
+dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
+```
 
 ## Contributing
 

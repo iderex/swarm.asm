@@ -299,8 +299,9 @@ overhead where no seam exists).
 **Decision:**
 
 ```
-src/kernel/    abi.inc  layout.inc  rng.inc  parse.inc  grid.inc  step.inc  plot.inc
-src/platform/  win.inc (window, DIB, msg loop, pacing, file I/O)  pool.inc (M3)
+src/kernel/    abi.inc  cpuid.inc  init.inc  layout.inc  parse.inc  rng.inc  state.inc  step.inc  grid.inc  plot.inc
+src/platform/  seam.inc (export / thread-entry MXCSR + Win64 seam frame)  pool.inc (M3)
+                 window, DIB, msg loop, pacing, and file I/O are inline in src/swarm.asm
 src/swarm.asm      = platform + kernel -> swarm.exe   (PE64 GUI, kernel32/user32/gdi32, <= 64 KB)
 src/swarm_dll.asm  = kernel + seam shims -> swarm.kernel.dll (PE64 DLL; test artifact)
 tests/Swarm.Tests  = C# xUnit v3 harness (oracle, goldens, conformance)
@@ -328,8 +329,8 @@ void swarm_rng_fill(u64 seed, u64* out, u32 count);        // RNG oracle seam
 ```
 
 `SwarmParams` is a fixed sequential struct (version, n, species_n, seed,
-rmax, beta, dt, friction, force_scale, force_path 0=auto/1=AVX2/2=AVX-512,
-flags, matrix[8][8]) mirrored 1:1 in C# with Pack=4.
+rmax, beta, dt, friction, force_scale, force_path 0=auto/1=AVX2/2=AVX-512/
+3=scalar reference, flags, matrix[8][8]) mirrored 1:1 in C# with Pack=4.
 
 **Rationale:** `swarm_build` + `swarm_pass` give phase-granular oracle
 testing and — decisively — the **threading-decomposition seam**: `pass(0,n)`
@@ -389,8 +390,11 @@ and register file, instantiated twice (ymm/zmm). Detection once, at
 CPUID.7.0:EBX F+DQ+VL — and the resulting path id is stored **in the arena
 header** (no hidden global). `force_path` in params can pin a path;
 requesting AVX-512 on unsupported hardware fails closed at init. Nothing
-ever falls through mid-run; AVX2 absent → message box + exit (no scalar
-fallback exists). What AVX-512 buys: 16 lanes, k-register masking deletes
+ever falls through mid-run; AVX2 absent → message box + exit — there is no
+_automatic_ fallback to the scalar path on AVX2-absent hardware. A
+_selectable_ scalar path does exist (`force_path = 3`, the reference kernel
+the tests and the bench run against); it is a caller-pinned choice, never an
+automatic one. What AVX-512 buys: 16 lanes, k-register masking deletes
 the blend chain and the tail-mask LUT (`bzhi`+`kmovw`), one `vpermps zmm`
 covers 16 species (the only path to lifting the species-8 cap). Honest
 expectation: the loop is divider-bound and divide throughput per element is
@@ -434,8 +438,9 @@ none).
 ### 9. Rendering path
 
 **Decision:** One 32-bit top-down DIB section (`CreateDIBSection`), `BitBlt`
-from a memory DC (vs `SetDIBitsToDevice`: both measured in M1, the faster one
-pinned). Clear via `rep stosd` / NT stores (~0.3 ms at 1080p). Plot:
+from a memory DC. `BitBlt` is chosen over `SetDIBitsToDevice`; the comparison
+between the two is not yet measured — it is deferred to the M4 frame-time
+capture (#5). Clear via `rep stosd` / NT stores (~0.3 ms at 1080p). Plot:
 **serial**, 1 pixel per particle (a 2×2 splat is a preset toggle),
 `px = min(int(x*w), w-1)` (belt behind the wrap canonicalization), color from
 an 8-entry BGRA species palette; last-write-wins in cell-sorted order — the
@@ -591,11 +596,11 @@ disclosed reference machine only).
 - CI on every PR: assemble, smoke-run, `dotnet test` (RNG exactness,
   reference equivalence, determinism goldens, conformance fitness tests),
   Prettier for docs.
-- The adversarial review gate (four refute-by-default lenses + simd-reviewer)
-  on kernel/ABI/platform/parsing/build changes — the review of record; every
-  finding gets a documented fix or a reasoned decline before merge.
-- `/bench` before and after every kernel change once the suite exists; the
-  baseline lives in docs/BENCHMARKS.md.
+- An adversarial code review on kernel/ABI/platform/parsing/build changes —
+  the review of record; every finding gets a documented fix or a reasoned
+  decline before merge.
+- Benchmarks re-run before and after every kernel change, once the suite
+  exists; the baseline lives in docs/BENCHMARKS.md.
 
 ## Milestones
 

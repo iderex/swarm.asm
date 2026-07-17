@@ -24,13 +24,28 @@ Issue-driven, gate-driven:
 - **Performance claims are measured**, never reasoned: before/after numbers
   with hardware, CPU features, particle count, and seed.
 
+## Prerequisites
+
+Windows 10/11 x64, PowerShell, the .NET 9 SDK. FASM is bootstrapped
+automatically by `build.ps1`. Node.js (for `npx`/Prettier) is needed only for
+the docs formatting gate below — not for building or running the engine.
+
 ## Building & testing
 
+`build.ps1` must run first: it assembles `build/swarm.exe` and
+`build/swarm.kernel.dll`, and `dotnet test` loads that DLL via P/Invoke.
+
 ```powershell
-.\build.ps1        # bootstraps the pinned FASM on first run, assembles to build/
-dotnet test        # reference equivalence + conformance fitness tests
-npx --yes prettier@3.9.5 --check "**/*.{md,yml,yaml}"   # docs formatting gate
+.\build.ps1                                            # bootstraps the pinned FASM on first run, assembles to build/
+dotnet test tests\Swarm.Tests\Swarm.Tests.csproj       # reference equivalence + conformance fitness tests
+npx --yes prettier@3.9.5 --check "**/*.{md,yml,yaml}"  # docs formatting gate
 ```
+
+A non-zero skipped-test count means Smart App Control / Device Guard blocked
+the freshly built `swarm.kernel.dll` from loading (`0x800711C7`) — a known
+quirk on this class of machine, not a real gap in coverage. Set
+`SWARM_REQUIRE_NATIVE=1` (as CI does) to turn the skip into a hard failure and
+confirm the native path actually ran.
 
 CI additionally reports the binary size budget (`swarm.exe` ≤ 64 KiB) and
 restores NuGet in locked mode — if you bump a package, commit the regenerated
