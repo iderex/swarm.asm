@@ -85,9 +85,11 @@ public sealed unsafe class GridTests
     }
 
     // Reproduces the kernel's grid dimension choice (layout.inc arena_dims_core):
-    // g = the largest power of two with 1/(2g) >= rmax, clamped to [4, 512]. All
-    // the halved values are exact powers of two, so this float comparison tracks
-    // the kernel's integer bit-pattern compare.
+    // g = the largest power of two with 1/g >= rmax, clamped to [4, 512]. The
+    // loop mirrors the kernel's own per-step check (1/(2g) >= rmax, i.e. the
+    // NEXT candidate still qualifies) rather than testing the closed form
+    // directly; all the halved values are exact powers of two, so this float
+    // comparison tracks the kernel's integer bit-pattern compare.
     private static uint GridDim(float rmax)
     {
         uint g = 4;
