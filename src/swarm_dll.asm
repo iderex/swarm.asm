@@ -62,6 +62,11 @@ include 'kernel/plot.inc'
 ; ------------------------------------------------------------------
 ; swarm_plot — seam wrapper over plot_core (FP: x*w needs the pinned MXCSR).
 ;   in:       rcx arena, rdx bgra, r8d w, r9d h
+;   out:      nothing (void); the framebuffer at rdx is written
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
 swarm_plot:
         seam_enter
@@ -74,6 +79,11 @@ swarm_plot:
 ; ------------------------------------------------------------------
 ; swarm_pass — seam wrapper over pass_core (heavy FP: the MXCSR pin matters).
 ;   in:       rcx arena, edx first, r8d last
+;   out:      nothing (void); the OUT bank in the arena is advanced one pass
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
 swarm_pass:
         seam_enter
@@ -83,6 +93,11 @@ swarm_pass:
 ; ------------------------------------------------------------------
 ; swarm_step — seam wrapper over step_core (n_steps x build+pass).
 ;   in:       rcx arena, edx n_steps
+;   out:      nothing (void); the arena is advanced n_steps
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
 swarm_step:
         seam_enter
@@ -94,6 +109,9 @@ swarm_step:
 ;   in:       rcx arena, rdx x*, r8 y*, r9 vx*, [stack] vy*, [stack] species*
 ;             (each caller array holds n elements)
 ;   out:      x[id]..species[id] = the OUT-bank values for i in 0..n-1
+;   clobbers: volatile GPRs (rax, rcx, rdx, r8-r10) and flags; no XMM/FP; every
+;             nonvolatile it touches (rbx, rsi, rdi, r12-r14) is saved/restored
+;   MXCSR:    untouched (pure integer copy, no FP)
 ;   ABI:      6 args, so NOT the FP seam (which assumes <=4 args); a plain
 ;             Win64 prologue over an rbp frame. Pure memory copy, no FP, so
 ;             no MXCSR pin is needed. rbx and the dst regs are callee-saved.
@@ -138,7 +156,10 @@ swarm_read_state:
 ; swarm_init — seam wrapper over init_core (FP: the u01 convert needs the pin).
 ;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
 ;   out:      eax = 0 on success, else IERR_* (arena untouched on failure)
-;   ABI:      full Win64 seam
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
 swarm_init:
         seam_enter
@@ -150,8 +171,11 @@ swarm_init:
 ;   in:       rcx text (may be unterminated), edx len, r8 SwarmParams* out
 ;   out:      eax = 0 and *out written, or the packed negative error with
 ;             *out untouched (fail-closed two-phase commit)
-;   ABI:      full Win64 seam — nonvolatiles + MXCSR saved, pin 0x9FC0,
-;             vzeroupper before return
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return
+;             (seam: nonvolatiles + MXCSR saved, vzeroupper before return)
 ; ------------------------------------------------------------------
 swarm_parse_preset:
         seam_enter
@@ -163,7 +187,11 @@ swarm_parse_preset:
 ;   in:       rcx = SwarmParams*
 ;   out:      rax = arena bytes (multiple of 64), or 0 when params are
 ;             invalid (fail-closed)
-;   ABI:      full Win64 seam (validation compares under the pinned MXCSR)
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam;
+;             validation compares under the pin)
 ; ------------------------------------------------------------------
 swarm_layout_bytes:
         seam_enter
