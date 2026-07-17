@@ -84,6 +84,63 @@ public sealed unsafe class GridTests
         return MathF.Min(d, 1f - d);
     }
 
+    // Reproduces the kernel's grid dimension choice (layout.inc arena_dims_core):
+    // g = the largest power of two with 1/(2g) >= rmax, clamped to [4, 512]. All
+    // the halved values are exact powers of two, so this float comparison tracks
+    // the kernel's integer bit-pattern compare.
+    private static uint GridDim(float rmax)
+    {
+        uint g = 4;
+        float half = 0.125f; // 1/(2*4)
+        while (g < 512 && half >= rmax) { g *= 2; half *= 0.5f; }
+        return g;
+    }
+
+    // The seeded initial position and cell of every particle, reproducing
+    // init.inc's draw order and integrate_and_store's cell formula
+    // (cx = int(x*g) & (g-1)). read_state after zero steps yields the same
+    // positions; deriving them here lets a test assert a geometric precondition
+    // (which cell a particle lands in) BEFORE it trusts the drift comparison, so
+    // a case that fails to exercise its target geometry fails loudly instead of
+    // passing vacuously.
+    private static (float x, float y, int cx, int cy)[] SeededCells(uint n, uint species, ulong seed, float rmax)
+    {
+        uint g = GridDim(rmax);
+        var rng = new TestOracle.SplitMix64(seed);
+        var pts = new (float, float, int, int)[n];
+        for (int i = 0; i < n; i++)
+        {
+            var (x, y, _) = TestOracle.DrawParticle(rng, species);
+            int cx = (int)(x * g) & ((int)g - 1);
+            int cy = (int)(y * g) & ((int)g - 1);
+            pts[i] = (x, y, cx, cy);
+        }
+        return pts;
+    }
+
+    // The 3x3 run lengths neighbour_runs (grid.inc) would emit for cell (cx, cy):
+    // three rows, each one contiguous column span, or two when the column window
+    // straddles the torus seam (cx in {0, g-1}). Mirrors the run enumeration so a
+    // test can assert the run lengths land in the intended (e.g. sub-lane) regime.
+    private static IEnumerable<int> RunLengths(Dictionary<(int, int), int> occ, uint g, int cx, int cy)
+    {
+        int gi = (int)g;
+        int[][] windows =
+            cx == 0 ? [[gi - 1], [0, 1]]
+            : cx == gi - 1 ? [[gi - 2, gi - 1], [0]]
+            : [[cx - 1, cx, cx + 1]];
+        for (int dr = -1; dr <= 1; dr++)
+        {
+            int ry = ((cy + dr) % gi + gi) % gi;
+            foreach (int[] w in windows)
+            {
+                int len = 0;
+                foreach (int c in w) { occ.TryGetValue((c, ry), out int cc); len += cc; }
+                yield return len;
+            }
+        }
+    }
+
     private static (double pos, double vel) MaxDrift(SwarmParams brute, SwarmParams grid, uint steps)
     {
         var (bx, by, bvx, bvy) = RunRead(brute, steps);
@@ -171,6 +228,110 @@ public sealed unsafe class GridTests
                                   Make(n, species, seed, 0.24f, forcePath, FlagGrid), 1);
         Assert.True(pos < 1e-5, $"position drift {pos:E3} - tail mask / seam over-read");
         Assert.True(vel < 1e-4, $"velocity drift {vel:E3} - tail mask / seam over-read");
+    }
+
+    // Pinpoint diagonal-boundary gate. A particle in a CORNER cell of the g x g
+    // torus (cx in {0, g-1} AND cy in {0, g-1}) has its 3x3 neighbourhood wrapped
+    // on BOTH axes at once: neighbour_runs must split all three rows at the column
+    // seam and pick the wrapped row indices (cy-1, cy+1) & (g-1). That is the case
+    // a missing run or a wrong wrap corrupts, and TailMaskSeamOverReadMatchesBrute
+    // only gates it statistically. Here the seeds are chosen (verified offline and
+    // re-asserted below) so a corner particle has a genuine neighbour in the
+    // diagonally-opposite cell that is reachable ONLY by wrapping BOTH seams, and
+    // within rmax: if grid dropped that run the id-matched state would diverge
+    // from brute past the FP-reordering floor. g=4 (rmax=0.24) makes the four
+    // corner cells the ones that wrap both axes. Both force paths.
+    [Theory]
+    [InlineData(500u, 4u, 0x1234ul, 1u)]
+    [InlineData(500u, 4u, 0x1234ul, 3u)]
+    [InlineData(500u, 4u, 0x2222ul, 1u)]
+    [InlineData(500u, 4u, 0x2222ul, 3u)]
+    public void DiagonalSeamWrapMatchesBrute(uint n, uint species, ulong seed, uint forcePath)
+    {
+        _ = NativeKernel.Handle;
+        const float rmax = 0.24f; // g = 4
+        uint g = GridDim(rmax);
+        var pts = SeededCells(n, species, seed, rmax);
+
+        // Precondition: a corner-cell particle with a cross-BOTH-seams neighbour
+        // within rmax actually exists, so the double wrap is load-bearing.
+        bool doubleWrapExercised = false;
+        for (int i = 0; i < n && !doubleWrapExercised; i++)
+        {
+            var (xi, yi, cxi, cyi) = pts[i];
+            bool corner = (cxi == 0 || cxi == g - 1) && (cyi == 0 || cyi == g - 1);
+            if (!corner) continue;
+            int wrapCol = cxi == 0 ? (int)g - 1 : 0; // column reached only by wrapping
+            int wrapRow = cyi == 0 ? (int)g - 1 : 0; // row reached only by wrapping
+            for (int j = 0; j < n; j++)
+            {
+                if (j == i) continue;
+                var (xj, yj, cxj, cyj) = pts[j];
+                if (cxj != wrapCol || cyj != wrapRow) continue;
+                float dx = TorusDist(xi, xj), dy = TorusDist(yi, yj);
+                if (dx * dx + dy * dy < rmax * rmax) { doubleWrapExercised = true; break; }
+            }
+        }
+        Assert.True(doubleWrapExercised,
+            "no corner-cell particle has a cross-both-seams neighbour within rmax - the diagonal wrap is not exercised");
+
+        var (pos, vel) = MaxDrift(Make(n, species, seed, rmax, forcePath, 0),
+                                  Make(n, species, seed, rmax, forcePath, FlagGrid), 1);
+        Assert.True(pos < 1e-5, $"position drift {pos:E3} - diagonal seam wrap");
+        Assert.True(vel < 1e-4, $"velocity drift {vel:E3} - diagonal seam wrap");
+    }
+
+    // Sub-lane run gate. At n < 8 every 3x3 neighbour run is shorter than one
+    // AVX2 vector (8 lanes), so a non-empty run's ONLY group is the masked tail
+    // (nfull = count & ~7 = 0): the partial-final-vector path with no preceding
+    // full group and the empty-run skip are both exercised in isolation. The
+    // count-derived tail mask must zero the over-read past the run end - which at
+    // these n lands in other cells' real particles, not just finite-zero pads -
+    // without dropping the run's own j's. The seeds put a particle in a corner
+    // cell (so seam-split runs are built) AND guarantee a real in-range neighbour
+    // (both re-asserted below), so the force is non-trivial and a tail fault shows
+    // as drift rather than cancelling. Both force paths.
+    [Theory]
+    [InlineData(7u, 4u, 0x2ul, 1u)]
+    [InlineData(7u, 4u, 0x2ul, 3u)]
+    [InlineData(7u, 4u, 0xAul, 1u)]
+    [InlineData(7u, 4u, 0xAul, 3u)]
+    public void SubLaneRunMatchesBrute(uint n, uint species, ulong seed, uint forcePath)
+    {
+        _ = NativeKernel.Handle;
+        const float rmax = 0.24f; // g = 4
+        uint g = GridDim(rmax);
+        var pts = SeededCells(n, species, seed, rmax);
+
+        var occ = new Dictionary<(int, int), int>();
+        foreach (var p in pts) { occ.TryGetValue((p.cx, p.cy), out int c); occ[(p.cx, p.cy)] = c + 1; }
+
+        int maxRun = 0;
+        bool corner = false;
+        foreach (var p in pts)
+        {
+            if ((p.cx == 0 || p.cx == g - 1) && (p.cy == 0 || p.cy == g - 1)) corner = true;
+            foreach (int len in RunLengths(occ, g, p.cx, p.cy)) maxRun = Math.Max(maxRun, len);
+        }
+
+        bool interacts = false;
+        for (int i = 0; i < n && !interacts; i++)
+            for (int j = 0; j < n; j++)
+            {
+                if (i == j) continue;
+                float dx = TorusDist(pts[i].x, pts[j].x), dy = TorusDist(pts[i].y, pts[j].y);
+                float r2 = dx * dx + dy * dy;
+                if (r2 > 0f && r2 < rmax * rmax) { interacts = true; break; }
+            }
+
+        Assert.True(maxRun is > 0 and < 8, $"expected a non-empty sub-lane run, got max run length {maxRun}");
+        Assert.True(corner, "no corner-cell particle - the seam-split sub-lane run is not exercised");
+        Assert.True(interacts, "no in-range neighbour - the force would be zero and the comparison vacuous");
+
+        var (pos, vel) = MaxDrift(Make(n, species, seed, rmax, forcePath, 0),
+                                  Make(n, species, seed, rmax, forcePath, FlagGrid), 1);
+        Assert.True(pos < 1e-5, $"position drift {pos:E3} - sub-lane tail");
+        Assert.True(vel < 1e-4, $"velocity drift {vel:E3} - sub-lane tail");
     }
 
     // The stable counting sort pins the iteration order as a pure function of
