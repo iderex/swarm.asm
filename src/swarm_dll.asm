@@ -55,6 +55,28 @@ include 'kernel/layout.inc'
 include 'kernel/cpuid.inc'
 include 'kernel/init.inc'
 include 'kernel/state.inc'
+include 'kernel/step.inc'
+
+; build_core is exported directly as swarm_build: 1 arg, integer copy only, it
+; saves rsi/rdi itself, so it is Win64-clean without the FP seam.
+
+; ------------------------------------------------------------------
+; swarm_pass — seam wrapper over pass_core (heavy FP: the MXCSR pin matters).
+;   in:       rcx arena, edx first, r8d last
+; ------------------------------------------------------------------
+swarm_pass:
+        seam_enter
+        call    pass_core
+        seam_leave
+
+; ------------------------------------------------------------------
+; swarm_step — seam wrapper over step_core (n_steps x build+pass).
+;   in:       rcx arena, edx n_steps
+; ------------------------------------------------------------------
+swarm_step:
+        seam_enter
+        call    step_core
+        seam_leave
 
 ; ------------------------------------------------------------------
 ; swarm_read_state — id-ordered copy-out of the current state.
@@ -146,7 +168,10 @@ section '.edata' export data readable
          swarm_layout_bytes, 'swarm_layout_bytes',\
          cpu_paths_core,     'swarm_cpu_paths',\
          swarm_init,         'swarm_init',\
-         swarm_read_state,   'swarm_read_state'
+         swarm_read_state,   'swarm_read_state',\
+         build_core,         'swarm_build',\
+         swarm_pass,         'swarm_pass',\
+         swarm_step,         'swarm_step'
 
 section '.reloc' fixups data readable discardable
 
