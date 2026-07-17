@@ -16,10 +16,14 @@
 ; and unmasked tail loads would read out of bounds.
 ;
 ; g = the largest power of two with 1/g >= rmax, clamped to [4, 512]
-; (decision 3). rmax <= 0.25 guarantees g = 4 qualifies; the doubling
-; compares positive-f32 bit patterns as integers (order-identical for
-; positive floats) and halves 1/(2g) by an exponent decrement — both exact,
-; no FP instruction needed.
+; (decision 3): the cell edge 1/g must be at least rmax so the 3x3
+; neighbourhood covers the cutoff. rmax <= 0.25 guarantees g = 4 qualifies
+; (1/4 = 0.25 >= rmax always); the loop grows g while the NEXT candidate
+; still qualifies, so the per-step check compares 1/(2g) (the doubled g's
+; edge) to rmax, not the current g's own invariant. The doubling compares
+; positive-f32 bit patterns as integers (order-identical for positive
+; floats) and halves 1/(2g) by an exponent decrement — both exact, no FP
+; instruction needed.
 
 ; ------------------------------------------------------------------
 ; arena_dims_core — padded_n and grid g for VALIDATED params (no revalidation).
