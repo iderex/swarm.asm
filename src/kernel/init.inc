@@ -98,9 +98,11 @@ init_core:
         mov     ecx, SP_SIZE/8
         rep     movsq                   ; DF still clear from the cld above
 
-        ; --- 5. seed bank OUT ---------------------------------------------
+        ; --- 5. seed bank OUT + its cell ids ------------------------------
         mov     rcx, r11                ; seed_bank_out reads the header it needs
         call    seed_bank_out
+        mov     rcx, [rsp]              ; arena (r11 was consumed as the rng state)
+        call    seed_cellids            ; valid keys for the first grid build
         xor     eax, eax
         jmp     .ret
 

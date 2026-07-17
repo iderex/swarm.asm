@@ -21,9 +21,14 @@ SP_DT          = 28                     ; f32, (0, 0.1]
 SP_FRICTION    = 32                     ; f32, [0, 1]
 SP_FORCE_SCALE = 36                     ; f32, (0, 100]
 SP_FORCE_PATH  = 40                     ; u32, 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
-SP_FLAGS       = 44                     ; u32, reserved — must be 0
+SP_FLAGS       = 44                     ; u32, only FLAG_* bits may be set
 SP_MATRIX      = 48                     ; f32[8][8], row-major, each [-1, 1]
 SP_SIZE        = 304
+
+; SwarmParams.flags bits. Grid mode selects the counting-sort build + (later)
+; the neighborhood force; its absence is the brute-force path (decision 3).
+FLAG_GRID      = 1
+SP_FLAGS_VALID = FLAG_GRID               ; mask of accepted flag bits (fail-closed)
 
 ; swarm_parse_preset error encoding: success = 0; failure =
 ;   (i32)(0x80000000 or (code shl 20) or min(line, 0xFFFFF)).

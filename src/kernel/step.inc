@@ -108,17 +108,23 @@ macro integrate_and_store {
 }
 
 ; ------------------------------------------------------------------
-; build_core — copy bank OUT -> bank IN (brute-mode build).
+; build_core — produce bank IN for the next pass. Always copies OUT -> IN
+; (so the pads carry through unchanged); in grid mode (FLAG_GRID) it then
+; tail-calls grid_sort to overlay IN[0..n) cell-sorted (decision 3).
 ;   in:       rcx = arena
-;   out:      bank IN = bank OUT (all six arrays, incl. pads)
-;   clobbers: rax, rcx, r10, flags; saves+restores rsi, rdi
-;   MXCSR:    untouched (integer copy)
+;   out:      brute: IN = OUT (all six arrays, incl. pads). grid: additionally
+;             IN[0..n) reordered by ascending cell id, cell_start filled.
+;   clobbers: rax, rcx, r10, flags; saves+restores rbx, rsi, rdi (grid_sort
+;             preserves the remaining nonvolatiles it uses)
+;   MXCSR:    untouched (integer copy / sort)
 ; ------------------------------------------------------------------
 build_core:
+        push    rbx
+        mov     rbx, rcx                ; arena survives the rep movsd (kills rcx)
         push    rsi
         push    rdi
-        mov     eax, [rcx+AH_PADDED]    ; padded_n
-        lea     rsi, [rcx+AH_SIZE]      ; bank OUT base
+        mov     eax, [rbx+AH_PADDED]    ; padded_n
+        lea     rsi, [rbx+AH_SIZE]      ; bank OUT base
         imul    r10d, eax, AR_X_IN      ; 6*padded_n dwords = one bank
         lea     rdi, [rsi+r10*4]        ; bank IN base = OUT + 6*stride
         mov     ecx, r10d               ; copy the whole OUT bank -> IN
@@ -126,6 +132,11 @@ build_core:
         rep     movsd
         pop     rdi
         pop     rsi
+        mov     eax, [rbx+AH_PARAMS+SP_FLAGS]
+        test    eax, FLAG_GRID          ; ZF survives the mov/pop below
+        mov     rcx, rbx                ; grid_sort takes the arena in rcx
+        pop     rbx
+        jnz     grid_sort               ; grid: overlay IN[0..n); rets to caller
         ret
 
 ; ------------------------------------------------------------------

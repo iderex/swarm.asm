@@ -56,6 +56,7 @@ include 'kernel/cpuid.inc'
 include 'kernel/init.inc'
 include 'kernel/state.inc'
 include 'kernel/step.inc'
+include 'kernel/grid.inc'
 include 'kernel/plot.inc'
 
 ; ------------------------------------------------------------------

@@ -76,7 +76,7 @@ public sealed class LayoutTests
         Assert.Equal(0ul, swarm_layout_bytes(in bad));
 
         bad = Valid();
-        bad.Flags = 1;
+        bad.Flags = 2; // bit 0 (FLAG_GRID) is valid; any reserved bit rejects
         Assert.Equal(0ul, swarm_layout_bytes(in bad));
 
         bad = Valid();
