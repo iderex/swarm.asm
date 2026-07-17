@@ -129,6 +129,9 @@ start:
         mov     ecx, TARGET_FPS
         div     rcx                     ; ticks per frame = freq / 60
         mov     [ticks_per_frame], rax
+        ; The high-resolution timer needs Windows 10 1803+; on anything older
+        ; the call returns NULL and the exe exits 1 (fail-closed, no window)
+        ; rather than pacing coarsely. Acceptable for the Win11 target.
         invoke  CreateWaitableTimerExW, 0, 0, \
                 CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS
         test    rax, rax
@@ -301,6 +304,8 @@ proc WindowProc wnd, wmsg, wp, lp
         invoke  DefWindowProc, rcx, rdx, r8, r9
         jmp     .finish
   .key:
+        test    r9d, 0x40000000         ; lParam bit 30 = key was already down:
+        jnz     .defwndproc             ;   ignore autorepeat, one action / press
         cmp     r8d, VK_ESCAPE
         je      .k_quit
         cmp     r8d, VK_SPACE
