@@ -299,8 +299,9 @@ overhead where no seam exists).
 **Decision:**
 
 ```
-src/kernel/    abi.inc  layout.inc  rng.inc  parse.inc  grid.inc  step.inc  plot.inc
-src/platform/  win.inc (window, DIB, msg loop, pacing, file I/O)  pool.inc (M3)
+src/kernel/    abi.inc  cpuid.inc  init.inc  layout.inc  parse.inc  rng.inc  state.inc  step.inc  grid.inc  plot.inc
+src/platform/  seam.inc (export / thread-entry MXCSR + Win64 seam frame)  pool.inc (M3)
+                 window, DIB, msg loop, pacing, and file I/O are inline in src/swarm.asm
 src/swarm.asm      = platform + kernel -> swarm.exe   (PE64 GUI, kernel32/user32/gdi32, <= 64 KB)
 src/swarm_dll.asm  = kernel + seam shims -> swarm.kernel.dll (PE64 DLL; test artifact)
 tests/Swarm.Tests  = C# xUnit v3 harness (oracle, goldens, conformance)

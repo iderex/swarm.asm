@@ -91,9 +91,18 @@ Windows 10/11 x64. PowerShell:
 
 The build script bootstraps the pinned assembler ([FASM](https://flatassembler.net/))
 into `tools/fasm/` on first run — the download is verified against a pinned
-SHA-256 before it is unpacked. Output lands in `build/swarm.exe`.
+SHA-256 before it is unpacked. Output lands in `build/swarm.exe` and
+`build/swarm.kernel.dll` — `swarm.asm` (platform + kernel) assembles to the
+shipped exe, `swarm_dll.asm` (kernel + seam shims) assembles to the DLL the
+test harness P/Invokes; both include the same `src/kernel/*.inc`, so the
+tested kernel is the shipped kernel.
 
-The test harness (from M0 onward) needs the .NET 9 SDK: `dotnet test`.
+The test harness (from M0 onward) needs the .NET 9 SDK. Run `.\build.ps1`
+first — `dotnet test` loads the freshly built `swarm.kernel.dll`:
+
+```powershell
+dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
+```
 
 ## Contributing
 
