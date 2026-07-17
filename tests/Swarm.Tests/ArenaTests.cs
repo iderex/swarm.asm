@@ -173,20 +173,6 @@ public sealed unsafe class ArenaTests
 
     // --- the seeded state matches the oracle ---------------------------------
 
-    private sealed class SplitMix64(ulong seed)
-    {
-        private ulong _state = seed;
-        public ulong Next()
-        {
-            _state += 0x9E3779B97F4A7C15;
-            ulong z = _state;
-            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
-            z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
-            return z ^ (z >> 31);
-        }
-        public ulong State => _state;
-    }
-
     [Theory]
     [InlineData(1u, 1u, 0x1UL)]
     [InlineData(100u, 3u, 0xABCDUL)]
@@ -211,13 +197,10 @@ public sealed unsafe class ArenaTests
             uint* spOut = (uint*)((byte*)arena + baseOff + 4 * stride);
             uint* idOut = (uint*)((byte*)arena + baseOff + 5 * stride);
 
-            var rng = new SplitMix64(seed);
+            var rng = new TestOracle.SplitMix64(seed);
             for (uint i = 0; i < n; i++)
             {
-                ulong v1 = rng.Next(), v2 = rng.Next(), v3 = rng.Next();
-                float ex = (v1 >> 40) * (1.0f / 16777216.0f);
-                float ey = (v2 >> 40) * (1.0f / 16777216.0f);
-                uint es = (uint)(((v3 >> 32) * species) >> 32);
+                var (ex, ey, es) = TestOracle.DrawParticle(rng, species);
                 Assert.Equal(ex, xOut[i]);
                 Assert.Equal(ey, yOut[i]);
                 Assert.Equal(es, spOut[i]);
