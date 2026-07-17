@@ -18,10 +18,18 @@ FRAME_H      = 1024
 DIB_RGB_COLORS = 0                      ; not in the bundled equates
 SMOKE_FRAMES = 60                       ; frames rendered under -smoke
 WINDOW_STYLE = WS_OVERLAPPED+WS_CAPTION+WS_SYSMENU+WS_MINIMIZEBOX   ; fixed size
-SIM_N        = 1500                     ; scalar-path preview count (AVX2 lifts it)
+; Live count: the largest that holds a real 60 fps single-threaded at the
+; default preset (measured, docs/BENCHMARKS.md). 8,192 @ 60 fps waits on the
+; M2 grid / M3 threads (brute-force AVX2 is ~53 ms/pass at 8k on one core).
+SIM_N        = 3500
+TARGET_FPS   = 60
+VK_R         = 'R'                      ; WM_KEYDOWN gives the uppercase VK code
+VK_M         = 'M'
 MEM_COMMIT     = 0x1000                 ; VirtualAlloc flags (kernel64 equates
 MEM_RESERVE    = 0x2000                 ;   omit these; define them locally)
 PAGE_READWRITE = 0x04
+CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002   ; not in the bundle
+TIMER_ALL_ACCESS = 0x1F0003            ; MODIFY_STATE + SYNCHRONIZE + more
 
 section '.text' code readable executable
 
@@ -32,11 +40,14 @@ section '.text' code readable executable
 ;             in this routine relies on)
 ;   out:      does not return; process exit code 0 (1 on init failure)
 ;   clobbers: n/a (process ends here)
-;   MXCSR:    untouched — the 0x9FC0 main-thread pin (decision 2) lands
-;             with the first FP slice
+;   MXCSR:    pinned to 0x9FC0 at entry (decision 2, the exe main-thread pin) —
+;             so every main-thread FP op (the matrix reroll) runs under the
+;             same rounding/FTZ/DAZ policy the kernel does; the seam wrappers
+;             re-pin around each kernel call, harmlessly idempotent
 ; ------------------------------------------------------------------
 start:
         sub     rsp, 8
+        ldmxcsr [mxcsr_pin]             ; decision 2: main-thread MXCSR = 0x9FC0
 
         invoke  GetModuleHandle, 0
         mov     [wc.hInstance], rax
@@ -108,6 +119,26 @@ start:
         test    eax, eax
         jnz     .fail                   ; invalid params / short arena / no path
 
+        ; --- frame pacing: a high-resolution waitable timer to a QPC deadline
+        ; (docs/MASTERPLAN.md, decision 11). One swarm_step per rendered frame,
+        ; no accumulator, no catch-up: if the machine falls behind the animation
+        ; slows and the state sequence is unchanged.
+        invoke  QueryPerformanceFrequency, qpc_freq
+        mov     rax, [qpc_freq]
+        xor     edx, edx
+        mov     ecx, TARGET_FPS
+        div     rcx                     ; ticks per frame = freq / 60
+        mov     [ticks_per_frame], rax
+        invoke  CreateWaitableTimerExW, 0, 0, \
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS
+        test    rax, rax
+        jz      .fail                   ; the paced loop requires the hi-res timer
+        mov     [htimer], rax
+        invoke  QueryPerformanceCounter, qpc_now
+        mov     rax, [qpc_now]
+        add     rax, [ticks_per_frame]
+        mov     [qpc_deadline], rax
+
   .pump:
         invoke  PeekMessage, msg, 0, 0, 0, PM_REMOVE
         test    eax, eax
@@ -119,9 +150,28 @@ start:
         jmp     .pump
 
   .render:
+        ; Apply pending keyboard edits at the step boundary (decision 11:
+        ; edits commit between steps). WindowProc only sets these flags.
+        cmp     dword [reroll_req], 0
+        je      .chk_reseed
+        mov     dword [reroll_req], 0
+        call    ui_reroll_matrix        ; new attraction values in [-1, 1]
+        call    ui_reinit               ; new matrix + fresh positions
+        jmp     .step
+  .chk_reseed:
+        cmp     dword [reseed_req], 0
+        je      .step
+        mov     dword [reseed_req], 0
+        call    ui_reseed               ; new seed
+        call    ui_reinit               ; fresh positions, same matrix
+
+  .step:
+        cmp     dword [paused], 0
+        jne     .plot                   ; paused: skip the step, keep drawing
         mov     rcx, [arena]            ; advance the simulation one step
         mov     edx, 1
         call    sim_step
+  .plot:
         mov     rcx, [arena]            ; raster the state into the DIB
         mov     rdx, [pixels]           ; (plot_core clears then plots)
         mov     r8d, FRAME_W
@@ -139,10 +189,11 @@ start:
         invoke  DestroyWindow, [hwnd]   ; -> WM_DESTROY -> PostQuitMessage(0)
 
   .pace:
-        invoke  Sleep, 15               ; crude pacing; the waitable timer
-        jmp     .pump                   ; arrives with the plot/blit slice
+        call    frame_pace              ; wait out the frame to the 60 fps deadline
+        jmp     .pump
 
   .quit:
+        invoke  CloseHandle, [htimer]
         invoke  SelectObject, [mem_dc], [old_bmp]
         invoke  DeleteDC, [mem_dc]
         invoke  ReleaseDC, [hwnd], [wnd_dc]
@@ -251,8 +302,28 @@ proc WindowProc wnd, wmsg, wp, lp
         jmp     .finish
   .key:
         cmp     r8d, VK_ESCAPE
-        jne     .defwndproc
+        je      .k_quit
+        cmp     r8d, VK_SPACE
+        je      .k_pause
+        cmp     r8d, VK_R
+        je      .k_reseed
+        cmp     r8d, VK_M
+        je      .k_reroll
+        jmp     .defwndproc
+  .k_quit:
         invoke  DestroyWindow, rcx
+        xor     eax, eax
+        jmp     .finish
+  .k_pause:                             ; the render loop reads these flags at
+        xor     dword [paused], 1       ; the next step boundary (decision 11)
+        xor     eax, eax
+        jmp     .finish
+  .k_reseed:
+        mov     dword [reseed_req], 1
+        xor     eax, eax
+        jmp     .finish
+  .k_reroll:
+        mov     dword [reroll_req], 1
         xor     eax, eax
         jmp     .finish
   .destroy:
@@ -294,6 +365,108 @@ sim_plot:
         call    plot_core
         seam_leave
 
+; ------------------------------------------------------------------
+; ui_reseed — draw a fresh world seed from the UI RNG stream.
+;   in/out:   mutates [ui_rng] and [sim_params+SP_SEED]
+;   clobbers: rax, r9, r10, flags
+;   MXCSR:    untouched (integer only)
+; ------------------------------------------------------------------
+ui_reseed:
+        mov     r10, [ui_rng]
+        rng_next r10, rax, r9           ; r10 advances, rax = new draw
+        mov     [ui_rng], r10
+        mov     [sim_params+SP_SEED], rax
+        ret
+
+; ------------------------------------------------------------------
+; ui_reroll_matrix — refill the species_n x species_n attraction block with
+; fresh values a = 2*u01 - 1 in [-1, 1) (decision 8), from the UI RNG stream.
+;   in/out:   mutates [ui_rng] and the matrix in [sim_params]
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, xmm0, flags
+;   MXCSR:    pinned 0x9FC0 (set at start); round-nearest, no denormals arise,
+;             so the stored f32 is deterministic
+; ------------------------------------------------------------------
+ui_reroll_matrix:
+        mov     r10, [ui_rng]
+        mov     r8d, [sim_params+SP_SPECIES_N]
+        lea     r11, [sim_params+SP_MATRIX]
+        xor     ecx, ecx                ; i (row)
+  .row:
+        cmp     ecx, r8d
+        jae     .done
+        xor     edx, edx                ; j (column)
+  .col:
+        cmp     edx, r8d
+        jae     .next
+        rng_next r10, rax, r9           ; rax = draw
+        shr     rax, 40                 ; top 24 bits -> [0, 2^24)
+        cvtsi2ss xmm0, rax
+        mulss   xmm0, [inv_2p24]        ; u01 in [0, 1)
+        addss   xmm0, xmm0              ; 2*u01
+        subss   xmm0, [f_one]           ; -> [-1, 1)
+        mov     eax, ecx
+        shl     eax, 3                  ; matrix stride is 8 f32 (i*8 + j)
+        add     eax, edx
+        movss   [r11+rax*4], xmm0
+        inc     edx
+        jmp     .col
+  .next:
+        inc     ecx
+        jmp     .row
+  .done:
+        mov     [ui_rng], r10
+        ret
+
+; ------------------------------------------------------------------
+; ui_reinit — re-seed the existing arena from the (edited) params.
+;   in:       [arena], [arena_bytes], [sim_params] (n/species_n unchanged, so
+;             the layout is identical and the buffer is reused)
+;   out:      the arena is fully re-initialized; eax = 0 by construction
+;             (the params stay valid, so init_core cannot reject them)
+;   clobbers: caller-saved (sim_init is seam-wrapped and self-aligns)
+;   MXCSR:    re-pinned inside the seam
+; ------------------------------------------------------------------
+ui_reinit:
+        mov     rcx, [arena]
+        mov     rdx, [arena_bytes]
+        lea     r8, [sim_params]
+        call    sim_init
+        ret
+
+; ------------------------------------------------------------------
+; frame_pace — wait out the current frame to the 60 fps QPC deadline, then
+; advance the deadline (no catch-up: resync if the frame overran; decision 11).
+;   in/out:   reads [qpc_freq]/[ticks_per_frame]/[htimer], updates [qpc_deadline]
+;   clobbers: caller-saved, flags
+;   MXCSR:    untouched (integer only)
+; ------------------------------------------------------------------
+frame_pace:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        invoke  QueryPerformanceCounter, qpc_now
+        mov     rax, [qpc_deadline]
+        sub     rax, [qpc_now]          ; remaining ticks (signed)
+        jle     .advance                ; deadline already passed: no wait
+        mov     rcx, 10000000           ; ticks -> 100 ns units: *1e7 / freq
+        mul     rcx                     ; rdx:rax (rax < freq/60, no overflow)
+        div     qword [qpc_freq]        ; rax = 100 ns units to wait
+        neg     rax                     ; negative => relative due time
+        mov     [due_time], rax
+        invoke  SetWaitableTimer, [htimer], due_time, 0, 0, 0, 0
+        invoke  WaitForSingleObject, [htimer], -1   ; INFINITE
+  .advance:
+        invoke  QueryPerformanceCounter, qpc_now
+        mov     rax, [qpc_deadline]
+        add     rax, [ticks_per_frame]
+        mov     rcx, [qpc_now]
+        cmp     rax, rcx
+        jae     .store                  ; next deadline still ahead
+        mov     rax, rcx                ; fell behind: resync, no catch-up
+        add     rax, [ticks_per_frame]
+  .store:
+        mov     [qpc_deadline], rax
+        add     rsp, 8
+        ret
+
 section '.data' data readable writeable
 
   _title       TCHAR 'swarm.asm', 0
@@ -322,6 +495,23 @@ section '.data' data readable writeable
   frame_count dd 0
   smoke_mode  dd 0
 
+  ; Interactive state (written by WindowProc, consumed at the step boundary).
+  paused      dd 0
+  reseed_req  dd 0
+  reroll_req  dd 0
+
+  align 8
+  ui_rng          dq 0x243F6A8885A308D3   ; UI RNG state (distinct from the sim seed)
+  qpc_freq        dq ?                     ; QueryPerformanceFrequency ticks/s
+  qpc_now         dq ?                     ; scratch LARGE_INTEGER
+  qpc_deadline    dq ?                     ; next frame's QPC target
+  ticks_per_frame dq ?                     ; qpc_freq / TARGET_FPS
+  due_time        dq ?                     ; SetWaitableTimer relative due (100 ns)
+  htimer          dq ?                     ; high-resolution waitable timer
+
+  align 16
+  mxcsr_pin   dd 0x9FC0                    ; decision 2: FTZ+DAZ, all masked, RN
+
   ; Default preset: a SwarmParams (abi.inc SP_*), 304 bytes, Pack=4. A
   ; four-species world with a varied attraction matrix; rmax/dt/friction
   ; tuned for visible swarming at the scalar preview count.
@@ -349,10 +539,15 @@ section '.data' data readable writeable
 
 section '.idata' import data readable writeable
 
-  library kernel32, 'KERNEL32.DLL',\
-          user32,   'USER32.DLL',\
-          gdi32,    'GDI32.DLL'
+  ; kernel32ex is a second KERNEL32.DLL descriptor: the bundled api/kernel32.inc
+  ; predates CreateWaitableTimerExW, so it is imported here. Same DLL name, so
+  ; the import allowlist (kernel32/user32/gdi32) is unaffected.
+  library kernel32,   'KERNEL32.DLL',\
+          user32,     'USER32.DLL',\
+          gdi32,      'GDI32.DLL',\
+          kernel32ex, 'KERNEL32.DLL'
 
   include 'api\kernel32.inc'
   include 'api\user32.inc'
   include 'api\gdi32.inc'
+  import kernel32ex, CreateWaitableTimerExW,'CreateWaitableTimerExW'
