@@ -207,6 +207,53 @@ public sealed class KernelSourceConformanceTests
         Assert.Contains("sqrtss", StripComment("        sqrtss  xmm4, xmm4 ; r"));
     }
 
+    /// <summary>
+    /// Regression for the struct-init false-positive (item 1): a future data
+    /// table written `mytable: WNDCLASSEX ...` (colon + inline struct type) is
+    /// DATA, not a routine, so the header scans must classify it as a data label
+    /// and never flag it for a missing register contract. A real routine (first
+    /// body token an instruction, not a struct type) stays a routine, and an
+    /// unrecognised struct type fails closed (scanned as a routine).
+    /// </summary>
+    [Fact]
+    public void IsDataLabelRecognisesStructInitDataTables()
+    {
+        // Colon + inline struct type: each of the win64a.inc struct macros the
+        // shell uses names a data table, not a routine.
+        Assert.True(IsDataLabelFor("mytable: WNDCLASSEX sizeof.WNDCLASSEX, CS_OWNDC, WindowProc"));
+        Assert.True(IsDataLabelFor("r: RECT 0, 0, 16, 16"));
+        Assert.True(IsDataLabelFor("bmi: BITMAPINFOHEADER sizeof.BITMAPINFOHEADER, 8, -8, 1, 32"));
+        Assert.True(IsDataLabelFor("m: MSG"));
+        Assert.True(IsDataLabelFor("t: TCHAR 'x', 0"));
+
+        // The plain data directives still register as data (unchanged behaviour).
+        Assert.True(IsDataLabelFor("tbl: dd 1, 2, 3"));
+
+        // Struct type on the line BELOW the label (an intervening comment/blank
+        // is transparent), mirroring how a real table might be laid out.
+        string[] split = ["mytable:", "        ; the window class", "        WNDCLASSEX sizeof.WNDCLASSEX, 0"];
+        Assert.True(IsDataLabel(LabelRegex.Match(split[0]).Groups[2].Value, split, 0));
+
+        // A real routine is NOT a data label: its first token is an instruction,
+        // so it stays subject to the register-contract header requirement.
+        Assert.False(IsDataLabelFor("do_thing: mov eax, 1"));
+        Assert.False(IsDataLabelFor("bogus_routine: ret"));
+
+        // An unknown struct type is deliberately NOT whitelisted: it fails closed
+        // (scanned as a routine) so a new struct-init table forces a conscious
+        // addition to DataStructTypes rather than silently slipping the scan.
+        Assert.False(IsDataLabelFor("pt: POINT 1, 2"));
+    }
+
+    // Match a single source line as a column-0 label and run IsDataLabel on it,
+    // exactly as the header scans do (LabelRegex group 2 = the inline body).
+    private static bool IsDataLabelFor(string line)
+    {
+        var m = LabelRegex.Match(line);
+        Assert.True(m.Success, $"not a column-0 label: {line}");
+        return IsDataLabel(m.Groups[2].Value, [line], 0);
+    }
+
     // A column-0 label: `name:` starting in the first column (a routine or a
     // data-table entry). Local labels (.foo, indented) and constants
     // (NAME = value, no colon) never match. Group 2 is any inline body text.
@@ -228,6 +275,21 @@ public sealed class KernelSourceConformanceTests
         "rb", "rw", "rd", "rp", "rq", "rt", "times",
     };
 
+    // FASM struct-type names that initialise a data table inline
+    // (`label: WNDCLASSEX ...`). These are win64a.inc struct macros, not code:
+    // a column-0 label whose first body token is one of them is a DATA table,
+    // not a routine, so it carries no register contract. The tree's struct-init
+    // defs use the colon-less `name TYPE ...` form today (which never matches a
+    // `name:` label at all), so this guards only a FUTURE colon+struct table -
+    // e.g. `mytable: WNDCLASSEX ...` - from being mis-scanned as a headerless
+    // routine. Kept case-sensitive: FASM struct macros are case-sensitive, so
+    // only the exact spelling ever names a real data table (unlike the
+    // case-insensitive db/dd directives above).
+    private static readonly HashSet<string> DataStructTypes = new(StringComparer.Ordinal)
+    {
+        "TCHAR", "WNDCLASSEX", "RECT", "BITMAPINFOHEADER", "MSG",
+    };
+
     // A register-contract field line inside a banner block: `;   in:`, `; out:`,
     // `; in/out:`, or `; clobbers:` (the routine-contract header convention).
     // Used by the shell scan, where thin seam wrappers legitimately declare
@@ -246,6 +308,22 @@ public sealed class KernelSourceConformanceTests
 
     private static readonly Regex AlignDirective =
         new(@"^align\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Documented limitation (issue #34, item 3) - PRESENCE, not TRUTHFULNESS.
+    // The two contract-header scans below (RegisterContractHeaderPresent for the
+    // kernel, ShellRoutineContractHeaderPresent for the shells) verify that a
+    // routine's banner CONTAINS the required contract field(s): a `clobbers:`
+    // line for the kernel, at least one in:/out:/in/out:/clobbers: field for the
+    // shells. They do NOT verify the listed registers are ACCURATE - a stale or
+    // wrong `clobbers:` list passes as long as the line exists. Machine-checking
+    // truthfulness would mean parsing every routine body and modelling the
+    // register effects of every macro and callee it reaches, a disproportionate
+    // effort against a hand-audited kernel. This is a conscious accepted gap, not
+    // an oversight: contract accuracy is enforced by the adversarial-review gate
+    // (simd-reviewer reads each routine against its stated contract) and by
+    // CodeRabbit, under prime directive 4 that makes a wrong clobber list a bug
+    // even when nothing crashes today. If that ever proves insufficient, the
+    // follow-up is a body-scanning truthfulness check, tracked as its own issue.
 
     /// <summary>
     /// Every routine in src/kernel/*.inc carries a register-contract header with
@@ -356,8 +434,9 @@ public sealed class KernelSourceConformanceTests
     }
 
     // A column-0 label is a data table when its first non-blank body token is a
-    // FASM data directive. The token may sit inline after the colon or on a
-    // following line (comments and blanks are skipped).
+    // FASM data directive (db/dd/...) or a struct-type name (WNDCLASSEX/...).
+    // The token may sit inline after the colon or on a following line (comments
+    // and blanks are skipped).
     private static bool IsDataLabel(string inlineBody, string[] lines, int labelIndex)
     {
         var first = StripComment(inlineBody).Trim();
@@ -367,7 +446,13 @@ public sealed class KernelSourceConformanceTests
         }
 
         var mnemonic = Regex.Match(first, @"^([A-Za-z][A-Za-z0-9]*)");
-        return mnemonic.Success && DataDirectives.Contains(mnemonic.Groups[1].Value);
+        if (!mnemonic.Success)
+        {
+            return false;
+        }
+
+        var token = mnemonic.Groups[1].Value;
+        return DataDirectives.Contains(token) || DataStructTypes.Contains(token);
     }
 
     // Walk upward from the label over the contiguous banner block; blank and

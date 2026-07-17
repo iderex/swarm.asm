@@ -353,31 +353,58 @@ include 'kernel/plot.inc'
 
 ; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
 ; lands the kernel core at rsp = 0 mod 32 — the same contract the DLL exports
-; carry, so the exe drives the identical, gate-verified code paths. Clobbers are
-; the wrapped core's (kernel tier); the seam saves/restores the nonvolatiles.
+; carry, so the exe drives the identical, gate-verified code paths. Each wrapper
+; therefore exposes the uniform seam contract in its header: it clobbers only
+; the Win64 volatiles; the seam saves and restores every nonvolatile and MXCSR.
 
+; ------------------------------------------------------------------
 ; sim_layout — seam wrapper over layout_bytes_core.
 ;   in:       rcx = SwarmParams*
 ;   out:      rax = arena bytes (multiple of 64), or 0 when params invalid
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
+; ------------------------------------------------------------------
 sim_layout:
         seam_enter
         call    layout_bytes_core
         seam_leave
+; ------------------------------------------------------------------
 ; sim_init — seam wrapper over init_core.
 ;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
 ;   out:      eax = 0 on success, else IERR_*
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
+; ------------------------------------------------------------------
 sim_init:
         seam_enter
         call    init_core
         seam_leave
+; ------------------------------------------------------------------
 ; sim_step — seam wrapper over step_core.
 ;   in:       rcx arena, edx n_steps
+;   out:      nothing (void); the arena is advanced n_steps
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
+; ------------------------------------------------------------------
 sim_step:
         seam_enter
         call    step_core
         seam_leave
+; ------------------------------------------------------------------
 ; sim_plot — seam wrapper over plot_core.
 ;   in:       rcx arena, rdx pixels, r8d w, r9d h
+;   out:      nothing (void); the framebuffer at rdx is written
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
+; ------------------------------------------------------------------
 sim_plot:
         seam_enter
         call    plot_core
