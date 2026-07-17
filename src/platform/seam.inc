@@ -77,3 +77,17 @@ macro seam_leave {
         pop     rbp
         ret
 }
+
+; seam_wrap export, core — the standard shape every FP-seam export takes:
+; seam_enter / call <core> / seam_leave, verbatim, nothing in between. Not an
+; indirection that hides the seam — grep for "seam_wrap" finds every site, and
+; this macro IS the whole contract for each of them (its own register-contract
+; header, above, already covers what seam_enter/seam_leave do). A wrapper that
+; needs anything beyond "call the core" between enter and leave does not fit
+; this shape and stays hand-written with its own seam_enter/call/seam_leave.
+macro seam_wrap export, core {
+  export:
+        seam_enter
+        call    core
+        seam_leave
+}

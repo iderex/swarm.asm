@@ -366,10 +366,7 @@ include 'kernel/plot.inc'
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-sim_layout:
-        seam_enter
-        call    layout_bytes_core
-        seam_leave
+seam_wrap sim_layout, layout_bytes_core
 ; ------------------------------------------------------------------
 ; sim_init — seam wrapper over init_core.
 ;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
@@ -379,10 +376,7 @@ sim_layout:
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-sim_init:
-        seam_enter
-        call    init_core
-        seam_leave
+seam_wrap sim_init, init_core
 ; ------------------------------------------------------------------
 ; sim_step — seam wrapper over step_core.
 ;   in:       rcx arena, edx n_steps
@@ -392,10 +386,7 @@ sim_init:
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-sim_step:
-        seam_enter
-        call    step_core
-        seam_leave
+seam_wrap sim_step, step_core
 ; ------------------------------------------------------------------
 ; sim_plot — seam wrapper over plot_core.
 ;   in:       rcx arena, rdx pixels, r8d w, r9d h
@@ -405,10 +396,7 @@ sim_step:
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-sim_plot:
-        seam_enter
-        call    plot_core
-        seam_leave
+seam_wrap sim_plot, plot_core
 
 ; ------------------------------------------------------------------
 ; ui_reseed — draw a fresh world seed from the UI RNG stream.
