@@ -85,6 +85,44 @@ public sealed class ConformanceTests
             "tests/Swarm.Tests/packages.lock.json is not tracked by git - dependency versions would float silently");
     }
 
+    [Fact]
+    public void BenchSwarmParamsMirrorMatchesCanonical()
+    {
+        // The micro-bench (tests/Swarm.Bench) is a standalone project and keeps
+        // its own copy of the SwarmParams seam struct. The runtime 304-byte
+        // assertion (SwarmParamsMirrorIs304Bytes) covers only THIS project's
+        // copy; the bench copy is never executed by any gate. Pin it here so a
+        // future ABI change that misses the bench copy fails the build instead
+        // of silently marshaling a wrong blob into every benchmarked call.
+        string canonical = File.ReadAllText(Path.Combine(Build.RepoRoot, "tests/Swarm.Tests/SwarmParams.cs"));
+        string bench = File.ReadAllText(Path.Combine(Build.RepoRoot, "tests/Swarm.Bench/Program.cs"));
+
+        Assert.Equal(SeamStructSignature(canonical), SeamStructSignature(bench));
+    }
+
+    // The ordered field list of `struct SwarmParams` plus the StructLayout Pack
+    // and the Matrix64 InlineArray size — everything that fixes the marshaled
+    // byte layout. Whitespace- and comment-insensitive.
+    private static string SeamStructSignature(string source)
+    {
+        int structAt = source.IndexOf("struct SwarmParams", StringComparison.Ordinal);
+        Assert.True(structAt >= 0, "SwarmParams struct not found");
+        int open = source.IndexOf('{', structAt);
+        int close = source.IndexOf('}', open);
+        string body = source[(open + 1)..close];
+
+        var fields = System.Text.RegularExpressions.Regex
+            .Matches(body, @"public\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_]+)\s*;")
+            .Select(m => $"{m.Groups[1].Value} {m.Groups[2].Value}");
+
+        var pack = System.Text.RegularExpressions.Regex.Match(source, @"Pack\s*=\s*(\d+)");
+        var inline = System.Text.RegularExpressions.Regex.Match(source, @"InlineArray\((\d+)\)");
+        Assert.True(pack.Success, "StructLayout Pack not found");
+        Assert.True(inline.Success, "Matrix64 InlineArray size not found");
+
+        return $"pack={pack.Groups[1].Value};inline={inline.Groups[1].Value};" + string.Join(",", fields);
+    }
+
     [DllImport("swarm.kernel.dll", CallingConvention = CallingConvention.StdCall)]
     private static extern uint swarm_version();
 
