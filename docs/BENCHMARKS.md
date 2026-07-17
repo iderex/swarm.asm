@@ -132,3 +132,53 @@ reachable by the M3 worker-pool fan-out across cores (the pass is already
 split-invariant, proven by `PassSplitInvariance`), the M2 candidate-set
 reduction, or both. We are not claiming 8k@60 on one thread; we are recording
 where one thread stands so the threading and layout work has a number to beat.
+
+## The M2 grid (uniform spatial grid)
+
+The grid replaces the brute-force O(n²) sweep with the O(n·k) neighbourhood
+pass (masterplan decision 3): a serial stable counting sort reorders the
+population cell-sorted, then the force pass reads only the 3×3 cell
+neighbourhood of each particle. `g` = the largest power of two with `1/g ≥ rmax`
+(clamped `[4, 512]`), so a small `rmax` gives a large `g` and sparse cells —
+the regime the grid wins in.
+
+| CPU           | n       | rmax  | g   | build ms | pass ms | frame ms | fps   | brute proj |
+| ------------- | ------- | ----- | --- | -------- | ------- | -------- | ----- | ---------- |
+| Ryzen 9 5950X | 50,000  | 1/256 | 256 | 0.295    | 5.923   | 6.219    | 160.8 | 1,977 ms   |
+| Ryzen 9 5950X | 50,000  | 1/512 | 512 | 0.490    | 5.986   | 6.476    | 154.4 | 1,977 ms   |
+| Ryzen 9 5950X | 500,000 | 1/256 | 256 | 3.142    | 84.075  | 87.216   | 11.5  | 197,664 ms |
+| Ryzen 9 5950X | 500,000 | 1/512 | 512 | 3.162    | 62.351  | 65.513   | 15.3  | 197,664 ms |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11, **single-threaded**.
+- **Feature path**: AVX2 + FMA, `FLAG_GRID`. **Seed / preset**: `0x5EED`,
+  6 species, varied attraction matrix; the initial (uniform-random) frame — the
+  build cost is `g`-dominated and stable, the pass cost is lowest on this
+  sparsest frame (a settled, clustered swarm costs somewhat more).
+- **frame** = build + pass (each timed min-of-rounds over frozen input, so the
+  work is identical every round). **brute proj** = n² candidate pairs ÷ the
+  measured AVX2 interaction throughput (~1.28 G/s from the baseline table);
+  the O(n²) brute frame is not run at these counts (it would take seconds to
+  minutes per frame).
+- **Commit**: the M2 grid kernel (grid build #24 + neighbourhood force #30) ·
+  **Date**: 2026-07-17.
+
+### Reading the M2 numbers
+
+**50,000 particles hold 60 fps on one core** — 154–161 fps, ~2.5× headroom
+under the 16.67 ms budget — where the brute-force frame would be ~1,977 ms
+(0.5 fps). The grid is **~300× faster than brute at 50k** and turns an
+un-runnable count into a comfortable one.
+
+**500,000 particles do not hold 60 fps on one core** — 65 ms/frame at the best
+config (g = 512), ~15 fps — but the grid is still **~3,000× faster than the
+~198 s brute frame**. The gap to 60 fps is ~4×, which is exactly what the M3
+worker-pool fan-out across cores is for: the neighbourhood pass is already
+**split-invariant** (`GridPassSplitInvariance`, `pass(0,n) == pass(0,k);pass(k,n)`
+bit-for-bit), so it parallelises without a determinism change. The counting-sort
+**build is cheap** (0.3 ms at 50k, ~3 ms at 500k) and never the bottleneck; the
+pass dominates, and a larger `g` (sparser cells, smaller `k`) is the lever —
+g = 512 beats g = 256 at 500k (62 vs 84 ms) for that reason.
+
+So M2 delivers the algorithmic win (the grid makes 500k _simulable_ at all, and
+50k interactive) on one core; **500k @ 60 fps is an M3 threading target**, with
+the number above as the baseline to beat.
