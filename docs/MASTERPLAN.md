@@ -438,8 +438,9 @@ none).
 ### 9. Rendering path
 
 **Decision:** One 32-bit top-down DIB section (`CreateDIBSection`), `BitBlt`
-from a memory DC (vs `SetDIBitsToDevice`: both measured in M1, the faster one
-pinned). Clear via `rep stosd` / NT stores (~0.3 ms at 1080p). Plot:
+from a memory DC. `BitBlt` is chosen over `SetDIBitsToDevice`; the comparison
+between the two is not yet measured — it is deferred to the M4 frame-time
+capture (#5). Clear via `rep stosd` / NT stores (~0.3 ms at 1080p). Plot:
 **serial**, 1 pixel per particle (a 2×2 splat is a preset toggle),
 `px = min(int(x*w), w-1)` (belt behind the wrap canonicalization), color from
 an 8-entry BGRA species palette; last-write-wins in cell-sorted order — the
