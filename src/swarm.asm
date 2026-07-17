@@ -1,10 +1,11 @@
-; swarm.exe — the engine shell: window, DIB framebuffer, blit loop.
+; swarm.exe — the live engine: window, DIB framebuffer, and the render loop
+; that steps the simulation and rasters it each frame.
 ;
-; Walking skeleton (M1 slice 1): opens a fixed 1024x1024 window, clears the
-; framebuffer, blits every frame, exits cleanly. The simulation kernel plugs
-; into the render loop in later slices. `-smoke` on the command line renders
-; a fixed number of frames and exits 0 — that flag is what CI runs, because
-; the smoke gate needs a terminating process.
+; The kernel sources are included straight in (decision 5: the exe and the test
+; DLL share the same kernel), reached through the same MXCSR/nonvolatile seam
+; the DLL uses. `-smoke` on the command line runs a fixed number of real frames
+; and exits 0 — that flag is what CI runs, because the smoke gate needs a
+; terminating process.
 
 format PE64 GUI 6.0
 entry start
@@ -15,9 +16,12 @@ include 'kernel/abi.inc'
 FRAME_W      = 1024                     ; framebuffer and client size, 1:1 blit
 FRAME_H      = 1024
 DIB_RGB_COLORS = 0                      ; not in the bundled equates
-CLEAR_COLOR  = 0x001A1A22               ; 0RGB: near-black blue-grey
 SMOKE_FRAMES = 60                       ; frames rendered under -smoke
 WINDOW_STYLE = WS_OVERLAPPED+WS_CAPTION+WS_SYSMENU+WS_MINIMIZEBOX   ; fixed size
+SIM_N        = 1500                     ; scalar-path preview count (AVX2 lifts it)
+MEM_COMMIT     = 0x1000                 ; VirtualAlloc flags (kernel64 equates
+MEM_RESERVE    = 0x2000                 ;   omit these; define them locally)
+PAGE_READWRITE = 0x04
 
 section '.text' code readable executable
 
@@ -87,6 +91,23 @@ start:
         jz      .fail
         mov     [old_bmp], rax
 
+        ; --- create and seed the simulation arena (fail closed) ----------
+        ; The seam wrappers pin MXCSR (decision 2) and land each core at the
+        ; 0-mod-32 kernel entry, exactly as the DLL exports do.
+        lea     rcx, [sim_params]
+        call    sim_layout              ; rax = arena bytes for these params
+        mov     [arena_bytes], rax
+        invoke  VirtualAlloc, 0, [arena_bytes], MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
+        test    rax, rax
+        jz      .fail                   ; page-aligned, so >= 64-aligned
+        mov     [arena], rax
+        mov     rcx, rax
+        mov     rdx, [arena_bytes]
+        lea     r8, [sim_params]
+        call    sim_init
+        test    eax, eax
+        jnz     .fail                   ; invalid params / short arena / no path
+
   .pump:
         invoke  PeekMessage, msg, 0, 0, 0, PM_REMOVE
         test    eax, eax
@@ -98,10 +119,14 @@ start:
         jmp     .pump
 
   .render:
-        mov     rdi, [pixels]           ; clear: the frame starts from a known
-        mov     eax, CLEAR_COLOR        ; state every time (no accumulation)
-        mov     ecx, FRAME_W*FRAME_H
-        rep     stosd
+        mov     rcx, [arena]            ; advance the simulation one step
+        mov     edx, 1
+        call    sim_step
+        mov     rcx, [arena]            ; raster the state into the DIB
+        mov     rdx, [pixels]           ; (plot_core clears then plots)
+        mov     r8d, FRAME_W
+        mov     r9d, FRAME_H
+        call    sim_plot
         ; BitBlt's BOOL is deliberately unchecked: the smoke gate covers
         ; process viability and setup, not mid-run device loss.
         invoke  BitBlt, [wnd_dc], 0, 0, FRAME_W, FRAME_H, [mem_dc], 0, 0, SRCCOPY
@@ -237,6 +262,38 @@ proc WindowProc wnd, wmsg, wp, lp
         ret
 endp
 
+; --- the simulation kernel, shared verbatim with the test DLL (decision 5) ---
+; Pure computation, no imports; the exe stays within kernel32/user32/gdi32.
+include 'platform/seam.inc'
+include 'kernel/rng.inc'
+include 'kernel/parse.inc'
+include 'kernel/layout.inc'
+include 'kernel/cpuid.inc'
+include 'kernel/init.inc'
+include 'kernel/state.inc'
+include 'kernel/step.inc'
+include 'kernel/plot.inc'
+
+; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
+; lands the kernel core at rsp = 0 mod 32 — the same contract the DLL exports
+; carry, so the exe drives the identical, gate-verified code paths.
+sim_layout:
+        seam_enter
+        call    layout_bytes_core
+        seam_leave
+sim_init:
+        seam_enter
+        call    init_core
+        seam_leave
+sim_step:
+        seam_enter
+        call    step_core
+        seam_leave
+sim_plot:
+        seam_enter
+        call    plot_core
+        seam_leave
+
 section '.data' data readable writeable
 
   _title       TCHAR 'swarm.asm', 0
@@ -258,10 +315,37 @@ section '.data' data readable writeable
   mem_dc      dq ?
   old_bmp     dq ?
   pixels      dq ?
+  arena       dq ?
+  arena_bytes dq ?
   win_w       dd ?
   win_h       dd ?
   frame_count dd 0
   smoke_mode  dd 0
+
+  ; Default preset: a SwarmParams (abi.inc SP_*), 304 bytes, Pack=4. A
+  ; four-species world with a varied attraction matrix; rmax/dt/friction
+  ; tuned for visible swarming at the scalar preview count.
+  align 16
+  sim_params:
+        dd 1                            ; version
+        dd SIM_N                        ; n
+        dd 4                            ; species_n
+        dq 0x9E3779B97F4A7C15           ; seed
+        dd 0.08                         ; rmax
+        dd 0.3                          ; beta
+        dd 0.02                         ; dt
+        dd 0.71                         ; friction
+        dd 10.0                         ; force_scale
+        dd 0                            ; force_path (auto)
+        dd 0                            ; flags
+        dd  0.5,-0.2, 0.3,-0.5, 0,0,0,0 ; matrix row 0 (8 wide, first 4 used)
+        dd -0.3, 0.6,-0.4, 0.2, 0,0,0,0 ; row 1
+        dd  0.2, 0.3,-0.6, 0.4, 0,0,0,0 ; row 2
+        dd -0.4, 0.1, 0.5, 0.3, 0,0,0,0 ; row 3
+        dd 0,0,0,0,0,0,0,0              ; rows 4-7 unused
+        dd 0,0,0,0,0,0,0,0
+        dd 0,0,0,0,0,0,0,0
+        dd 0,0,0,0,0,0,0,0
 
 section '.idata' import data readable writeable
 
