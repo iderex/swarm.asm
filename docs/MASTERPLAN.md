@@ -591,8 +591,9 @@ disclosed reference machine only).
 - CI on every PR: assemble, smoke-run, `dotnet test` (RNG exactness,
   reference equivalence, determinism goldens, conformance fitness tests),
   Prettier for docs.
-- The adversarial review gate on kernel/ABI/platform/parsing/build changes.
-- CodeRabbit on every PR — every finding dispositioned before merge.
+- The adversarial review gate (four refute-by-default lenses + simd-reviewer)
+  on kernel/ABI/platform/parsing/build changes — the review of record; every
+  finding gets a documented fix or a reasoned decline before merge.
 - `/bench` before and after every kernel change once the suite exists; the
   baseline lives in docs/BENCHMARKS.md.
 
