@@ -611,13 +611,17 @@ disclosed reference machine only).
 ≥ 60 fps". That is arithmetically infeasible: 50k² = 2.5e9 candidate pairs
 per frame at the divider-bound ~1.3-1.4 cycles/candidate is ~0.7 s/frame
 single-threaded — ~47× over budget; even the all-miss skip path leaves
-~0.35 s. This is machine physics, not code quality. M1 is therefore 8,192
-particles (budget: ~8.2e6 vector groups × ~5.4 cycles average with the skip
-path ≈ 9.8 ms + ~2 ms blit ≈ 12 ms, ~1.4× margin; the M1 acceptance preset
-pins rmax ≤ 0.05 because the margin is rmax-dependent). 50k remains available
-as a demo mode (correct, interactive, fps disclosed) and the 50k ≥ 60 fps
-line moves to M2, where the grid delivers it with two orders of magnitude to
-spare. Pulling the grid into M1 was rejected: it front-loads all of M2 into
+~0.35 s. This is machine physics, not code quality. M1's acceptance count is
+therefore 8,192 particles, though ≥ 60 fps at that count is not yet met on one
+thread: the early budget here projected ~12 ms/frame (~1.4× margin), but it
+assumed an all-miss skip the AVX2 pass never takes — the vector pass evaluates
+every lane and masks, with no early exit — so the projection was optimistic.
+The measured brute-force AVX2 pass is ~52.8 ms (~19 fps) at n = 8192 on the
+reference machine (docs/BENCHMARKS.md), ~3× short of 60 fps single-threaded;
+closing that gap is the M2 candidate-set reduction and/or the M3 worker pool.
+The M1 acceptance preset pins rmax ≤ 0.05 because the cost is rmax-dependent.
+The 50k ≥ 60 fps line moves to M2, where the grid delivers it with two orders
+of magnitude to spare. Pulling the grid into M1 was rejected: it front-loads all of M2 into
 the first shipping milestone. The brute kernel is not throwaway — it is the
 degenerate one-run case of the same loop and stays forever as the grid's
 same-binary cross-check oracle.

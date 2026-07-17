@@ -50,16 +50,21 @@ determinism contract — is recorded with rationale in the masterplan. Progress:
 | ---------------- | ------ | ------------------------------------------------------ |
 | M0 — Foundation  | done   | Design, pinned toolchain, CI, test harness             |
 | M1 — First light | active | Brute-force AVX2 kernel + live window, 8,192 particles |
-| M2 — Scale       | —      | Spatial grid; 50k and 500k particles at 60 fps         |
+| M2 — Scale       | active | Spatial grid; 50k and 500k particles at 60 fps         |
 | M3 — One million | —      | Multithreading + AVX-512 path, 1M particles at 60 fps  |
 | M4 — Launch      | —      | Benchmark suite vs. existing ports, presets, write-up  |
 
 What works today: the deterministic RNG, a fail-closed preset grammar, CPU
-feature detection, arena allocation and seeded init, the scalar force+integrate
-kernel (build / pass / step), the id-ordered state read-back, and the raster —
-each landing behind a green CI gate with oracle-checked tests. What is left for
-M1: the AVX2 gather kernel (the count and the frame budget), and live matrix
-editing.
+feature detection, arena allocation and seeded init, the scalar and AVX2
+force+integrate kernels (build / pass / step, auto-selected and cross-checked
+against the oracle), the id-ordered state read-back, the raster, and the live
+interactive window — each landing behind a green CI gate with oracle-checked
+tests. The M2 spatial grid (cell binning, stable counting sort, and the 3×3
+neighbourhood force that cuts the per-step work from n² to the in-range
+neighbours) is in the kernel and cross-checked against brute force; wiring it
+into the live window and recording the 50k / 500k measurement are the open M2
+steps. What is left before the 8,192 @ 60 fps headline is throughput — the M2
+grid's live mode and the M3 worker threads — plus a per-cell live matrix editor.
 
 (M1 was originally 50k; brute force at 50k is arithmetically impossible at
 60 fps — the reasoning lives in [docs/MASTERPLAN.md](docs/MASTERPLAN.md),
