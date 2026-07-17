@@ -329,8 +329,8 @@ void swarm_rng_fill(u64 seed, u64* out, u32 count);        // RNG oracle seam
 ```
 
 `SwarmParams` is a fixed sequential struct (version, n, species_n, seed,
-rmax, beta, dt, friction, force_scale, force_path 0=auto/1=AVX2/2=AVX-512,
-flags, matrix[8][8]) mirrored 1:1 in C# with Pack=4.
+rmax, beta, dt, friction, force_scale, force_path 0=auto/1=AVX2/2=AVX-512/
+3=scalar reference, flags, matrix[8][8]) mirrored 1:1 in C# with Pack=4.
 
 **Rationale:** `swarm_build` + `swarm_pass` give phase-granular oracle
 testing and — decisively — the **threading-decomposition seam**: `pass(0,n)`
@@ -390,8 +390,11 @@ and register file, instantiated twice (ymm/zmm). Detection once, at
 CPUID.7.0:EBX F+DQ+VL — and the resulting path id is stored **in the arena
 header** (no hidden global). `force_path` in params can pin a path;
 requesting AVX-512 on unsupported hardware fails closed at init. Nothing
-ever falls through mid-run; AVX2 absent → message box + exit (no scalar
-fallback exists). What AVX-512 buys: 16 lanes, k-register masking deletes
+ever falls through mid-run; AVX2 absent → message box + exit — there is no
+_automatic_ fallback to the scalar path on AVX2-absent hardware. A
+_selectable_ scalar path does exist (`force_path = 3`, the reference kernel
+the tests and the bench run against); it is a caller-pinned choice, never an
+automatic one. What AVX-512 buys: 16 lanes, k-register masking deletes
 the blend chain and the tail-mask LUT (`bzhi`+`kmovw`), one `vpermps zmm`
 covers 16 species (the only path to lifting the species-8 cap). Honest
 expectation: the loop is divider-bound and divide throughput per element is
