@@ -35,6 +35,19 @@ reproducible benchmark suite against existing CPU ports).
 | Size budget     | `swarm.exe` ≤ 64 KB (revisited only by a documented decision)        |
 | Fail-closed I/O | presets/config that do not validate are rejected, never half-applied |
 
+**Determinism scope amendment (accepted in principle 2026-07-17, design #38,
+maintainer Conditional-GO — see decisions 2 and 7):** "bit-exact per code path"
+carries a per-path caveat once a gated, not-yet-built `force_path = 4` exists
+in this document. Paths 1 (AVX2-exact), 2 (AVX-512-exact), and 3 (scalar) are
+bit-exact **cross-vendor and cross-CI-runner** — the guarantee this table has
+always stated. Path 4 (and a future path 5, AVX-512-fast), gated on
+implementation per decision 7, is bit-exact **same-microarchitecture only**,
+epsilon-equivalent cross-microarchitecture: for an approximation-bearing path,
+"code path" includes the CPU microarchitecture, not just the vendor and
+instruction set. This is a scope reduction recorded for one gated, caller-
+pinned, never-auto-default path — the guarantee for every auto-selectable path
+(1/2/3) is unchanged.
+
 ## Force model (pinned)
 
 World: unit torus [0,1)², wrap only in v1 (a `flags` field is reserved for a
@@ -188,9 +201,25 @@ exe main-thread init, and **every worker thread entry**. Kernel sources
 assume the pinned MXCSR as a documented contract and are forbidden from
 containing `ldmxcsr`/`stmxcsr` (source-scan test). Instruction whitelist:
 only IEEE-correctly-rounded operations — add/sub/mul/div/sqrt/FMA/round/min/
-max/compare/blend/permute/convert. `vrsqrtps`, `vrcpps`, all approximation
+max/compare/blend/permute/convert — governs every auto-selectable path (1
+AVX2, 2 AVX-512, 3 scalar). `vrsqrtps`, `vrcpps`, all other approximation
 instructions, x87, and `rdtsc`/`rdrand`/`rdseed` are banned in `src/kernel/`,
 enforced by a forbidden-mnemonic conformance scan.
+
+**Amendment (accepted in principle 2026-07-17, design #38, maintainer
+Conditional-GO — see decision 7 for the gating sequence):** the whitelist
+admits one gated, opt-in, **never-auto-default** exception: `force_path = 4`
+("AVX2-fast" — `vrsqrtps` + one Newton-Raphson refinement), selectable only by
+the caller, exactly like the existing scalar `force_path = 3`. Its
+determinism guarantee is explicitly narrower than paths 1-3 (see the
+Determinism hard constraint above). The IEEE whitelist continues to govern
+every auto-selectable path (1/2/3) unchanged. FMA stays on the whitelist — it
+is IEEE-correctly-rounded and cross-vendor bit-identical, not an
+approximation — and is introduced **only** inside path 4, so path 1's exact
+bits are untouched. **Implementation is gated, not shipped:** `force_path = 4`
+is authorized only if the exact-lever measurement (the divider microbench #59
+and the IEEE-exact software-pipelining contingency #61) fails to close the
+headline-preset gap; it does not exist in code today.
 
 **Rationale:** Per-particle sums have ≤ ~150 bounded terms; f32 error is
 orders below the oracle epsilon, and f64 accumulation halves lane throughput
@@ -198,14 +227,20 @@ for nothing. FTZ/DAZ: friction decays velocities into the denormal range and
 denormal assists cost ~100 cycles — a nondeterministic-**timing** hazard; the
 flush itself is a deterministic function under a pinned MXCSR. The whitelist
 is what makes "bit-exact per code path" also hold cross-vendor and across CI
-runners: approximation-instruction lookup tables differ between Intel and
-AMD. Worker-entry pinning is stated explicitly because it is the exact place
-the contract must be airtight. The harness scrambles MXCSR before a call and
-asserts an identical state hash plus a restored caller MXCSR.
+runners for the auto-selectable paths: approximation-instruction lookup
+tables differ between Intel and AMD. Path 4's narrower, same-microarch-only
+guarantee is the deliberate, documented, gated exception recorded above — the
+cross-vendor guarantee is preserved for every path that runs without a
+maintainer opt-in. Worker-entry pinning is stated explicitly because it is
+the exact place the contract must be airtight. The harness scrambles MXCSR
+before a call and asserts an identical state hash plus a restored caller
+MXCSR.
 
 **Rejected:** f64 accumulation (2× throughput cost, zero determinism
-benefit); rsqrt+Newton (~2 ms/frame cheaper but vendor-specific bits — the
-budget closes without it); leaving denormals enabled (timing pathology; the
+benefit); rsqrt+Newton **as an auto-default or as a replacement for the exact
+paths** (vendor-specific bits, and decision 7 pins the 1M budget to close on
+AVX2 + threads alone without it) — see the amendment above for the gated,
+caller-pinned exception; leaving denormals enabled (timing pathology; the
 .NET-side denormal mismatch is bounded ~1.2e-38 and invisible at epsilon,
 documented).
 
@@ -414,6 +449,29 @@ estimate is stated conservatively so the headline never depends on it.
 state); AVX-512 as a budget prerequisite (it is margin); requiring AVX-512BW
 (u32 species needs no byte ops).
 
+**Amendment (accepted in principle 2026-07-17, design #38, maintainer
+Conditional-GO):** a fourth path, `force_path = 4` ("AVX2-fast": `vrsqrtps` +
+one Newton-Raphson step + FMA, see decision 2), is accepted in principle.
+Dispatched exactly like paths 1-3 — the `.explicit` arm in `init.inc`, stored
+in `AH_PATH` the same way — it is strictly **caller-pinned**, exactly like the
+existing scalar `force_path = 3`: it is **never auto-selected**, and this
+decision's own budget claim ("the 1M budget must and does close on AVX2 +
+threads alone") is unaffected. Because path 4's bits depend on the CPU
+microarchitecture's rsqrt lookup table, not merely its vendor, there is no
+CPUID feature bit that keys a sound cross-machine golden — so path 4 carries
+**no stored cross-machine FP hash**, ever. Its per-path validation is
+same-host self-equality (bit-exact run-to-run, and across `pass(0,n)` vs
+`pass(0,k);pass(k,n)` splits) plus oracle-epsilon at the unchanged shared
+tolerance (pos < 1e-5, vel < 1e-4) — the same tiers every other path already
+uses, minus the stored FP golden this one path cannot soundly have.
+**Implementation is gated, not shipped:** it is authorized only if the
+divider microbench (#59) and the IEEE-exact software-pipelining contingency
+(#61, open-risk-1's fallback below) measurably fail to close the
+headline-preset gap. Until then, `force_path = 4` is a masterplan entry with
+no corresponding code — it must not be read as implemented. Promotion of path
+4 out of caller-pinned (an auto-default) is explicitly out of scope for this
+amendment and requires its own future maintainer decision.
+
 ### 8. RNG
 
 **Decision:** splitmix64, alone. One u64 state in the arena header; ~10
@@ -590,6 +648,17 @@ disclosed reference machine only).
    a net loss pre-Ice-Lake. Probe: M3 measures both paths per machine; the
    auto path default is chosen from measurement, and the bench table reports
    which path ran.
+8. **rsqrt-LUT cross-vendor divergence (gated path 4, accepted in principle,
+   not yet built — decisions 2 and 7).** If and when `force_path = 4` is
+   built, its rsqrt+NR approximation must stay under the shared oracle
+   epsilon (pos < 1e-5, vel < 1e-4) across every accepted preset, not only
+   the common cases. Probe: the accuracy corner sweep —
+   `force_scale in {1,10,100}`, `rmax in {min,0.05,0.25}`,
+   `dt in {min,0.02,0.1}`, `beta in {0.05,0.3,0.95}`, horizons
+   S in {1,4,8}, brute + grid, recording max drift per corner. Default to 2
+   NR unless 1 NR clears the whole matrix with ≥3× margin; a corner that
+   still fails is a fail-closed restriction of path 4's accepted preset
+   domain, never a widening of the shared epsilon.
 
 ## Quality gates (fixed)
 
