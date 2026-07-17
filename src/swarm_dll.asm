@@ -68,10 +68,7 @@ include 'kernel/plot.inc'
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-swarm_plot:
-        seam_enter
-        call    plot_core
-        seam_leave
+seam_wrap swarm_plot, plot_core
 
 ; build_core is exported directly as swarm_build: 1 arg, integer copy only, it
 ; saves rsi/rdi itself, so it is Win64-clean without the FP seam.
@@ -85,10 +82,7 @@ swarm_plot:
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-swarm_pass:
-        seam_enter
-        call    pass_core
-        seam_leave
+seam_wrap swarm_pass, pass_core
 
 ; ------------------------------------------------------------------
 ; swarm_step — seam wrapper over step_core (n_steps x build+pass).
@@ -99,10 +93,7 @@ swarm_pass:
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-swarm_step:
-        seam_enter
-        call    step_core
-        seam_leave
+seam_wrap swarm_step, step_core
 
 ; ------------------------------------------------------------------
 ; swarm_read_state — id-ordered copy-out of the current state.
@@ -161,10 +152,7 @@ swarm_read_state:
 ;             nonvolatile
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
-swarm_init:
-        seam_enter
-        call    init_core
-        seam_leave
+seam_wrap swarm_init, init_core
 
 ; ------------------------------------------------------------------
 ; swarm_parse_preset — seam wrapper over parse_preset_core.
@@ -177,10 +165,7 @@ swarm_init:
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return
 ;             (seam: nonvolatiles + MXCSR saved, vzeroupper before return)
 ; ------------------------------------------------------------------
-swarm_parse_preset:
-        seam_enter
-        call    parse_preset_core
-        seam_leave
+seam_wrap swarm_parse_preset, parse_preset_core
 
 ; ------------------------------------------------------------------
 ; swarm_layout_bytes — seam wrapper over layout_bytes_core.
@@ -193,10 +178,7 @@ swarm_parse_preset:
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam;
 ;             validation compares under the pin)
 ; ------------------------------------------------------------------
-swarm_layout_bytes:
-        seam_enter
-        call    layout_bytes_core
-        seam_leave
+seam_wrap swarm_layout_bytes, layout_bytes_core
 
 section '.edata' export data readable
 

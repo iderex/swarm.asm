@@ -245,6 +245,52 @@ public sealed class KernelSourceConformanceTests
         Assert.False(IsDataLabelFor("pt: POINT 1, 2"));
     }
 
+    /// <summary>
+    /// The `seam_wrap EXPORT, CORE` macro site is recognised as a routine keyed
+    /// on EXPORT, so the collapsed FP-seam export wrappers stay under the
+    /// <see cref="ShellRoutineContractHeaderPresent"/> contract-header gate (they
+    /// carry no bare `name:` label and are not `proc` definitions). Guards the
+    /// gate's reach: without this recognition the ten wrappers would go unchecked
+    /// and a deleted contract banner would pass silently. Also confirms the scan
+    /// actually reaches every wrapper name in the live shell sources.
+    /// </summary>
+    [Fact]
+    public void SeamWrapMacroSiteRecognisedAsRoutine()
+    {
+        // The macro invocation names a routine keyed on the EXPORT (group 1),
+        // whether at column 0 or indented; the LabelRegex/ProcRegex forms never
+        // match it (no colon, not `proc`).
+        var m = SeamWrapRegex.Match("seam_wrap sim_layout, layout_bytes_core");
+        Assert.True(m.Success);
+        Assert.Equal("sim_layout", m.Groups[1].Value);
+        Assert.Equal("swarm_pass", SeamWrapRegex.Match("        seam_wrap swarm_pass, pass_core").Groups[1].Value);
+        Assert.DoesNotMatch(LabelRegex, "seam_wrap sim_layout, layout_bytes_core");
+        Assert.DoesNotMatch(ProcRegex, "seam_wrap sim_layout, layout_bytes_core");
+
+        // The scan reaches every seam_wrap export in the live shell sources - the
+        // ten FP-seam wrappers must all be recognised, not silently skipped.
+        var recognised = new List<string>();
+        foreach (var path in ShellAsmFiles())
+        {
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var w = SeamWrapRegex.Match(line);
+                if (w.Success)
+                {
+                    recognised.Add(w.Groups[1].Value);
+                }
+            }
+        }
+
+        string[] expected =
+        [
+            "sim_layout", "sim_init", "sim_step", "sim_plot",           // swarm.asm
+            "swarm_plot", "swarm_pass", "swarm_step", "swarm_init",     // swarm_dll.asm
+            "swarm_parse_preset", "swarm_layout_bytes",
+        ];
+        Assert.Equal(expected.OrderBy(x => x), recognised.OrderBy(x => x));
+    }
+
     // Match a single source line as a column-0 label and run IsDataLabel on it,
     // exactly as the header scans do (LabelRegex group 2 = the inline body).
     private static bool IsDataLabelFor(string line)
@@ -265,6 +311,14 @@ public sealed class KernelSourceConformanceTests
     // recognises it as a routine too. Group 1 is the routine name.
     private static readonly Regex ProcRegex =
         new(@"^\s*proc\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.CultureInvariant);
+
+    // A `seam_wrap EXPORT, CORE` invocation (platform/seam.inc macro). The FP-seam
+    // export wrappers are written in this collapsed form rather than as a bare
+    // `name:` label with an explicit seam_enter/call/seam_leave body, so the shell
+    // scan recognises the macro site as a routine keyed on EXPORT - keeping every
+    // wrapper under the contract-header-presence gate. Group 1 is the export name.
+    private static readonly Regex SeamWrapRegex =
+        new(@"^\s*seam_wrap\s+([A-Za-z_][A-Za-z0-9_]*)\s*,", RegexOptions.CultureInvariant);
 
     // FASM data-definition / reservation directives. A column-0 label whose
     // first body token is one of these is a DATA table (kr_table, kr_matrix,
@@ -382,10 +436,11 @@ public sealed class KernelSourceConformanceTests
     /// contracts that nothing else header-checks.
     ///
     /// Heuristic: routines are column-0 `name:` labels (excluding data tables
-    /// like sim_params) plus `proc NAME` definitions (WindowProc). A thin seam
-    /// wrapper legitimately documents `in:` only, so the bar here is "at least
-    /// one contract field" (in:/out:/in/out:/clobbers:), not clobbers
-    /// specifically. Zero-false-positive on the current tree.
+    /// like sim_params), `proc NAME` definitions (WindowProc), and
+    /// `seam_wrap EXPORT, CORE` macro sites (the collapsed FP-seam export
+    /// wrappers). A thin seam wrapper legitimately documents `in:` only, so the
+    /// bar here is "at least one contract field" (in:/out:/in/out:/clobbers:),
+    /// not clobbers specifically. Zero-false-positive on the current tree.
     /// </summary>
     [Fact]
     public void ShellRoutineContractHeaderPresent()
@@ -408,15 +463,17 @@ public sealed class KernelSourceConformanceTests
 
                     routine = label.Groups[1].Value;
                 }
+                else if (ProcRegex.Match(lines[i]) is { Success: true } proc)
+                {
+                    routine = proc.Groups[1].Value; // proc NAME (WindowProc)
+                }
+                else if (SeamWrapRegex.Match(lines[i]) is { Success: true } wrap)
+                {
+                    routine = wrap.Groups[1].Value; // seam_wrap EXPORT, CORE
+                }
                 else
                 {
-                    var proc = ProcRegex.Match(lines[i]);
-                    if (!proc.Success)
-                    {
-                        continue;
-                    }
-
-                    routine = proc.Groups[1].Value;
+                    continue;
                 }
 
                 if (!HasHeaderField(lines, i, ContractField))
