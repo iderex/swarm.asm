@@ -54,6 +54,48 @@ include 'kernel/parse.inc'
 include 'kernel/layout.inc'
 include 'kernel/cpuid.inc'
 include 'kernel/init.inc'
+include 'kernel/state.inc'
+
+; ------------------------------------------------------------------
+; swarm_read_state — id-ordered copy-out of the current state.
+;   in:       rcx arena, rdx x*, r8 y*, r9 vx*, [stack] vy*, [stack] species*
+;             (each caller array holds n elements)
+;   out:      x[id]..species[id] = the OUT-bank values for i in 0..n-1
+;   ABI:      6 args, so NOT the FP seam (which assumes <=4 args); a plain
+;             Win64 prologue over an rbp frame. Pure memory copy, no FP, so
+;             no MXCSR pin is needed. rbx and the dst regs are callee-saved.
+; ------------------------------------------------------------------
+swarm_read_state:
+        push    rbp
+        mov     rbp, rsp
+        push    rbx
+        push    rsi
+        push    rdi
+        push    r12
+        push    r13
+        push    r14
+        mov     rbx, rcx                ; arena
+        mov     rsi, rdx                ; x dst
+        mov     rdi, r8                 ; y dst
+        mov     r12, r9                 ; vx dst
+        mov     r13, [rbp+48]           ; vy dst  (arg5: +8 ret, +32 shadow)
+        mov     r14, [rbp+56]           ; species dst (arg6)
+        ; copy_scatter is a private leaf that never homes its args, so no
+        ; 32-byte shadow space is reserved before these calls (safe by that
+        ; contract; the internal ABI, not the Win64 seam).
+        scatter_component 0, rsi
+        scatter_component 1, rdi
+        scatter_component 2, r12
+        scatter_component 3, r13
+        scatter_component 4, r14
+        pop     r14
+        pop     r13
+        pop     r12
+        pop     rdi
+        pop     rsi
+        pop     rbx
+        pop     rbp
+        ret
 
 ; cpu_paths_core is exported directly as swarm_cpu_paths: it takes no args,
 ; returns the path bits in eax, and preserves rbx itself (its only nonvolatile
@@ -103,7 +145,8 @@ section '.edata' export data readable
          swarm_parse_preset, 'swarm_parse_preset',\
          swarm_layout_bytes, 'swarm_layout_bytes',\
          cpu_paths_core,     'swarm_cpu_paths',\
-         swarm_init,         'swarm_init'
+         swarm_init,         'swarm_init',\
+         swarm_read_state,   'swarm_read_state'
 
 section '.reloc' fixups data readable discardable
 
