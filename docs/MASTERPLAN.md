@@ -277,10 +277,17 @@ per iteration; the species coefficient via one `vpermps` from the
 K-premultiplied matrix row; minimum image via `vroundps`; the pinned masking
 order from the force-model section; **every run's final vector applies a
 count-derived tail mask** (static sliding-window dword LUT); one
-`vmovmskps`/`jz` all-miss skip branch (contributes zero either way —
-determinism-safe; buys ~2× brute-force reach, ~never taken in grid mode). No
-Newton-3rd-law pairing. 1×-i blocking is the baseline; 2×-i j-load
-amortization is a measured upgrade, not a budget assumption.
+`vmovmskps`/`jz` all-miss skip branch (an all-miss group contributes zero
+**in value** either way; ~never taken in grid mode, buys ~2× brute-force
+reach). Value-level only: with FTZ/DAZ pinned (decision 2) an accumulator
+lane can legitimately hold -0.0 (a real in-range lane whose `q*dx` underflows
+negative flushes to -0.0), and the current no-skip path still runs the masked
+add for that group — a lane with `dx >= 0` adds +0.0, and
+`(-0.0) + (+0.0) = +0.0` collapses it to +0.0, whereas skipping the add
+preserves the -0.0. A bit-exact all-miss skip therefore needs explicit
+signed-zero handling (deferred, #33; correctness > perf). No Newton-3rd-law
+pairing. 1×-i blocking is the baseline; 2×-i j-load amortization is a
+measured upgrade, not a budget assumption.
 
 **Rationale:** A power-of-two g makes `int(x * g)` exact exponent arithmetic —
 the cross-implementation cell-border rounding hazard class is dead — without
