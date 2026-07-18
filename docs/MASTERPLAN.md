@@ -278,9 +278,14 @@ K-premultiplied matrix row; minimum image via `vroundps`; the pinned masking
 order from the force-model section; **every run's final vector applies a
 count-derived tail mask** (static sliding-window dword LUT); one
 `vmovmskps`/`jz` all-miss skip branch (contributes zero either way —
-determinism-safe; buys ~2× brute-force reach, ~never taken in grid mode). No
-Newton-3rd-law pairing. 1×-i blocking is the baseline; 2×-i j-load
-amortization is a measured upgrade, not a budget assumption.
+determinism-safe; buys ~2× brute-force reach, ~never taken in grid mode).
+Value-level only: with FTZ/DAZ pinned (decision 2), a real in-range lane's
+`q*dx` can underflow to -0.0, so a partial accumulator lane may legitimately
+hold -0.0; skipping an all-miss group that would otherwise add +0.0 flips
+-0.0 → +0.0, a bit-pattern change — a bit-exact all-miss skip needs explicit
+signed-zero handling (deferred, #33). No Newton-3rd-law pairing. 1×-i
+blocking is the baseline; 2×-i j-load amortization is a measured upgrade,
+not a budget assumption.
 
 **Rationale:** A power-of-two g makes `int(x * g)` exact exponent arithmetic —
 the cross-implementation cell-border rounding hazard class is dead — without
