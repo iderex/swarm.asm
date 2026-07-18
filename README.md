@@ -67,10 +67,11 @@ against the oracle), the id-ordered state read-back, the raster, and the live
 interactive window — each landing behind a green CI gate with oracle-checked
 tests. The M2 spatial grid (cell binning, stable counting sort, and the 3×3
 neighbourhood force that cuts the per-step work from n² to the in-range
-neighbours) is in the kernel and cross-checked against brute force; wiring it
-into the live window and recording the 50k / 500k measurement are the open M2
-steps. What is left before the 8,192 @ 60 fps headline is throughput — the M2
-grid's live mode and the M3 worker threads — plus a per-cell live matrix editor.
+neighbours) is in the kernel, cross-checked against brute force, and measured at
+50k / 500k ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)); wiring it into the live
+window is the open M2 step. What is left before the 8,192 @ 60 fps headline is
+throughput — the M2 grid's live mode and the M3 worker threads — plus a per-cell
+live matrix editor.
 
 (M1 was originally 50k; brute force at 50k is arithmetically impossible at
 60 fps — the reasoning lives in [docs/MASTERPLAN.md](docs/MASTERPLAN.md),
