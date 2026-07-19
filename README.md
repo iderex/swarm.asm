@@ -20,7 +20,7 @@ Every run with a different matrix is a different ecosystem.
 
 Dozens of Particle Life implementations exist — in C++, Java, JavaScript,
 Godot. This one is different in a single way: **the entire simulation kernel
-is hand-written x64 assembly** (AVX2 baseline, AVX-512 where the CPU has it),
+is hand-written x64 assembly** (AVX2 today; an AVX-512 path is planned for M3),
 and the whole program is one small Windows executable that imports nothing but
 `kernel32`, `user32`, and `gdi32`. No CRT, no runtime, no framework. The
 assembly is the product.
