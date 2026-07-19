@@ -280,12 +280,13 @@ count-derived tail mask** (static sliding-window dword LUT); one
 `vmovmskps`/`jz` all-miss skip branch (an all-miss group contributes zero
 **in value** either way; ~never taken in grid mode, buys ~2× brute-force
 reach). Value-level only: with FTZ/DAZ pinned (decision 2) an accumulator
-lane can legitimately hold -0.0 (a real in-range lane whose `q*dx` underflows
-negative flushes to -0.0), and the current no-skip path still runs the masked
-add for that group — a lane with `dx >= 0` adds +0.0, and
-`(-0.0) + (+0.0) = +0.0` collapses it to +0.0, whereas skipping the add
-preserves the -0.0. A bit-exact all-miss skip therefore needs explicit
-signed-zero handling (deferred, #33; correctness > perf). No Newton-3rd-law
+lane can legitimately hold -0.0 (a real in-range lane whose running
+partial-sum underflows negative and flushes to -0.0), and the current
+no-skip path still runs the masked add for that group — a lane with
+`dx >= 0` adds +0.0, and `(-0.0) + (+0.0) = +0.0` collapses it to +0.0,
+whereas skipping the add preserves the -0.0. A bit-exact all-miss skip
+therefore needs explicit signed-zero handling (deferred, #33; correctness >
+perf). No Newton-3rd-law
 pairing. 1×-i blocking is the baseline; 2×-i j-load amortization is a
 measured upgrade, not a budget assumption.
 
