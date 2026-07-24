@@ -105,7 +105,7 @@ pool_worker_thread:
 ;   in:       ecx = n; reads [pool_nthreads] = T
 ;   out:      pool_first[w], pool_last[w] for w in 0..T-1: disjoint, covering
 ;             [0,n) exactly, interior boundaries multiples of 16, last[T-1] = n
-;   clobbers: rax, rcx, rdx, r8, r9, r10, flags; preserves rbx
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; preserves rbx
 ;   MXCSR:    untouched (integer only)
 ; ------------------------------------------------------------------
 ; q = round_up_16(ceil(n/T)); first[w] = min(w*q, n); last[w] = min((w+1)*q, n).
