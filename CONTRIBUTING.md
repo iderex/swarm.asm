@@ -27,6 +27,29 @@ All commits are in English, authored as iderex, and carry no AI-attribution
 markers (no `Co-Authored-By`, no "generated with", no emoji, no session
 links).
 
+## Sign your work (DCO)
+
+This project uses the [Developer Certificate of Origin](DCO) (DCO 1.1) — a
+lightweight, standard way to certify that you wrote or otherwise have the
+right to submit the code you contribute, under the project's MIT license. It
+is not a copyright-assignment CLA; you keep your copyright.
+
+**Every commit must be signed off.** Add the sign-off automatically with `-s`:
+
+```powershell
+git commit -s -m "Add the grid neighbour sweep [#23]"
+```
+
+This appends a trailer matching your commit author identity:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+By adding it you certify the [DCO](DCO). Forgot to sign off? Add it
+retroactively across your branch with `git rebase --signoff <base>` and
+force-push.
+
 ## Code standard
 
 - **Assembly is readable.** Every routine carries a register contract
