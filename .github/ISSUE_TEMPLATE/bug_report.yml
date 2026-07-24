@@ -1,0 +1,98 @@
+name: Bug report
+description: The engine crashes, misbehaves, or does not match the documented kernel contract.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for the report. swarm.asm is a hand-written x64 kernel, so the
+        fields below (CPU, AVX level, particle count, seed, force path) are
+        what almost every triage ends up asking for - filling them in up
+        front usually saves a round-trip. **Never post secrets or personal
+        data.**
+  - type: input
+    id: cpu-model
+    attributes:
+      label: CPU model
+      description: e.g. AMD Ryzen 9 7950X, Intel Core i7-13700K.
+      placeholder: AMD Ryzen 9 7950X
+    validations:
+      required: true
+  - type: dropdown
+    id: avx-level
+    attributes:
+      label: Highest AVX level available on this CPU
+      options:
+        - AVX2
+        - AVX-512
+        - Neither (SSE only)
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: os-build
+    attributes:
+      label: OS and swarm.exe build
+      description: Windows version/build, and the swarm.exe build (commit hash or release tag) you ran.
+      placeholder: Windows 11 24H2 (26100.x), build from commit abc1234
+    validations:
+      required: true
+  - type: input
+    id: particle-count
+    attributes:
+      label: Particle count (n)
+      description: The `n` from your preset/config, or the default if unchanged.
+      placeholder: "8192"
+    validations:
+      required: true
+  - type: input
+    id: seed
+    attributes:
+      label: Seed
+      description: The RNG seed used, for a deterministic repro.
+      placeholder: "1"
+  - type: dropdown
+    id: force-path
+    attributes:
+      label: Force path
+      description: SwarmParams `force_path` (0=auto/1=AVX2/2=AVX-512/3=scalar reference).
+      options:
+        - auto (0)
+        - AVX2 (1)
+        - AVX-512 (2)
+        - scalar reference (3)
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: neighbor-mode
+    attributes:
+      label: Neighbor mode
+      description: Brute-force all-pairs, or the spatial grid pass.
+      options:
+        - Brute force
+        - Grid
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs. actual behavior
+      description: What you expected to happen, and what happened instead. Screenshots welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Repro steps
+      description: Preset/config used (paste inline, secrets redacted) and the exact steps to reproduce.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: build-commit
+    attributes:
+      label: Build command and commit
+      description: How you built (`build.ps1` output) and the exact commit/tag, if not already covered above.
+      render: text
