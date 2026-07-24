@@ -11,6 +11,45 @@ Issue-driven, gate-driven:
 3. The PR fills the template honestly and references the issue (`Closes #N`).
    PRs merge with a merge commit once CI and review are green.
 
+## Commit messages
+
+Short, imperative subject line (`Add the grid neighbour sweep`, not `feat:
+add the grid neighbour sweep`) — no conventional-commit prefix. Explain the
+_why_ in the body, not the subject.
+
+**Every commit subject ends with its issue reference in brackets** — `Add the
+grid neighbour sweep [#23]`, multiple issues as `[#23][#24]` — so the link
+survives `git blame`/`bisect`/`log`, which show only the subject. `Closes #N`
+still goes in the body when the commit resolves the issue; the bracket is
+additional, not a replacement.
+
+All commits are in English, authored as iderex, and carry no AI-attribution
+markers (no `Co-Authored-By`, no "generated with", no emoji, no session
+links).
+
+## Sign your work (DCO)
+
+This project uses the [Developer Certificate of Origin](DCO) (DCO 1.1) — a
+lightweight, standard way to certify that you wrote or otherwise have the
+right to submit the code you contribute, under the project's MIT license. It
+is not a copyright-assignment CLA; you keep your copyright.
+
+**Every commit must be signed off.** Add the sign-off automatically with `-s`:
+
+```powershell
+git commit -s -m "Add the grid neighbour sweep [#23]"
+```
+
+This appends a trailer matching your commit author identity:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+By adding it you certify the [DCO](DCO). Forgot to sign off? Add it
+retroactively across your branch with `git rebase --signoff <base>` and
+force-push.
+
 ## Code standard
 
 - **Assembly is readable.** Every routine carries a register contract
