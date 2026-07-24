@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an improvement or a new capability.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: >-
+        The underlying need, not only the proposed mechanism - e.g. "large
+        presets are tedious to hand-edit" rather than "add a preset GUI". If
+        it is about a specific milestone (M0-M4) or kernel path, name it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change (optional)
+      description: How you imagine it working, alternatives you considered, links to prior art.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Other approaches you weighed and why you didn't propose them instead.
+  - type: markdown
+    attributes:
+      value: >-
+        Note: this is a solo-maintained, correctness-and-performance-first
+        project. Requests are triaged against the milestone roadmap; kernel
+        or ABI changes go through the adversarial-review gate before merge.
