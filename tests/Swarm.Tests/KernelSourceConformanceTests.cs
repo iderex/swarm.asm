@@ -5,18 +5,19 @@ namespace Swarm.Tests;
 
 /// <summary>
 /// Source-level structural fitness functions for the simulation kernel
-/// (src/kernel/*.inc) and the two shells that host it (src/swarm.asm,
-/// src/swarm_dll.asm). Where <see cref="ConformanceTests"/> pins the shipped
-/// binary, these pin the SOURCE against masterplan decisions 2 and 4: the
-/// kernel is pure computation - no OS seam, imports, writable state, or
-/// MXCSR/AVX-state ownership, and only IEEE-correctly-rounded ops - and every
-/// routine (kernel and shell) carries a register-contract header. A PR that
-/// regresses either fails the build with the exact offending file, line, and
-/// token.
+/// (src/kernel/*.inc), the two shells that host it (src/swarm.asm,
+/// src/swarm_dll.asm), and the platform layer (src/platform/*.inc). Where
+/// <see cref="ConformanceTests"/> pins the shipped binary, these pin the
+/// SOURCE against masterplan decisions 2 and 4: the kernel is pure
+/// computation - no OS seam, imports, writable state, or MXCSR/AVX-state
+/// ownership, and only IEEE-correctly-rounded ops - and every routine
+/// (kernel, shell, and platform) carries a register-contract header. A PR
+/// that regresses any of it fails the build with the exact offending file,
+/// line, and token.
 ///
-/// The purity scan covers the kernel ONLY: the shells legitimately use
-/// `invoke`/imports (they ARE the OS seam), so they are exempt from purity but
-/// still header-checked.
+/// The purity scan covers the kernel ONLY: the shells and the platform layer
+/// legitimately use `invoke`/imports/MXCSR control (they ARE the OS seam), so
+/// they are exempt from purity but still header-checked.
 /// </summary>
 public sealed class KernelSourceConformanceTests
 {
@@ -55,6 +56,34 @@ public sealed class KernelSourceConformanceTests
         Array.Sort(files, StringComparer.Ordinal);
         Assert.NotEmpty(files); // a moved/renamed shell must fail loudly, not pass vacuously
         return files;
+    }
+
+    // The platform layer (src/platform/*.inc): worker-entry / pool-style
+    // routines and OS-seam frames (seam.inc) that back the shells. Like the
+    // shells, this is OS-seam code - exempt from the kernel purity scan, but
+    // still header-checked by ShellRoutineContractHeaderPresent (issue #88).
+    private static string[] PlatformIncFiles()
+    {
+        var dir = Path.Combine(Build.RepoRoot, "src", "platform");
+        var incFiles = Directory.GetFiles(dir, "*.inc");
+        Array.Sort(incFiles, StringComparer.Ordinal);
+        Assert.NotEmpty(incFiles); // a moved/renamed platform dir must fail loudly, not pass vacuously
+
+        // Fail-closed, mirroring the src/kernel guard above: the platform dir
+        // must hold ONLY .inc sources so the *.inc glob covers every platform
+        // file. Without this, a future src/platform/foo.asm would slip past
+        // the glob and go entirely unscanned - the same silent contract-header
+        // hole this method exists to close.
+        var stray = Directory.GetFiles(dir)
+            .Where(f => !f.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
+            .Select(Path.GetFileName)
+            .ToArray();
+        Assert.True(
+            stray.Length == 0,
+            "src/platform must contain only .inc sources so the *.inc scan covers every " +
+            "platform file; stray non-.inc file(s): " + string.Join(", ", stray));
+
+        return incFiles;
     }
 
     // FASM comments run from the first UNQUOTED ';' to end of line. Strip them
@@ -430,10 +459,13 @@ public sealed class KernelSourceConformanceTests
 
     /// <summary>
     /// Every routine in the shell sources (src/swarm.asm, src/swarm_dll.asm)
-    /// carries a register-contract header. The shells ARE the OS seam - they use
-    /// `invoke`/imports legitimately, so the purity scan does not cover them -
-    /// but the platform routines and DLL export bodies still carry register
-    /// contracts that nothing else header-checks.
+    /// and the platform layer (src/platform/*.inc) carries a register-contract
+    /// header. The shells ARE the OS seam - they use `invoke`/imports
+    /// legitimately, so the purity scan does not cover them - and the platform
+    /// layer is the same kind of OS-seam code (worker-entry / pool routines,
+    /// the seam.inc frame), so it is scanned the same way (issue #88). The
+    /// shell routines, DLL export bodies, and platform routines all carry
+    /// register contracts that nothing else header-checks.
     ///
     /// Heuristic: routines are column-0 `name:` labels (excluding data tables
     /// like sim_params), `proc NAME` definitions (WindowProc), and
@@ -446,7 +478,7 @@ public sealed class KernelSourceConformanceTests
     public void ShellRoutineContractHeaderPresent()
     {
         var offenders = new List<string>();
-        foreach (var path in ShellAsmFiles())
+        foreach (var path in ShellAsmFiles().Concat(PlatformIncFiles()))
         {
             var name = Path.GetFileName(path);
             var lines = File.ReadAllLines(path);
@@ -485,8 +517,9 @@ public sealed class KernelSourceConformanceTests
 
         Assert.True(
             offenders.Count == 0,
-            "every routine in the shell sources (src/*.asm) must carry a register-contract " +
-            "header (a `; ----` banner with an in:/out:/clobbers: field):\n  " +
+            "every routine in the shell sources (src/*.asm) and the platform layer " +
+            "(src/platform/*.inc) must carry a register-contract header (a `; ----` banner " +
+            "with an in:/out:/clobbers: field):\n  " +
             string.Join("\n  ", offenders));
     }
 
