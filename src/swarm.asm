@@ -119,6 +119,15 @@ start:
         test    eax, eax
         jnz     .fail                   ; invalid params / short arena / no path
 
+        ; --- create the M3 worker pool once (decision 6): main is worker 0,
+        ; T-1 threads are spawned parked and woken once per frame. 0 = auto
+        ; (physical cores). Fail-closed: a machine that cannot spawn the pool
+        ; exits rather than limping (eax < 1 on failure).
+        xor     ecx, ecx
+        call    pool_init
+        cmp     eax, 1
+        jl      .fail
+
         ; --- frame pacing: a high-resolution waitable timer to a QPC deadline
         ; (docs/MASTERPLAN.md, decision 11). One swarm_step per rendered frame,
         ; no accumulator, no catch-up: if the machine falls behind the animation
@@ -171,9 +180,9 @@ start:
   .step:
         cmp     dword [paused], 0
         jne     .plot                   ; paused: skip the step, keep drawing
-        mov     rcx, [arena]            ; advance the simulation one step
-        mov     edx, 1
-        call    sim_step
+        mov     rcx, [arena]            ; advance the simulation one step across
+        mov     edx, 1                  ;   the worker pool (build serial, pass
+        call    pool_step               ;   parallel) — bit-identical to sim_step
   .plot:
         mov     rcx, [arena]            ; raster the state into the DIB
         mov     rdx, [pixels]           ; (plot_core clears then plots)
@@ -196,6 +205,7 @@ start:
         jmp     .pump
 
   .quit:
+        call    pool_shutdown           ; join + close the worker threads
         invoke  CloseHandle, [htimer]
         invoke  SelectObject, [mem_dc], [old_bmp]
         invoke  DeleteDC, [mem_dc]
@@ -350,6 +360,13 @@ include 'kernel/state.inc'
 include 'kernel/step.inc'
 include 'kernel/grid.inc'
 include 'kernel/plot.inc'
+
+; The M3 worker pool (platform layer). Included after the kernel so pass_core /
+; build_core are defined; the workers cross the same thread-entry seam the
+; exports do (pool_pass) and call only the pure per-range pass. All its imports
+; are kernel32 (CreateThread / CreateEventW / event waits), so the exe stays
+; within kernel32/user32/gdi32.
+include 'platform/pool.inc'
 
 ; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
 ; lands the kernel core at rsp = 0 mod 32 — the same contract the DLL exports
@@ -570,11 +587,17 @@ section '.data' data readable writeable
         dd 0,0,0,0,0,0,0,0
         dd 0,0,0,0,0,0,0,0
 
+  ; The M3 worker pool's mutable platform state (handles, ranges, publish slot).
+  pool_storage
+
 section '.idata' import data readable writeable
 
   ; kernel32ex is a second KERNEL32.DLL descriptor: the bundled api/kernel32.inc
-  ; predates CreateWaitableTimerExW, so it is imported here. Same DLL name, so
-  ; the import allowlist (kernel32/user32/gdi32) is unaffected.
+  ; predates CreateWaitableTimerExW and GetLogicalProcessorInformation, so they
+  ; are imported here. Same DLL name, so the import allowlist
+  ; (kernel32/user32/gdi32) is unaffected. The pool's other primitives
+  ; (CreateThread, CreateEventW, SetEvent, the waits, CloseHandle, GetSystemInfo)
+  ; are already in the bundle.
   library kernel32,   'KERNEL32.DLL',\
           user32,     'USER32.DLL',\
           gdi32,      'GDI32.DLL',\
@@ -583,4 +606,5 @@ section '.idata' import data readable writeable
   include 'api\kernel32.inc'
   include 'api\user32.inc'
   include 'api\gdi32.inc'
-  import kernel32ex, CreateWaitableTimerExW,'CreateWaitableTimerExW'
+  import kernel32ex, CreateWaitableTimerExW,'CreateWaitableTimerExW',\
+                     GetLogicalProcessorInformation,'GetLogicalProcessorInformation'
