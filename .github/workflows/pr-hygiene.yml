@@ -1,0 +1,169 @@
+# Deterministic PR-hygiene checks (#105). A "Danger-style" gate implemented as a
+# plain workflow + one first-party github-script step -- no external Danger
+# runtime, bot, or third-party review service (directive 2: no external
+# review/quality services; the adversarial-review lens gate is the sole review
+# of record). It complements, never duplicates, the CI build/test/Prettier gate,
+# zizmor, and unicode-guard: those reason about the code; this reasons about the
+# *pull request* (its linkage, size, and changelog/test co-changes) -- a class
+# none of them cover.
+#
+# This workflow is deliberately ADVISORY: it is NOT wired into any required-
+# status-check ruleset, so it never blocks a merge. It surfaces a deterministic
+# hygiene signal; the maintainers keep the final say. The checks are tiered by
+# confidence so it does not red-flag reasonable PRs:
+#   - FAIL (high confidence, near-zero false-positive):
+#       * no issue reference anywhere -- the PR title carries a bracketed ref
+#         (`[#N]`), or the PR body carries Closes/Fixes/Resolves/Refs #N or a
+#         full issue URL. Skipped for bots.
+#   - WARN (soft convention, annotation only -- never fails):
+#       * src/** changed without a CHANGELOG.md co-change. CHANGELOG.md is
+#         being introduced by a concurrent PR (issue #95); this check reads
+#         only the PR's changed-file list via the API, so it degrades
+#         gracefully whether or not CHANGELOG.md exists yet on main.
+#       * the diff is large (>=400 changed lines, excluding the committed test
+#         lock file) -- advisory; a feature, doc migration, or bulk rename
+#         legitimately exceeds any cap, so size never reds.
+#       * src/**/*.asm or src/**/*.inc changed without a matching tests/**
+#         change -- a docs/comment-only edit or a pure refactor legitimately
+#         touches no test, so this stays a warning, never a failure.
+name: PR Hygiene
+
+on:
+  pull_request:
+    # edited: so editing the body/title to add the issue reference re-runs the check.
+    types: [opened, edited, synchronize, reopened]
+
+# Explicit deny-all at workflow level; the job below grants only what it reads.
+permissions: {}
+
+# Cancel a superseded run on the same PR; this is an advisory lint, not a publish,
+# so cancelling an obsolete run is safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Deterministic PR-hygiene checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # read the changed-file list via the pulls API
+      pull-requests: read # read the PR title, body, labels, and diff patches
+    steps:
+      # No checkout: every input is read from the PR metadata and the changed-file
+      # patches via the API, so there is no untrusted working tree to guard.
+      # Untrusted values (the PR title, body, labels, filenames) are only ever
+      # read from the JS `context`/API objects -- never interpolated into a shell
+      # `run:` -- so there is no template-injection surface (zizmor-clean by
+      # construction).
+      - name: Run PR-hygiene checks
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const warnings = [];
+            const failures = [];
+
+            // --- Changed files (paginated) -------------------------------------
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const changed = files.map((f) => f.filename);
+            const isBot = pr.user && pr.user.type === "Bot";
+
+            // --- Check 1: an issue reference is present --------------------------
+            // Directive: every change is issue-driven and linked (CLAUDE.md
+            // directive 3). Bots (Dependabot) open PRs with no issue, so they are
+            // exempt. The title carries a bracketed ref (`[#123]`, the house
+            // commit-subject convention), or the body carries a keyword form
+            // (`Closes #123`), a bare `#123`, or a full issue URL -- lenient on
+            // purpose so a legitimately-linked PR is never flagged on phrasing.
+            const title = pr.title || "";
+            const body = pr.body || "";
+            const titleHasBracketedRef = /\[#\d+\]/.test(title);
+            const bodyHasIssueRef =
+              /(^|[^\w])#\d+\b/.test(body) ||
+              /github\.com\/[^\/\s]+\/[^\/\s]+\/issues\/\d+/i.test(body);
+            if (!isBot && !titleHasBracketedRef && !bodyHasIssueRef) {
+              failures.push(
+                "No issue reference found. Add a bracketed ref to the PR title " +
+                  "(e.g. `[#123]`) or reference the issue in the body " +
+                  "(e.g. `Closes #123` or `Refs #123`).",
+              );
+            }
+
+            // --- Check 2: src/** changed without a CHANGELOG.md co-change (WARN) -
+            // The product (the engine under src/) changing without a CHANGELOG.md
+            // entry is worth a second look once CHANGELOG.md exists. Soft on
+            // purpose: a CI-only, docs-only, or test-only PR never touches src/, and
+            // CHANGELOG.md itself does not exist on main yet (issue #95) -- this
+            // check never assumes it does, it only reads the PR's own changed-file
+            // list, so it is silent until src/ is genuinely touched and stays
+            // accurate once CHANGELOG.md lands.
+            const srcChanged = changed.some((n) => n.startsWith("src/"));
+            if (srcChanged && !changed.includes("CHANGELOG.md")) {
+              warnings.push(
+                "src/** changed but CHANGELOG.md was not updated. Record the " +
+                  "user-facing change once CHANGELOG.md exists (issue #95).",
+              );
+            }
+
+            // --- Check 3: PR size (WARN only -- never fails) --------------------
+            // Rationale: reviewer effectiveness -- human and AI -- degrades on very
+            // large diffs, so a big PR is worth a closer look. But "large" is not
+            // "wrong": a feature, a doc migration, or a bulk rename legitimately
+            // exceeds any line cap, so size is ADVISORY ONLY and never reds a
+            // legitimate PR (no hard cap, no override label needed). The committed
+            // test lock file is excluded so the count reflects human-authored change.
+            const isGenerated = (name) => name.endsWith("packages.lock.json");
+            const churn = files
+              .filter((f) => !isGenerated(f.filename))
+              .reduce((sum, f) => sum + f.additions + f.deletions, 0);
+            const WARN_AT = 400;
+            if (churn >= WARN_AT) {
+              warnings.push(
+                `PR changes ${churn} lines (excluding the test lock file). ` +
+                  `Large PRs get a closer look -- reviews degrade past ~${WARN_AT} lines.`,
+              );
+            }
+
+            // --- Check 4: kernel/platform code changed without a matching test --
+            // (WARN) Soft convention: a behavioural change under src/ should move a
+            // test in tests/. Warn only -- a docs/comment-only edit, a pure
+            // refactor, or a register-contract-header fix legitimately touches no
+            // test, and hard-failing those would be exactly the false-positive
+            // friction an advisory gate must avoid.
+            const codeChanged = changed.some(
+              (n) => n.startsWith("src/") && (n.endsWith(".asm") || n.endsWith(".inc")),
+            );
+            const testsChanged = changed.some((n) => n.startsWith("tests/"));
+            if (codeChanged && !testsChanged) {
+              warnings.push(
+                "src/**/*.asm or src/**/*.inc changed but no tests/** change is in " +
+                  "this PR. Confirm the change is genuinely untestable (docs/refactor) " +
+                  "or add a test.",
+              );
+            }
+
+            // --- Report --------------------------------------------------------
+            for (const w of warnings) core.warning(w);
+            const summary = core.summary.addHeading("PR-hygiene checks", 2);
+            if (failures.length === 0 && warnings.length === 0) {
+              summary.addRaw("All deterministic PR-hygiene checks passed.");
+            } else {
+              if (failures.length) {
+                summary.addHeading("Failures", 3).addList(failures);
+              }
+              if (warnings.length) {
+                summary.addHeading("Warnings (non-blocking)", 3).addList(warnings);
+              }
+            }
+            await summary.write();
+
+            if (failures.length) {
+              core.setFailed(failures.join(" | "));
+            }
