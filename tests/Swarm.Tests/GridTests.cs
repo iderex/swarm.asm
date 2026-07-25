@@ -394,7 +394,7 @@ public sealed unsafe class GridTests
             uint n = p.N;
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(arena, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(arena, x, y, vx, vy, sp)); // id_out stayed a permutation
             result = new float[n * 4];
             for (uint i = 0; i < n; i++)
             {

@@ -21,6 +21,15 @@
 ;             flag across the loop and is saved/restored, so every nonvolatile
 ;             is preserved
 ;   note:     dword copy — bit-identical for f32 or u32 components.
+;   align:    entered with rsp = 8 (mod 16), NOT the Win64-conforming 0 — the
+;             sole caller (swarm_read_state) pushes rbp plus seven nonvolatiles
+;             before the call. Safe for this routine and checked to stay safe:
+;             it is a bare leaf that issues no onward call and touches no
+;             alignment-sensitive instruction (no movaps/movdqa, no xmm/ymm at
+;             all, no aligned spill); its only stack traffic is push/pop rbx.
+;             Anything added here that calls out or spills a vector register
+;             must realign first (sub rsp, 8), or the callee's own aligned
+;             spills fault.
 ;   bound:    id[0..n-1] should be a permutation of 0..n-1, and the scatter no
 ;             longer trusts it. dst is the CALLER's size-n array, reached across
 ;             the DLL seam, so an id >= n writes outside every bound the caller
@@ -74,6 +83,9 @@ copy_scatter:
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags (the volatiles) and r15d
 ;             as the stated accumulator; every other nonvolatile is preserved,
 ;             so the caller's dst/base registers survive the call
+;   align:    expands inline, so it inherits the caller's rsp and adds no frame
+;             of its own; see copy_scatter's align note for the 8 (mod 16) call
+;             site this reaches it with
 ; ------------------------------------------------------------------
 macro scatter_component idx, dst {
         mov     r10d, [rbx+AH_PADDED]   ; padded_n

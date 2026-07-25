@@ -77,7 +77,7 @@ public sealed unsafe class StepTests
             swarm_step(a, (uint)steps);
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(a, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(a, x, y, vx, vy, sp)); // id_out stayed a permutation
             for (uint i = 0; i < n; i++)
             {
                 Assert.True(TorusDist(x[i], oracle.X[i]) < 1e-5f, $"x[{i}] path {forcePath}");
@@ -123,7 +123,7 @@ public sealed unsafe class StepTests
 
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(a, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(a, x, y, vx, vy, sp)); // id_out stayed a permutation
 
             for (uint i = 0; i < n; i++)
             {
@@ -168,7 +168,7 @@ public sealed unsafe class StepTests
             uint n = p.N;
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(a, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(a, x, y, vx, vy, sp)); // id_out stayed a permutation
             rx = x; ry = y;
         });
         return (rx, ry);
@@ -235,7 +235,7 @@ public sealed unsafe class StepTests
             uint n = p.N;
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(a, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(a, x, y, vx, vy, sp)); // id_out stayed a permutation
             rx = x; ry = y;
         });
         return (rx, ry);
@@ -278,7 +278,7 @@ public sealed unsafe class StepTests
             uint n = p.N;
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(a, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(a, x, y, vx, vy, sp)); // id_out stayed a permutation
             // interleave all components so a mismatch anywhere fails the compare
             result = new float[n * 4];
             for (uint i = 0; i < n; i++)

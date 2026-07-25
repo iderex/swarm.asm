@@ -17,7 +17,15 @@ namespace Swarm.Tests;
 /// prevent. Two tests below hold that shut from both sides - the guard rejects
 /// an out-of-range id (issue #86), and id_out is proven to stay a permutation
 /// of [0, n) on every path, which is what keeps the guard unreachable.
+///
+/// In the pool collection because IdOutStaysAPermutation drives the worker pool
+/// on its threaded cases: pool_storage is process-global mutable state, so a
+/// pool_init/pool_shutdown here must never overlap ThreadingTests' own. The
+/// whole class joins the collection rather than the two cases, because xUnit
+/// serialises at collection granularity - and the suite runs in about two
+/// seconds, so the lost parallelism costs nothing worth measuring.
 /// </summary>
+[Collection(PoolCollection.Name)]
 public sealed unsafe class StateTests
 {
     [DllImport("swarm.kernel.dll")]
@@ -390,7 +398,11 @@ public sealed unsafe class StateTests
             // differing element would clear a bar this weak, so require that the
             // sort moved most of the population: with g*g cells over a uniform
             // random seeding, cell order and seed order are unrelated, and a real
-            // sort leaves only a handful of accidental fixed points.
+            // sort leaves only a handful of accidental fixed points. The bar
+            // applies from n = 100 up because a single particle cannot permute -
+            // the n = 1 grid case is here for the degenerate path, not for
+            // reordering, and widening the check to it would fail correctly-
+            // behaving code.
             if (flags == FlagGrid && n >= 100)
             {
                 uint fixedPoints = 0;

@@ -142,9 +142,15 @@ swarm_read_state:
         mov     r13, [rbp+48]           ; vy dst  (arg5: +8 ret, +32 shadow)
         mov     r14, [rbp+56]           ; species dst (arg6)
         xor     r15d, r15d              ; no component has rejected an id yet
-        ; copy_scatter is a private leaf that never homes its args, so no
-        ; 32-byte shadow space is reserved before these calls (safe by that
-        ; contract; the internal ABI, not the Win64 seam).
+        ; Two deliberate deviations from the Win64 call sequence, both safe
+        ; only because copy_scatter is a private leaf (the internal ABI, not
+        ; the Win64 seam). First: it never homes its args, so no 32-byte shadow
+        ; space is reserved. Second: rbp plus seven nonvolatiles are pushed
+        ; above, so these calls land with rsp = 8 (mod 16) rather than 0 — it
+        ; issues no onward call and touches no vector or aligned-spill
+        ; instruction, so nothing depends on the 16-byte guarantee. Both are
+        ; restated in copy_scatter's own contract header; a callee that ever
+        ; needs either must realign and reserve here.
         scatter_component 0, rsi
         scatter_component 1, rdi
         scatter_component 2, r12
