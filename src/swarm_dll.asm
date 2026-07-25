@@ -108,7 +108,7 @@ seam_wrap swarm_step, step_core
 ;   in:       rcx arena, rdx x*, r8 y*, r9 vx*, [stack] vy*, [stack] species*
 ;             (each caller array holds n elements)
 ;   out:      x[id]..species[id] = the OUT-bank values for i in 0..n-1
-;   clobbers: volatile GPRs (rax, rcx, rdx, r8-r10) and flags; no XMM/FP; every
+;   clobbers: volatile GPRs (rax, rcx, rdx, r8-r11) and flags; no XMM/FP; every
 ;             nonvolatile it touches (rbx, rsi, rdi, r12-r14) is saved/restored
 ;   MXCSR:    untouched (pure integer copy, no FP)
 ;   ABI:      6 args, so NOT the FP seam (which assumes <=4 args); a plain

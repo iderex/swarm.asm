@@ -15,21 +15,33 @@
 ; copy_scatter — dst[id[i]] = src[i] for i in 0..n-1 (one dword component).
 ;   in:       rcx = src (dword array), rdx = dst (dword array), r8 = id array
 ;             (u32), r9d = n
-;   out:      dst scattered by id
-;   clobbers: rax, rcx, rdx, r8, r9, r10, flags
+;   out:      dst scattered by id; an id outside [0, n) stores nothing
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags
 ;   note:     dword copy — bit-identical for f32 or u32 components.
-;   precond:  id[0..n-1] MUST be a permutation of 0..n-1 (every id < n), so the
-;             scatter stays inside the caller's size-n array. init guarantees
-;             it (id[i]=i); the M2 sort must preserve it — a leaked pad/stale
-;             slot with id >= n would be a silent OOB write into the caller.
+;   precond:  id[0..n-1] should be a permutation of 0..n-1, but the scatter no
+;             longer trusts it. dst is the CALLER's size-n array, reached across
+;             the DLL seam, so an id >= n writes outside every bound the caller
+;             can assert; the pads at id[n..padded_n) really do hold ids >= n
+;             (init seeds them n, n+1, ...), so one off-by-one in a future sort
+;             is all that separates the identity case from caller heap
+;             corruption. The store is therefore bound-checked and skipped when
+;             the check fails — fail closed, never perform an unproven write.
+;             The compare is unsigned, so a stale or negative-as-unsigned word
+;             is rejected by the same branch. The invariant itself stays pinned
+;             by the harness (StateTests.IdOutStaysAPermutation), which is what
+;             keeps this branch unreachable on every path the kernel produces.
 ; ------------------------------------------------------------------
 copy_scatter:
         test    r9d, r9d
         jz      .done
+        mov     r11d, r9d               ; n stays live as the id bound
   .loop:
         mov     eax, [r8]               ; oid = id[i]
+        cmp     eax, r11d
+        jae     .skip                   ; oid >= n: reject, never store past dst
         mov     r10d, [rcx]             ; value = src[i]
         mov     [rdx+rax*4], r10d       ; dst[oid] = value
+  .skip:
         add     rcx, 4
         add     r8, 4
         dec     r9d
