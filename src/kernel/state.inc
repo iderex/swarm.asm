@@ -15,32 +15,83 @@
 ; copy_scatter — dst[id[i]] = src[i] for i in 0..n-1 (one dword component).
 ;   in:       rcx = src (dword array), rdx = dst (dword array), r8 = id array
 ;             (u32), r9d = n
-;   out:      dst scattered by id
-;   clobbers: rax, rcx, rdx, r8, r9, r10, flags
+;   out:      dst scattered by id; eax = 0 when every id was in range, 1 when
+;             at least one was rejected and its store dropped
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; rbx carries the rejection
+;             flag across the loop and is saved/restored, so every nonvolatile
+;             is preserved
 ;   note:     dword copy — bit-identical for f32 or u32 components.
-;   precond:  id[0..n-1] MUST be a permutation of 0..n-1 (every id < n), so the
-;             scatter stays inside the caller's size-n array. init guarantees
-;             it (id[i]=i); the M2 sort must preserve it — a leaked pad/stale
-;             slot with id >= n would be a silent OOB write into the caller.
+;   align:    called with rsp = 8 (mod 16) rather than the Win64-conforming 0,
+;             so entered with rsp = 0 (mod 16) rather than 8 — the sole caller
+;             (swarm_read_state) pushes rbp plus seven nonvolatiles before the
+;             call. That caller also reserves no 32-byte shadow space, which is
+;             safe because this routine never homes its register args. Both
+;             deviations hold only because this is a bare leaf: it issues no
+;             onward call and touches no alignment-sensitive instruction (no
+;             movaps/movdqa, no xmm/ymm at all, no aligned spill), and its only
+;             stack traffic is push/pop rbx, which leaves rsp = 8 (mod 16)
+;             through the loop. Anything added here that calls out or spills a
+;             vector register must realign first (sub rsp, 8) — from 8 (mod 16)
+;             a call site needs 0 — and needs the caller to reserve shadow
+;             space, or the callee's own homing stores and aligned spills land
+;             on the caller's frame.
+;   bound:    id[0..n-1] should be a permutation of 0..n-1, and the scatter no
+;             longer trusts it. dst is the CALLER's size-n array, reached across
+;             the DLL seam, so an id >= n writes outside every bound the caller
+;             can assert; the pads at id[n..padded_n) really do hold ids >= n
+;             (init seeds them n, n+1, ...), so one off-by-one in a future sort
+;             is all that separates the identity case from caller heap
+;             corruption. The store is therefore bound-checked and dropped when
+;             the check fails — fail closed, never perform an unproven write —
+;             and the drop is REPORTED, so a caller is never handed a silently
+;             partial copy-out. The compare is unsigned, so a stale or
+;             negative-as-unsigned word is rejected by the same branch. The
+;             invariant itself stays pinned by the harness
+;             (StateTests.IdOutStaysAPermutation), which is what keeps this
+;             branch unreachable on every path the kernel produces.
 ; ------------------------------------------------------------------
 copy_scatter:
+        xor     eax, eax                ; nothing rejected (also the n = 0 answer)
         test    r9d, r9d
         jz      .done
+        push    rbx
+        xor     ebx, ebx
+        mov     r11d, r9d               ; n stays live as the id bound
   .loop:
         mov     eax, [r8]               ; oid = id[i]
+        cmp     eax, r11d
+        jae     .reject                 ; oid >= n: never store past dst
         mov     r10d, [rcx]             ; value = src[i]
         mov     [rdx+rax*4], r10d       ; dst[oid] = value
+  .next:
         add     rcx, 4
         add     r8, 4
         dec     r9d
         jnz     .loop
+        mov     eax, ebx                ; report whether any id was rejected
+        pop     rbx
   .done:
         ret
+  .reject:                              ; out of line: a valid permutation never
+        mov     ebx, 1                  ; comes here, so the copy path keeps its
+        jmp     .next                   ; straight-line shape
 
+; ------------------------------------------------------------------
 ; scatter_component — copy OUT array `idx` (0 x, 1 y, 2 vx, 3 vy, 4 species)
-; to the destination pointer `dst`, scattered by id_out. Assumes rbx = arena
-; and clobbers only volatiles (copy_scatter preserves the nonvolatile dst/base
-; registers). id_out is component 5 (AR_ID_OUT).
+; to the destination pointer `dst`, scattered by id_out (component 5,
+; AR_ID_OUT). A macro, so the source-scan contract check that covers column-0
+; labels never reaches it — the fields below are the contract regardless.
+;   in:       rbx = arena, r15d = the rejection flag accumulated so far,
+;             `dst` = the operand holding the destination array pointer
+;   out:      dst[id_out[i]] = OUT[idx][i] for every in-range id;
+;             r15d |= 1 if copy_scatter rejected an id in this component
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags (the volatiles) and r15d
+;             as the stated accumulator; every other nonvolatile is preserved,
+;             so the caller's dst/base registers survive the call
+;   align:    expands inline, so it inherits the caller's rsp and adds no frame
+;             of its own; see copy_scatter's align note for the 8 (mod 16) call
+;             site this reaches it with
+; ------------------------------------------------------------------
 macro scatter_component idx, dst {
         mov     r10d, [rbx+AH_PADDED]   ; padded_n
         shl     r10d, 2                 ; stride = padded_n * 4
@@ -54,4 +105,5 @@ macro scatter_component idx, dst {
         mov     rdx, dst
         mov     r9d, [rbx+AH_PARAMS+SP_N]
         call    copy_scatter
+        or      r15d, eax               ; a rejection anywhere fails the call
 }

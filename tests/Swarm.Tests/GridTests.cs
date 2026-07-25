@@ -37,7 +37,7 @@ public sealed unsafe class GridTests
     private static extern void swarm_pass(void* arena, uint first, uint last);
 
     [DllImport("swarm.kernel.dll")]
-    private static extern void swarm_read_state(
+    private static extern int swarm_read_state(
         void* arena, float[] x, float[] y, float[] vx, float[] vy, uint[] species);
 
     private const float Beta = 0.3f, Dt = 0.02f, Friction = 0.71f, ForceScale = 10f;
@@ -71,7 +71,9 @@ public sealed unsafe class GridTests
             uint n = p.N;
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(a, x, y, vx, vy, sp);
+            // 0 = every id_out entry was in range, so each grid case also pins
+            // that the counting sort kept id a permutation (issue #86).
+            Assert.Equal(0, swarm_read_state(a, x, y, vx, vy, sp));
             rx = x; ry = y; rvx = vx; rvy = vy;
         }
         finally { NativeMemory.AlignedFree(a); }
@@ -392,7 +394,7 @@ public sealed unsafe class GridTests
             uint n = p.N;
             var x = new float[n]; var y = new float[n];
             var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-            swarm_read_state(arena, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(arena, x, y, vx, vy, sp)); // id_out stayed a permutation
             result = new float[n * 4];
             for (uint i = 0; i < n; i++)
             {
