@@ -21,15 +21,20 @@
 ;             flag across the loop and is saved/restored, so every nonvolatile
 ;             is preserved
 ;   note:     dword copy — bit-identical for f32 or u32 components.
-;   align:    entered with rsp = 8 (mod 16), NOT the Win64-conforming 0 — the
-;             sole caller (swarm_read_state) pushes rbp plus seven nonvolatiles
-;             before the call. Safe for this routine and checked to stay safe:
-;             it is a bare leaf that issues no onward call and touches no
-;             alignment-sensitive instruction (no movaps/movdqa, no xmm/ymm at
-;             all, no aligned spill); its only stack traffic is push/pop rbx.
-;             Anything added here that calls out or spills a vector register
-;             must realign first (sub rsp, 8), or the callee's own aligned
-;             spills fault.
+;   align:    called with rsp = 8 (mod 16) rather than the Win64-conforming 0,
+;             so entered with rsp = 0 (mod 16) rather than 8 — the sole caller
+;             (swarm_read_state) pushes rbp plus seven nonvolatiles before the
+;             call. That caller also reserves no 32-byte shadow space, which is
+;             safe because this routine never homes its register args. Both
+;             deviations hold only because this is a bare leaf: it issues no
+;             onward call and touches no alignment-sensitive instruction (no
+;             movaps/movdqa, no xmm/ymm at all, no aligned spill), and its only
+;             stack traffic is push/pop rbx, which leaves rsp = 8 (mod 16)
+;             through the loop. Anything added here that calls out or spills a
+;             vector register must realign first (sub rsp, 8) — from 8 (mod 16)
+;             a call site needs 0 — and needs the caller to reserve shadow
+;             space, or the callee's own homing stores and aligned spills land
+;             on the caller's frame.
 ;   bound:    id[0..n-1] should be a permutation of 0..n-1, and the scatter no
 ;             longer trusts it. dst is the CALLER's size-n array, reached across
 ;             the DLL seam, so an id >= n writes outside every bound the caller
