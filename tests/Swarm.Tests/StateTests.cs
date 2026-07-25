@@ -23,15 +23,17 @@ public sealed unsafe class StateTests
     [DllImport("swarm.kernel.dll")]
     private static extern int swarm_init(void* arena, ulong arenaBytes, in SwarmParams p);
 
+    // i32, per the export table in docs/MASTERPLAN.md: 0 = every id was in
+    // range, 1 = at least one was rejected and its store dropped.
     [DllImport("swarm.kernel.dll")]
-    private static extern void swarm_read_state(
+    private static extern int swarm_read_state(
         void* arena, float[] x, float[] y, float[] vx, float[] vy, uint[] species);
 
     // The same export, declared over raw destination pointers. copy_scatter is a
     // dword copy, so typing the four f32 components as u32 is bit-exact and lets
     // the guard tests compare exact canary words instead of float payloads.
     [DllImport("swarm.kernel.dll", EntryPoint = "swarm_read_state")]
-    private static extern void swarm_read_state_raw(
+    private static extern int swarm_read_state_raw(
         void* arena, uint* x, uint* y, uint* vx, uint* vy, uint* species);
 
     [DllImport("swarm.kernel.dll")]
@@ -39,6 +41,17 @@ public sealed unsafe class StateTests
 
     [DllImport("swarm.kernel.dll")]
     private static extern void swarm_step(void* arena, uint nSteps);
+
+    // The M3 pool seam, so the permutation invariant is checked on the threaded
+    // frame too and not only on the serial one.
+    [DllImport("swarm.kernel.dll")]
+    private static extern int swarm_pool_init(int requested);
+
+    [DllImport("swarm.kernel.dll")]
+    private static extern void swarm_step_mt(void* arena, uint nSteps);
+
+    [DllImport("swarm.kernel.dll")]
+    private static extern void swarm_pool_shutdown();
 
     private const uint FlagGrid = 1;
 
@@ -80,7 +93,7 @@ public sealed unsafe class StateTests
             var vx = new float[n];
             var vy = new float[n];
             var sp = new uint[n];
-            swarm_read_state(arena, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(arena, x, y, vx, vy, sp)); // every id in range
 
             var rng = new TestOracle.SplitMix64(seed);
             for (uint i = 0; i < n; i++)
@@ -142,7 +155,9 @@ public sealed unsafe class StateTests
             var vx = new float[n];
             var vy = new float[n];
             var sp = new uint[n];
-            swarm_read_state(arena, x, y, vx, vy, sp);
+            // A reverse permutation is entirely in range, so the status is 0:
+            // the bound rejects nothing legal, however far it moves an element.
+            Assert.Equal(0, swarm_read_state(arena, x, y, vx, vy, sp));
 
             // slot i's markers land at caller index id[i] = n-1-i, each in its
             // own destination array.
@@ -182,7 +197,7 @@ public sealed unsafe class StateTests
             var sp = new uint[n + 1];
             x[n] = y[n] = vx[n] = vy[n] = float.NaN;
             sp[n] = 0xDEADBEEF;
-            swarm_read_state(arena, x, y, vx, vy, sp);
+            Assert.Equal(0, swarm_read_state(arena, x, y, vx, vy, sp));
 
             Assert.True(float.IsNaN(x[n]), "read_state wrote past n (x)");
             Assert.True(float.IsNaN(y[n]));
@@ -261,9 +276,21 @@ public sealed unsafe class StateTests
             uint padded = PaddedN(n);
             var outBase = (uint*)((byte*)arena + ArenaHeaderBytes);
             uint* idOut = outBase + IdOutComponent * padded;
+
+            // The geometry above is white-box knowledge duplicated from abi.inc.
+            // If a layout change ever moved id_out, this poke would land in some
+            // other component and the whole test would pass vacuously - it would
+            // no longer be driving an out-of-range id at all. Prove the pointer
+            // really is id_out first: init seeds it with the identity over
+            // [0, n) and continues n, n+1, ... through the pads.
             for (uint i = 0; i < n; i++)
             {
-                idOut[i] = i;
+                Assert.True(idOut[i] == i, $"id_out is not where abi.inc says it is: id_out[{i}] = {idOut[i]}");
+            }
+            Assert.Equal(n, idOut[n]); // the pad slot, which is exactly an out-of-range id
+
+            for (uint i = 0; i < n; i++)
+            {
                 for (uint c = 0; c < components; c++)
                 {
                     outBase[c * padded + i] = Marker(c, i);
@@ -271,7 +298,11 @@ public sealed unsafe class StateTests
             }
             idOut[0] = badId;
 
-            swarm_read_state_raw(arena, dst, dst + span, dst + 2 * span, dst + 3 * span, dst + 4 * span);
+            int status = swarm_read_state_raw(arena, dst, dst + span, dst + 2 * span, dst + 3 * span, dst + 4 * span);
+
+            // Reported, not silent: a dropped store the caller cannot see is the
+            // same failure mode this guard exists to remove, moved up a layer.
+            Assert.True(status != 0, $"read_state returned {status}: id {badId} was rejected but never reported");
 
             for (uint c = 0; c < components; c++)
             {
@@ -310,15 +341,25 @@ public sealed unsafe class StateTests
     /// unreachable rather than merely survivable, so a future sort that leaks a
     /// pad slot (init fills id[n..padded_n) with n, n+1, ...) or drops a real one
     /// fails here instead of degrading read_state's output (issue #86).
+    ///
+    /// The threaded frame is swept too (threads &gt; 0): the pool partitions
+    /// [0, n) across workers that each copy id IN -&gt; OUT for their own range, so
+    /// a partition bug that dropped or duplicated a range would break the
+    /// permutation. That path is not otherwise covered here - the existing
+    /// threading gate builds serially in both arms, so it compares the parallel
+    /// pass against the serial pass rather than exercising the MT id path
+    /// independently.
     /// </summary>
     [Theory]
-    [InlineData(1u, 1u, 7UL, 0u)]
-    [InlineData(100u, 3u, 0xABCDUL, 0u)]
-    [InlineData(4096u, 8u, 0xDEADBEEFUL, 0u)]
-    [InlineData(1u, 1u, 7UL, FlagGrid)]
-    [InlineData(100u, 3u, 0xABCDUL, FlagGrid)]
-    [InlineData(4096u, 8u, 0xDEADBEEFUL, FlagGrid)]
-    public void IdOutStaysAPermutation(uint n, uint species, ulong seed, uint flags)
+    [InlineData(1u, 1u, 7UL, 0u, 0)]
+    [InlineData(100u, 3u, 0xABCDUL, 0u, 0)]
+    [InlineData(4096u, 8u, 0xDEADBEEFUL, 0u, 0)]
+    [InlineData(1u, 1u, 7UL, FlagGrid, 0)]
+    [InlineData(100u, 3u, 0xABCDUL, FlagGrid, 0)]
+    [InlineData(4096u, 8u, 0xDEADBEEFUL, FlagGrid, 0)]
+    [InlineData(4096u, 8u, 0xDEADBEEFUL, 0u, 4)]        // threaded, brute
+    [InlineData(4096u, 8u, 0xDEADBEEFUL, FlagGrid, 4)]  // threaded, grid sort
+    public void IdOutStaysAPermutation(uint n, uint species, ulong seed, uint flags, int threads)
     {
         _ = NativeKernel.Handle;
         var p = Params(n, species, seed, flags: flags);
@@ -330,21 +371,37 @@ public sealed unsafe class StateTests
             uint* idOut = (uint*)((byte*)arena + ArenaHeaderBytes) + IdOutComponent * PaddedN(n);
 
             AssertPermutation(idOut, n, "after init");
-            swarm_step(arena, 4);
+            if (threads > 0)
+            {
+                Assert.True(swarm_pool_init(threads) > 0);
+                try { swarm_step_mt(arena, 4); }
+                finally { swarm_pool_shutdown(); }
+            }
+            else
+            {
+                swarm_step(arena, 4);
+            }
+
             AssertPermutation(idOut, n, "after 4 steps");
 
             // Non-vacuity: on the grid path the counting sort must actually have
             // reordered the population, or this case would pin the invariant
-            // against an untouched identity and pass for the wrong reason.
-            if (flags == FlagGrid && n > 1)
+            // against an untouched identity and pass for the wrong reason. One
+            // differing element would clear a bar this weak, so require that the
+            // sort moved most of the population: with g*g cells over a uniform
+            // random seeding, cell order and seed order are unrelated, and a real
+            // sort leaves only a handful of accidental fixed points.
+            if (flags == FlagGrid && n >= 100)
             {
-                bool identity = true;
-                for (uint i = 0; i < n && identity; i++)
+                uint fixedPoints = 0;
+                for (uint i = 0; i < n; i++)
                 {
-                    identity = idOut[i] == i;
+                    if (idOut[i] == i) fixedPoints++;
                 }
 
-                Assert.False(identity, "the grid sort left id_out as the identity - this case never exercised a real permutation");
+                Assert.True(
+                    fixedPoints < n / 2,
+                    $"the grid sort left {fixedPoints} of {n} ids in place - this case barely exercised a permutation");
             }
         }
         finally

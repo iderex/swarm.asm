@@ -15,44 +15,66 @@
 ; copy_scatter — dst[id[i]] = src[i] for i in 0..n-1 (one dword component).
 ;   in:       rcx = src (dword array), rdx = dst (dword array), r8 = id array
 ;             (u32), r9d = n
-;   out:      dst scattered by id; an id outside [0, n) stores nothing
-;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags
+;   out:      dst scattered by id; eax = 0 when every id was in range, 1 when
+;             at least one was rejected and its store dropped
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; rbx carries the rejection
+;             flag across the loop and is saved/restored, so every nonvolatile
+;             is preserved
 ;   note:     dword copy — bit-identical for f32 or u32 components.
-;   precond:  id[0..n-1] should be a permutation of 0..n-1, but the scatter no
+;   bound:    id[0..n-1] should be a permutation of 0..n-1, and the scatter no
 ;             longer trusts it. dst is the CALLER's size-n array, reached across
 ;             the DLL seam, so an id >= n writes outside every bound the caller
 ;             can assert; the pads at id[n..padded_n) really do hold ids >= n
 ;             (init seeds them n, n+1, ...), so one off-by-one in a future sort
 ;             is all that separates the identity case from caller heap
-;             corruption. The store is therefore bound-checked and skipped when
-;             the check fails — fail closed, never perform an unproven write.
-;             The compare is unsigned, so a stale or negative-as-unsigned word
-;             is rejected by the same branch. The invariant itself stays pinned
-;             by the harness (StateTests.IdOutStaysAPermutation), which is what
-;             keeps this branch unreachable on every path the kernel produces.
+;             corruption. The store is therefore bound-checked and dropped when
+;             the check fails — fail closed, never perform an unproven write —
+;             and the drop is REPORTED, so a caller is never handed a silently
+;             partial copy-out. The compare is unsigned, so a stale or
+;             negative-as-unsigned word is rejected by the same branch. The
+;             invariant itself stays pinned by the harness
+;             (StateTests.IdOutStaysAPermutation), which is what keeps this
+;             branch unreachable on every path the kernel produces.
 ; ------------------------------------------------------------------
 copy_scatter:
+        xor     eax, eax                ; nothing rejected (also the n = 0 answer)
         test    r9d, r9d
         jz      .done
+        push    rbx
+        xor     ebx, ebx
         mov     r11d, r9d               ; n stays live as the id bound
   .loop:
         mov     eax, [r8]               ; oid = id[i]
         cmp     eax, r11d
-        jae     .skip                   ; oid >= n: reject, never store past dst
+        jae     .reject                 ; oid >= n: never store past dst
         mov     r10d, [rcx]             ; value = src[i]
         mov     [rdx+rax*4], r10d       ; dst[oid] = value
-  .skip:
+  .next:
         add     rcx, 4
         add     r8, 4
         dec     r9d
         jnz     .loop
+        mov     eax, ebx                ; report whether any id was rejected
+        pop     rbx
   .done:
         ret
+  .reject:                              ; out of line: a valid permutation never
+        mov     ebx, 1                  ; comes here, so the copy path keeps its
+        jmp     .next                   ; straight-line shape
 
+; ------------------------------------------------------------------
 ; scatter_component — copy OUT array `idx` (0 x, 1 y, 2 vx, 3 vy, 4 species)
-; to the destination pointer `dst`, scattered by id_out. Assumes rbx = arena
-; and clobbers only volatiles (copy_scatter preserves the nonvolatile dst/base
-; registers). id_out is component 5 (AR_ID_OUT).
+; to the destination pointer `dst`, scattered by id_out (component 5,
+; AR_ID_OUT). A macro, so the source-scan contract check that covers column-0
+; labels never reaches it — the fields below are the contract regardless.
+;   in:       rbx = arena, r15d = the rejection flag accumulated so far,
+;             `dst` = the operand holding the destination array pointer
+;   out:      dst[id_out[i]] = OUT[idx][i] for every in-range id;
+;             r15d |= 1 if copy_scatter rejected an id in this component
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags (the volatiles) and r15d
+;             as the stated accumulator; every other nonvolatile is preserved,
+;             so the caller's dst/base registers survive the call
+; ------------------------------------------------------------------
 macro scatter_component idx, dst {
         mov     r10d, [rbx+AH_PADDED]   ; padded_n
         shl     r10d, 2                 ; stride = padded_n * 4
@@ -66,4 +88,5 @@ macro scatter_component idx, dst {
         mov     rdx, dst
         mov     r9d, [rbx+AH_PARAMS+SP_N]
         call    copy_scatter
+        or      r15d, eax               ; a rejection anywhere fails the call
 }

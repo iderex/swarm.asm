@@ -44,7 +44,7 @@ public sealed unsafe class ThreadingTests
     private static extern void swarm_pass(void* arena, uint first, uint last);
 
     [DllImport("swarm.kernel.dll")]
-    private static extern void swarm_read_state(
+    private static extern int swarm_read_state(
         void* arena, float[] x, float[] y, float[] vx, float[] vy, uint[] species);
 
     // The M3 pool seam. swarm_pool_init(0) auto-detects physical cores and
@@ -88,7 +88,10 @@ public sealed unsafe class ThreadingTests
     {
         var x = new float[n]; var y = new float[n];
         var vx = new float[n]; var vy = new float[n]; var sp = new uint[n];
-        swarm_read_state(arena, x, y, vx, vy, sp);
+        // 0 = every id_out entry was in range. Asserting it here makes each
+        // threaded arm of the gate a permutation check on the pool's partition
+        // as well as a bit-exactness check (issue #86).
+        Assert.Equal(0, swarm_read_state(arena, x, y, vx, vy, sp));
         var flat = new float[n * 4];
         for (uint i = 0; i < n; i++)
         {

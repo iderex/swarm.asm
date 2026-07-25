@@ -28,7 +28,7 @@ public sealed unsafe class StepTests
     private static extern void swarm_step(void* arena, uint nSteps);
 
     [DllImport("swarm.kernel.dll")]
-    private static extern void swarm_read_state(
+    private static extern int swarm_read_state(
         void* arena, float[] x, float[] y, float[] vx, float[] vy, uint[] species);
 
     private const float RMax = 0.2f, Beta = 0.3f, Dt = 0.02f, Friction = 0.71f, ForceScale = 10f;

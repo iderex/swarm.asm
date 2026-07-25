@@ -107,13 +107,23 @@ seam_wrap swarm_step, step_core
 ; swarm_read_state — id-ordered copy-out of the current state.
 ;   in:       rcx arena, rdx x*, r8 y*, r9 vx*, [stack] vy*, [stack] species*
 ;             (each caller array holds n elements)
-;   out:      x[id]..species[id] = the OUT-bank values for i in 0..n-1
+;   out:      eax = 0 and x[id]..species[id] = the OUT-bank values for i in
+;             0..n-1. eax = 1 means at least one id_out[i] was outside [0, n):
+;             that element's store was DROPPED rather than written past the end
+;             of the caller's array (copy_scatter's bound, issue #86), so the
+;             matching caller slot keeps its prior contents and the copy-out as
+;             a whole must be treated as untrustworthy. No path in the kernel
+;             produces such an id today; the status exists so a future one
+;             cannot degrade to a silently partial copy.
 ;   clobbers: volatile GPRs (rax, rcx, rdx, r8-r11) and flags; no XMM/FP; every
-;             nonvolatile it touches (rbx, rsi, rdi, r12-r14) is saved/restored
+;             nonvolatile it touches (rbx, rsi, rdi, r12-r15) is saved/restored
 ;   MXCSR:    untouched (pure integer copy, no FP)
 ;   ABI:      6 args, so NOT the FP seam (which assumes <=4 args); a plain
 ;             Win64 prologue over an rbp frame. Pure memory copy, no FP, so
 ;             no MXCSR pin is needed. rbx and the dst regs are callee-saved.
+;             The i32 return matches docs/MASTERPLAN.md's export table; every
+;             stack-arg offset below is rbp-relative, so the extra push does
+;             not move arg5/arg6.
 ; ------------------------------------------------------------------
 swarm_read_state:
         push    rbp
@@ -124,12 +134,14 @@ swarm_read_state:
         push    r12
         push    r13
         push    r14
+        push    r15
         mov     rbx, rcx                ; arena
         mov     rsi, rdx                ; x dst
         mov     rdi, r8                 ; y dst
         mov     r12, r9                 ; vx dst
         mov     r13, [rbp+48]           ; vy dst  (arg5: +8 ret, +32 shadow)
         mov     r14, [rbp+56]           ; species dst (arg6)
+        xor     r15d, r15d              ; no component has rejected an id yet
         ; copy_scatter is a private leaf that never homes its args, so no
         ; 32-byte shadow space is reserved before these calls (safe by that
         ; contract; the internal ABI, not the Win64 seam).
@@ -138,6 +150,8 @@ swarm_read_state:
         scatter_component 2, r12
         scatter_component 3, r13
         scatter_component 4, r14
+        mov     eax, r15d               ; 0 = every id was in range
+        pop     r15
         pop     r14
         pop     r13
         pop     r12
