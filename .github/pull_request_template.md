@@ -26,6 +26,10 @@
       never partially applied.
 - [ ] An adversarial review (`/security-review`) was run for changes to kernel
       math, the ABI, the platform boundary, parsing, build/tools, or workflows.
+- [ ] Review record: per lens, its verdict and its findings, with **CONFIRMED
+      __ / PLAUSIBLE __** counts as raised (a finding is CONFIRMED only if a
+      reproduction was produced). Every finding of either kind carries a
+      disposition — FIX, a reasoned DECLINE, or DEFER as its own issue.
 
 ## Performance checklist
 
