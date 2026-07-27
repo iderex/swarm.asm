@@ -1,5 +1,12 @@
 # Dependabot — weekly maintenance for the GitHub Actions SHA pins and the
 # test-harness NuGet packages.
+#
+# Each ecosystem sets a `cooldown` so Dependabot waits after a release is
+# published before proposing the bump. A compromised release (a supply-chain
+# worm publishing a malicious version) is usually caught and yanked within days,
+# so the delay lets the advisory feeds catch up before the bump lands. nuget
+# additionally holds majors longer (widest blast radius); the github-actions
+# ecosystem has no semver-tier cooldown keys, so it uses a single default hold.
 
 version: 2
 
@@ -12,6 +19,10 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    # github-actions has no semver-tier cooldown keys (they apply only to
+    # true-semver ecosystems like nuget); a single default hold covers it.
+    cooldown:
+      default-days: 7
     groups:
       actions-minor-and-patch:
         update-types:
@@ -26,6 +37,9 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     groups:
       nuget-minor-and-patch:
         update-types:
