@@ -1,5 +1,27 @@
 # Dependabot — weekly maintenance for the GitHub Actions SHA pins and the
 # test-harness NuGet packages.
+#
+# `cooldown` delays a bump until N days after the release was PUBLISHED, so the
+# advisory feeds get time to catch a compromised release before it lands here.
+#
+# WHAT IT DOES NOT COVER, stated because the setting reads stronger than it is:
+# the attack that actually hits `github-actions` is a re-pointed tag — `v4`
+# moved to a new commit — and the underlying release keeps its original
+# publication date, so a publication-date hold adds no delay to it whatsoever.
+# What defends against that here is SHA-pinning plus zizmor's ref-version
+# audit, not this file. Cooldown is worth having for the case it does cover, a
+# freshly published malicious version, and is not the control for the other.
+#
+# The delay compounds with the weekly schedule: a release published just after
+# a Monday tick waits out the hold and then waits for the next tick, so real
+# latency is up to a week beyond the nominal figure.
+#
+# The `semver-*-days` tier keys are supported per ecosystem by a table GitHub
+# publishes and does not explain: nuget is in it, github-actions is not. Read
+# that table before adding a tier key to a new ecosystem — it does not follow
+# from whether the ecosystem's versions are semver (Helm and Terraform are
+# semver and unsupported; Pip and Maven are not and are supported). So nuget
+# carries a longer hold on majors and github-actions carries a single hold.
 
 version: 2
 
@@ -12,6 +34,8 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       actions-minor-and-patch:
         update-types:
@@ -26,6 +50,10 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    # Majors wait twice as long: widest blast radius.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     groups:
       nuget-minor-and-patch:
         update-types:
