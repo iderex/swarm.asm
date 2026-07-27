@@ -1,12 +1,20 @@
 # Dependabot — weekly maintenance for the GitHub Actions SHA pins and the
 # test-harness NuGet packages.
 #
-# Each ecosystem sets a `cooldown` so Dependabot waits after a release is
-# published before proposing the bump. A compromised release (a supply-chain
-# worm publishing a malicious version) is usually caught and yanked within days,
-# so the delay lets the advisory feeds catch up before the bump lands. nuget
-# additionally holds majors longer (widest blast radius); the github-actions
-# ecosystem has no semver-tier cooldown keys, so it uses a single default hold.
+# `cooldown` delays a bump until N days after the release was PUBLISHED, so the
+# advisory feeds get time to catch a compromised release before it lands here.
+#
+# WHAT IT DOES NOT COVER, stated because the setting reads stronger than it is:
+# the attack that actually hits `github-actions` is a re-pointed tag — `v4`
+# moved to a new commit — and the underlying release keeps its original
+# publication date, so a publication-date hold adds no delay to it whatsoever.
+# What defends against that here is SHA-pinning plus zizmor's ref-version
+# audit, not this file. Cooldown is worth having for the case it does cover, a
+# freshly published malicious version, and is not the control for the other.
+#
+# The delay compounds with the weekly schedule: a release published just after
+# a Monday tick waits out the hold and then waits for the next tick, so real
+# latency is up to a week beyond the nominal figure.
 
 version: 2
 
@@ -19,8 +27,7 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
-    # github-actions has no semver-tier cooldown keys (they apply only to
-    # true-semver ecosystems like nuget); a single default hold covers it.
+    # No semver tier here: those keys apply only to true-semver ecosystems.
     cooldown:
       default-days: 7
     groups:
@@ -37,6 +44,8 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    # Majors wait twice as long: widest blast radius, and the tier keys work
+    # here because nuget versions are true semver.
     cooldown:
       default-days: 7
       semver-major-days: 14
