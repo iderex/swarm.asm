@@ -15,6 +15,13 @@
 # The delay compounds with the weekly schedule: a release published just after
 # a Monday tick waits out the hold and then waits for the next tick, so real
 # latency is up to a week beyond the nominal figure.
+#
+# The `semver-*-days` tier keys are supported per ecosystem by a table GitHub
+# publishes and does not explain: nuget is in it, github-actions is not. Read
+# that table before adding a tier key to a new ecosystem — it does not follow
+# from whether the ecosystem's versions are semver (Helm and Terraform are
+# semver and unsupported; Pip and Maven are not and are supported). So nuget
+# carries a longer hold on majors and github-actions carries a single hold.
 
 version: 2
 
@@ -27,7 +34,6 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
-    # No semver tier here: those keys apply only to true-semver ecosystems.
     cooldown:
       default-days: 7
     groups:
@@ -44,8 +50,7 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
-    # Majors wait twice as long: widest blast radius, and the tier keys work
-    # here because nuget versions are true semver.
+    # Majors wait twice as long: widest blast radius.
     cooldown:
       default-days: 7
       semver-major-days: 14
