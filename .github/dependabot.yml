@@ -50,10 +50,13 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
-    # Majors wait twice as long: widest blast radius.
+    # Majors wait twice as long: widest blast radius. Patches wait less than
+    # the default, because a patch is the bump most worth taking promptly and
+    # three days still lets the advisory feeds catch a poisoned release.
     cooldown:
       default-days: 7
       semver-major-days: 14
+      semver-patch-days: 3
     groups:
       nuget-minor-and-patch:
         update-types:
