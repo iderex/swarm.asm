@@ -98,6 +98,42 @@ jobs:
           # Pinned true so the major bump changes no behaviour here.
           prune-cache: true
 
+      - name: Measure the audit without a token (#189, temporary)
+        # TEMPORARY, removed again by the next commit on this branch. Issue #189
+        # asks whether the two uvx steps need the token, and asks for the answer
+        # to come from running the audits rather than from reading the docs.
+        # This is that run: the gate command verbatim, at -v so the audit
+        # registry reports what it loaded, with no token anywhere in the
+        # environment. Findings go to stdout, the log to stderr, and neither is
+        # allowed to fail the job.
+        run: |
+          uvx --no-build "zizmor@${ZIZMOR_VERSION}" -v --strict-collection --min-severity=low --format=plain . > no-token.findings 2> no-token.log && rc=0 || rc=$?
+          echo "zizmor exit status without a token: $rc"
+
+      - name: Measure the same audit with the token (#189, temporary)
+        # TEMPORARY, as above. Identical command, identical flags, the only
+        # difference being the env block below.
+        run: |
+          uvx --no-build "zizmor@${ZIZMOR_VERSION}" -v --strict-collection --min-severity=low --format=plain . > with-token.findings 2> with-token.log && rc=0 || rc=$?
+          echo "zizmor exit status with the token: $rc"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare the two runs (#189, temporary)
+        # TEMPORARY, as above. Two questions: are the findings identical, and is
+        # the same set of audits running. The second is the one the issue warns
+        # about, because a token-less run that audits less while reporting the
+        # same findings looks like a clean hardening and is not one.
+        run: |
+          echo "== findings: no token vs token =="
+          if diff no-token.findings with-token.findings; then echo "IDENTICAL FINDINGS"; else echo "FINDINGS DIFFER"; fi
+          echo "== audits skipped without the token =="
+          grep -c "skipping" no-token.log || true
+          grep "skipping" no-token.log || true
+          echo "== audits skipped with the token =="
+          grep -c "skipping" with-token.log || true
+          grep "skipping" with-token.log || true
+
       - name: Audit workflows (SARIF for code scanning)
         # --no-build: install zizmor from its prebuilt wheel only, never executing a
         # source-dist build script. --strict-collection: fail closed if any workflow
