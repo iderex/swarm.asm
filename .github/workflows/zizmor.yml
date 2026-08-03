@@ -23,6 +23,9 @@
 # gate before merge. Keep actions SHA-pinned, keep checkout on
 # persist-credentials:false, grant write permissions per job (never
 # workflow-level), and never restore a cache in a job that publishes a release.
+# A step that runs zizmor keeps its GitHub API token: five of zizmor's audits
+# are online-only and skip without one, reporting the same findings while
+# checking less (#189, measured on the runner, detail at the env block below).
 # An action that installs a third-party tool must pin the TOOL as well as the
 # action: zizmor 1.26.1's unpinned-tools audit knows exactly two such actions
 # (aquasecurity/setup-trivy, 1password/load-secrets-action) and setup-uv is not
@@ -105,6 +108,18 @@ jobs:
         # --format=sarif always exits 0; the gate step below is what fails the build.
         run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=sarif . > results.sarif
         env:
+          # Measured on the runner rather than read from the docs (#189).
+          # Without a token this command still exits 0 and reports exactly the
+          # same findings, so dropping the token looks like a free hardening.
+          # At -v the registry says what it actually did: "skipping
+          # impostor-commit / ref-confusion / known-vulnerable-actions /
+          # stale-action-refs / ref-version-mismatch: can't run without a
+          # GitHub API token", five audits gone, and the count of skips goes
+          # from 5 to 0 when the token is put back. All five reason about the
+          # `uses:` refs this repo pins by SHA, which is most of what this gate
+          # exists to check, so a token-less run is a gate that passes by
+          # auditing less. The token stays, on the two steps that run zizmor and
+          # on nothing else in this job. ZizmorTokenTests refuses its removal.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload SARIF
@@ -124,4 +139,8 @@ jobs:
       - name: Fail on actionable findings
         run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=plain .
         env:
+          # Same measurement, same reason as the step above (#189): without it
+          # five audits skip and this gate passes on less. This is the step that
+          # fails the build, so it is the one where a silently narrowed audit
+          # costs the most.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
