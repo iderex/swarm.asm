@@ -23,6 +23,11 @@
 # gate before merge. Keep actions SHA-pinned, keep checkout on
 # persist-credentials:false, grant write permissions per job (never
 # workflow-level), and never restore a cache in a job that publishes a release.
+# An action that installs a third-party tool must pin the TOOL as well as the
+# action: zizmor 1.26.1's unpinned-tools audit knows exactly two such actions
+# (aquasecurity/setup-trivy, 1password/load-secrets-action) and setup-uv is not
+# one of them, so that half is refused by PinnedToolInstallTests in the .NET
+# harness rather than by this gate.
 name: Workflow Security Analysis
 
 on:
@@ -60,6 +65,32 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          # SHA-pinning the action above pins the action, not the executable it
+          # downloads. This input defaults to the empty string, documented as
+          # "Defaults to the version in pyproject.toml or 'latest'", and this
+          # repo has no pyproject.toml, uv.toml, uv.lock, .tool-versions or
+          # requirements.txt. Without this line uv therefore resolves to latest
+          # on every run, inside the job that holds security-events: write.
+          # Everything else here is pinned: actions by commit SHA, FASM by
+          # SHA-256, zizmor and prettier by exact version. Delete this line and
+          # that hole reopens.
+          #
+          # 0.11.30 is a choice, not whatever latest was the day this was
+          # written: it is the newest uv that the setup-uv commit pinned above
+          # carries a built-in checksum for, so the checksum below is a second
+          # opinion on a download the action would verify anyway rather than the
+          # only one. Moving past 0.11.30 gives that fallback up, so bump the two
+          # lines together and check the action's table first.
+          version: "0.11.30"
+          # A version pin on its own still trusts whatever the mirror serves, so
+          # name the bytes as well. A supplied checksum replaces the action's
+          # built-in table entry instead of adding to it, so a stale value here
+          # fails the job closed. This is the SHA-256 of
+          # uv-x86_64-unknown-linux-gnu.tar.gz for 0.11.30, the only artifact
+          # this ubuntu-latest job downloads: if runs-on ever moves to another
+          # platform the hash stops matching and the job fails, which is the
+          # wanted behaviour and not a bug.
+          checksum: "04bc7d180d6138bf6dc08387acf507a823f397a98fea55da36b0ccc7fbce3b68"
           # v9 flipped this default to false. Measured on this repo: the saved
           # cache went from 79,677 bytes to 8,631,282 and started retaining the
           # pinned zizmor wheel, on a key the action documents as never
