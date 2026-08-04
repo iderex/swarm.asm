@@ -373,9 +373,11 @@ pp_fetch_content_line:
 ; pp_line_must_end - assert the current line slice has no further token.
 ;   in:       implicit: the caller's frame at rsp+8 (parse_preset_core only)
 ;   out:      eax = 0 line exhausted, eax = 1 surplus token present
-;   clobbers: rax, rcx, rdx, r8, r9, flags - the set pp_next_token clobbers,
-;             plus the lea into rcx. r10/r11 are untouched, which the key and
-;             matrix loops rely on to hold the live token slice across this call.
+;   clobbers: rax, rcx, rdx, r8, r9, flags. r10 and r11 are untouched: the
+;             body is the lea into rcx, the call, and the setnz, and
+;             pp_next_token writes neither. No caller depends on that today -
+;             each one reloads the slice - so it is a measurement rather than
+;             a promise anything consumes.
 ;   MXCSR:    untouched
 ; ------------------------------------------------------------------
 pp_line_must_end:
