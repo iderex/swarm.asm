@@ -268,6 +268,11 @@ parse_preset_core:
                                         ;   than the plain [rsp+PPF_LINE_P] the
                                         ;   unpushed sites use. Add or remove a
                                         ;   push around this and the +8 moves.
+                                        ;   The identical +8 inside pp_fetch_
+                                        ;   content_line and pp_line_must_end is
+                                        ;   a different quantity, their own
+                                        ;   return address; those are reached
+                                        ;   with no push live.
         call    pp_next_token
         pop     r9
         mov     r10, rax
@@ -754,8 +759,9 @@ pp_validate_params:
         jne     .bad
         test    dword [r10+SP_FLAGS], not SP_FLAGS_VALID   ; any reserved bit set?
         jnz     .bad
-        cmp     dword [r10+SP_FORCE_PATH], 3
-        ja      .bad                    ; 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
+        cmp     dword [r10+SP_FORCE_PATH], PATH_SCALAR
+        ja      .bad                    ; unsigned: the accept range is the
+                                        ;   PATH_* set and nothing else
         xor     r11d, r11d              ; table row index
   .row:
         imul    eax, r11d, KR_SIZE

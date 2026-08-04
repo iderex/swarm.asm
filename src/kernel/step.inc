@@ -274,17 +274,18 @@ build_core:
 
 ; ------------------------------------------------------------------
 ; pass_core - dispatch the fused force+integrate to the code path the arena
-; resolved at init (AH_PATH: 1 AVX2, 2 AVX-512, 3 scalar). Tail jumps preserve
-; the seam's 0-mod-32 entry, which the SIMD path relies on for aligned spills.
+; resolved at init (AH_PATH holds a PATH_* id, never PATH_AUTO). Tail jumps
+; preserve the seam's 0-mod-32 entry, which the SIMD path relies on for
+; aligned spills.
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   clobbers: everything pass_scalar/pass_avx2 do (kernel tier; the seam saved it)
 ; ------------------------------------------------------------------
 pass_core:
         mov     eax, [rcx+AH_PATH]
-        cmp     eax, 3
+        cmp     eax, PATH_SCALAR
         je      pass_scalar
-        jmp     pass_avx2               ; 1 AVX2, and 2 AVX-512 until a real
-                                        ;   512 path exists
+        jmp     pass_avx2               ; PATH_AVX2, and PATH_AVX512 until a
+                                        ;   real 512 path exists
 
 ; ------------------------------------------------------------------
 ; pass_scalar - the reference path: fused force+integrate for i in
