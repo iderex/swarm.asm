@@ -17,9 +17,10 @@
 ;             (u32), r9d = n
 ;   out:      dst scattered by id; eax = 0 when every id was in range, 1 when
 ;             at least one was rejected and its store dropped
-;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; rbx carries the rejection
-;             flag across the loop and is saved/restored, so every nonvolatile
-;             is preserved
+;   clobbers: rax, rcx, r8, r9, r10, r11, flags. rdx is the dst base, used only
+;             as the read side of `mov [rdx+rax*4], r10d`, and is never written.
+;             rbx carries the rejection flag across the loop and is
+;             saved/restored, so every nonvolatile is preserved
 ;   note:     dword copy - bit-identical for f32 or u32 components.
 ;   align:    called with rsp = 8 (mod 16) rather than the Win64-conforming 0,
 ;             so entered with rsp = 0 (mod 16) rather than 8 - the sole caller
