@@ -13,16 +13,16 @@ pipeline (pushing version tags). No one else has commit, review, or release
 authority.
 
 Development is **AI-assisted** (see the README's "AI-assisted, human-owned"
-callout): an AI assistant executes process steps under my direction —
+callout): an AI assistant executes process steps under my direction -
 generating and analyzing assembly, drafting documentation, running review
-passes — but it never hands over finished, unreviewed work. Every step is a
+passes - but it never hands over finished, unreviewed work. Every step is a
 proposal; I review, understand, edit where needed, and sign off on every
 change that ships. There is no second human reviewer. The gates that stand in
 for a review team are CI (assemble, smoke-run, the test suite, conformance
 fitness tests, the binary size budget, formatting checks) and an adversarial
-multi-lens review pass — correctness, performance, robustness, and
+multi-lens review pass - correctness, performance, robustness, and
 integration, plus a SIMD/assembly-specific pass whenever kernel or ABI code is
-touched — run on every change to the kernel math, the internal ABI, the
+touched - run on every change to the kernel math, the internal ABI, the
 platform boundary, input parsing, or the build tooling (see
 [docs/DEV-PROCESS.md](docs/DEV-PROCESS.md)). No external review, quality, or
 analysis service is used or trusted; those gates are the entire
@@ -58,7 +58,7 @@ A one-person project carries an honest bus factor of one. Mitigations in
 place:
 
 - Everything needed to build, test, and run the engine is **in the
-  repository** — a pinned, reproducible toolchain bootstrap
+  repository** - a pinned, reproducible toolchain bootstrap
   (`tools/get-fasm.ps1`), a scripted build (`build.ps1`), and CI that runs the
   same steps on clean infrastructure. No private build secrets beyond
   standard GitHub tokens.

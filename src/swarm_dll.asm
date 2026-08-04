@@ -1,4 +1,4 @@
-; swarm.kernel.dll — the simulation kernel packaged for the C# test harness.
+; swarm.kernel.dll - the simulation kernel packaged for the C# test harness.
 ;
 ; Test artifact only, never shipped. Both build targets include the same
 ; kernel sources, so the tested kernel is the shipped kernel by construction
@@ -6,7 +6,7 @@
 ; Win64 ABI.
 
 ; The subsystem field is loader-inert on a DLL (only checked on the
-; process image) — the GUI 6.0 here merely mirrors the exe's format line.
+; process image) - the GUI 6.0 here merely mirrors the exe's format line.
 format PE64 GUI 6.0 DLL
 entry DllEntryPoint
 
@@ -17,8 +17,8 @@ include 'platform/seam.inc'
 section '.text' code readable executable
 
 ; ------------------------------------------------------------------
-; DllEntryPoint — load/unload notification.
-;   in:       rcx hinstDLL, edx fdwReason, r8 lpvReserved (all ignored —
+; DllEntryPoint - load/unload notification.
+;   in:       rcx hinstDLL, edx fdwReason, r8 lpvReserved (all ignored -
 ;             the DLL holds no per-process state; all state lives in the
 ;             caller-owned arena)
 ;   out:      eax = TRUE
@@ -30,11 +30,11 @@ DllEntryPoint:
         ret
 
 ; ------------------------------------------------------------------
-; swarm_version — the ABI version of the export surface.
+; swarm_version - the ABI version of the export surface.
 ;   in:       nothing
 ;   out:      eax = SWARM_ABI_VERSION
 ;   clobbers: rax
-;   MXCSR:    untouched — this export moves no FP; the save/pin/restore
+;   MXCSR:    untouched - this export moves no FP; the save/pin/restore
 ;             seam (decision 2, pinned 0x9FC0) is MANDATORY in every
 ;             export prologue that does, starting with the next slice
 ; ------------------------------------------------------------------
@@ -45,9 +45,9 @@ swarm_version:
 ; rng_fill_core is exported directly as swarm_rng_fill: its kernel-tier
 ; contract (rcx seed, rdx out, r8d count) already matches the Win64 argument
 ; registers, so no adapter is needed. It is integer-only and touches no
-; nonvolatile register or MXCSR, so it wears no seam — unlike the FP exports
+; nonvolatile register or MXCSR, so it wears no seam - unlike the FP exports
 ; that follow, where the MXCSR pin (decision 2) is mandatory. Caller-owned
-; bounds, kernel tier: out must hold count u64 slots — the kernel never
+; bounds, kernel tier: out must hold count u64 slots - the kernel never
 ; bounds-checks, so a short buffer from the harness is a silent OOB write.
 include 'kernel/rng.inc'
 include 'kernel/parse.inc'
@@ -62,13 +62,13 @@ include 'kernel/plot.inc'
 ; The M3 worker pool (platform layer). Included AFTER the kernel so pass_core /
 ; build_core are defined; the pool crosses the thread-entry seam (pool_pass) and
 ; calls only the pure per-range pass, so kernel purity is unchanged. It adds the
-; DLL's only kernel32 imports (all genuinely kernel32 — the import allowlist the
+; DLL's only kernel32 imports (all genuinely kernel32 - the import allowlist the
 ; conformance test pins targets swarm.exe, and CreateThread/CreateEventW/etc. are
 ; kernel32, so the exe allowlist holds regardless).
 include 'platform/pool.inc'
 
 ; ------------------------------------------------------------------
-; swarm_plot — seam wrapper over plot_core (FP: x*w needs the pinned MXCSR).
+; swarm_plot - seam wrapper over plot_core (FP: x*w needs the pinned MXCSR).
 ;   in:       rcx arena, rdx bgra, r8d w, r9d h
 ;   out:      nothing (void); the framebuffer at rdx is written
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -82,7 +82,7 @@ seam_wrap swarm_plot, plot_core
 ; saves rsi/rdi itself, so it is Win64-clean without the FP seam.
 
 ; ------------------------------------------------------------------
-; swarm_pass — seam wrapper over pass_core (heavy FP: the MXCSR pin matters).
+; swarm_pass - seam wrapper over pass_core (heavy FP: the MXCSR pin matters).
 ;   in:       rcx arena, edx first, r8d last
 ;   out:      nothing (void); the OUT bank in the arena is advanced one pass
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -93,7 +93,7 @@ seam_wrap swarm_plot, plot_core
 seam_wrap swarm_pass, pass_core
 
 ; ------------------------------------------------------------------
-; swarm_step — seam wrapper over step_core (n_steps x build+pass).
+; swarm_step - seam wrapper over step_core (n_steps x build+pass).
 ;   in:       rcx arena, edx n_steps
 ;   out:      nothing (void); the arena is advanced n_steps
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -104,7 +104,7 @@ seam_wrap swarm_pass, pass_core
 seam_wrap swarm_step, step_core
 
 ; ------------------------------------------------------------------
-; swarm_read_state — id-ordered copy-out of the current state.
+; swarm_read_state - id-ordered copy-out of the current state.
 ;   in:       rcx arena, rdx x*, r8 y*, r9 vx*, [stack] vy*, [stack] species*
 ;             (each caller array holds n elements)
 ;   out:      eax = 0 and x[id]..species[id] = the OUT-bank values for i in
@@ -146,7 +146,7 @@ swarm_read_state:
         ; only because copy_scatter is a private leaf (the internal ABI, not
         ; the Win64 seam). First: it never homes its args, so no 32-byte shadow
         ; space is reserved. Second: rbp plus seven nonvolatiles are pushed
-        ; above, so these calls land with rsp = 8 (mod 16) rather than 0 — it
+        ; above, so these calls land with rsp = 8 (mod 16) rather than 0 - it
         ; issues no onward call and touches no vector or aligned-spill
         ; instruction, so nothing depends on the 16-byte guarantee. Both are
         ; restated in copy_scatter's own contract header; a callee that ever
@@ -169,10 +169,10 @@ swarm_read_state:
 
 ; cpu_paths_core is exported directly as swarm_cpu_paths: it takes no args,
 ; returns the path bits in eax, and preserves rbx itself (its only nonvolatile
-; touch), so it is Win64-clean and integer-only — no seam.
+; touch), so it is Win64-clean and integer-only - no seam.
 
 ; ------------------------------------------------------------------
-; swarm_init — seam wrapper over init_core (FP: the u01 convert needs the pin).
+; swarm_init - seam wrapper over init_core (FP: the u01 convert needs the pin).
 ;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
 ;   out:      eax = 0 on success, else IERR_* (arena untouched on failure)
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -183,7 +183,7 @@ swarm_read_state:
 seam_wrap swarm_init, init_core
 
 ; ------------------------------------------------------------------
-; swarm_parse_preset — seam wrapper over parse_preset_core.
+; swarm_parse_preset - seam wrapper over parse_preset_core.
 ;   in:       rcx text (may be unterminated), edx len, r8 SwarmParams* out
 ;   out:      eax = 0 and *out written, or the packed negative error with
 ;             *out untouched (fail-closed two-phase commit)
@@ -196,7 +196,7 @@ seam_wrap swarm_init, init_core
 seam_wrap swarm_parse_preset, parse_preset_core
 
 ; ------------------------------------------------------------------
-; swarm_layout_bytes — seam wrapper over layout_bytes_core.
+; swarm_layout_bytes - seam wrapper over layout_bytes_core.
 ;   in:       rcx = SwarmParams*
 ;   out:      rax = arena bytes (multiple of 64), or 0 when params are
 ;             invalid (fail-closed)
@@ -213,7 +213,7 @@ section '.edata' export data readable
   ; The M3 pool exports (swarm_pool_init / swarm_step_mt / swarm_pass_mt /
   ; swarm_pool_shutdown) drive the real worker pool from the harness so the
   ; PassParallelMatchesSerial determinism gate can compare several thread counts
-  ; against the serial path. The serial swarm_step / swarm_pass stay intact — no
+  ; against the serial path. The serial swarm_step / swarm_pass stay intact - no
   ; threading crosses the P/Invoke boundary; the pool is an in-DLL concern.
   export 'swarm.kernel.dll',\
          swarm_version,      'swarm_version',\
@@ -235,12 +235,12 @@ section '.edata' export data readable
 section '.data' data readable writeable
 
   ; The worker pool's mutable state (handles, ranges, publish slot). Platform
-  ; state, never the arena — kernel purity is untouched.
+  ; state, never the arena - kernel purity is untouched.
   pool_storage
 
 section '.idata' import data readable writeable
 
-  ; The DLL's only imports — all genuinely kernel32 (WaitOnAddress/WakeByAddress
+  ; The DLL's only imports - all genuinely kernel32 (WaitOnAddress/WakeByAddress
   ; are deliberately excluded: they forward through API-MS-Win-Core-Synch-*).
   library kernel32, 'KERNEL32.DLL'
   import kernel32,\

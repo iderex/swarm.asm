@@ -9,7 +9,7 @@ namespace Swarm.Tests;
 /// buffer (fail-closed), resolves the SIMD path against the CPU, writes the
 /// 512-byte header, and seeds bank OUT from the deterministic RNG (masterplan
 /// decisions 1, 7, 8). These tests pin the fail-closed branches, the header
-/// fields, and — the load-bearing one — that the seeded positions/species
+/// fields, and - the load-bearing one - that the seeded positions/species
 /// match an independent splitmix64 oracle draw-for-draw, so the first frame is
 /// a pure function of the seed.
 /// </summary>

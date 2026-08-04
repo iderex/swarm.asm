@@ -1,4 +1,4 @@
-; init.inc — arena initialization (docs/MASTERPLAN.md, decisions 1, 7, 8).
+; init.inc - arena initialization (docs/MASTERPLAN.md, decisions 1, 7, 8).
 ;
 ; swarm_init validates the params, checks the caller's arena is large enough
 ; (fail-closed), resolves the SIMD code path against the CPU (fail-closed on an
@@ -14,7 +14,7 @@
 ; and the identity fill.
 
 ; ------------------------------------------------------------------
-; init_core — validate, size-check, resolve path, write header, seed OUT.
+; init_core - validate, size-check, resolve path, write header, seed OUT.
 ;   in:       rcx = arena, rdx = arena_bytes (u64), r8 = SwarmParams*
 ;   out:      eax = 0 on success (arena fully initialized), else IERR_*
 ;             (every failure is detected before the first arena write)
@@ -113,7 +113,7 @@ init_core:
         ret
 
 ; ------------------------------------------------------------------
-; seed_bank_out — lay down bank OUT and the live RNG state from the header.
+; seed_bank_out - lay down bank OUT and the live RNG state from the header.
 ;   in:       rcx = arena base (header already written: AH_PADDED, AH_RNG,
 ;             AH_PARAMS.n / species_n valid)
 ;   out:      bank OUT filled (x,y,species drawn for i<n; v=0; id=i for all;

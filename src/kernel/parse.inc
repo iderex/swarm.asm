@@ -1,9 +1,9 @@
-; parse.inc — the preset parser (docs/MASTERPLAN.md, decision 10).
+; parse.inc - the preset parser (docs/MASTERPLAN.md, decision 10).
 ;
 ; Fail-closed two-phase commit: phase 1 tokenizes and validates everything
 ; into a stack-local staging image of SwarmParams; phase 2 is one rep movsq
 ; executed only on full success. Any error returns
-; 0x80000000 or (PERR_* shl 20) or min(line, 0xFFFFF) with [out] untouched —
+; 0x80000000 or (PERR_* shl 20) or min(line, 0xFFFFF) with [out] untouched -
 ; [out] is dereferenced at exactly one code location (the commit).
 ;
 ; Bounds discipline over the NON-terminated (text, len) buffer: pp_next_line
@@ -47,7 +47,7 @@ KIND_F32 = 2
 PP_MANT_CAP = 1000000000000000          ; 10^15: pre-multiply mantissa cap
 
 ; ------------------------------------------------------------------
-; parse_preset_core — parse a preset buffer into out, fail-closed.
+; parse_preset_core - parse a preset buffer into out, fail-closed.
 ;   in:       rcx = text (may be unterminated), edx = len, r8 = out
 ;             (SwarmParams*, 304 bytes, caller-owned)
 ;   out:      eax = 0 and *out fully written, or eax = packed negative
@@ -337,10 +337,10 @@ parse_preset_core:
         ret
 
 ; ------------------------------------------------------------------
-; pp_fetch_content_line — advance to the next line with at least one
+; pp_fetch_content_line - advance to the next line with at least one
 ; token, loading its slice into the frame; blank lines are skipped.
 ;   in:       implicit: the caller's frame at rsp+8 (called from
-;             parse_preset_core only — reads/writes the cursor block
+;             parse_preset_core only - reads/writes the cursor block
 ;             through rsp-relative addressing after the return slot)
 ;   out:      eax = 1 slice loaded (line_p/line_len rewound to the line
 ;             start), eax = 0 at end of input
@@ -366,7 +366,7 @@ pp_fetch_content_line:
         ret
 
 ; ------------------------------------------------------------------
-; pp_line_must_end — assert the current line slice has no further token.
+; pp_line_must_end - assert the current line slice has no further token.
 ;   in:       implicit: the caller's frame at rsp+8 (parse_preset_core only)
 ;   out:      eax = 0 line exhausted, eax = 1 surplus token present
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags
@@ -381,7 +381,7 @@ pp_line_must_end:
         ret
 
 ; ------------------------------------------------------------------
-; pp_next_line — fetch the next line from the outer buffer.
+; pp_next_line - fetch the next line from the outer buffer.
 ;   in:       rcx = cursor block {p: u64, rem: u32, line_no: u32,
 ;             line_p: u64, line_len: u32} (frame memory)
 ;   out:      eax = 1 and the line slice stored (one trailing CR
@@ -436,7 +436,7 @@ pp_next_line:
         ret
 
 ; ------------------------------------------------------------------
-; pp_next_token — take the next space/tab-delimited token off the
+; pp_next_token - take the next space/tab-delimited token off the
 ; current line slice.
 ;   in:       rcx = line slice {line_p: u64, line_len: u32} (frame
 ;             memory; consumed in place)
@@ -487,11 +487,11 @@ pp_next_token:
         ret
 
 ; ------------------------------------------------------------------
-; pp_match_key — exact byte comparison of a token against a name.
+; pp_match_key - exact byte comparison of a token against a name.
 ;   in:       rcx = token ptr, edx = token len, r8 = name ptr,
 ;             r9d = name len
 ;   out:      eax = 1 exact match, else 0
-;   clobbers: rax, r9, flags (rcx, rdx, r8, r10, r11 preserved — the
+;   clobbers: rax, r9, flags (rcx, rdx, r8, r10, r11 preserved - the
 ;             matrix/key loops hold the live token pointer in r10 across
 ;             this call, so this routine must not touch it; the index runs
 ;             in r9, whose namelen input is dead once the length gate passes)
@@ -517,7 +517,7 @@ pp_match_key:
         ret
 
 ; ------------------------------------------------------------------
-; pp_parse_u64 — unsigned integer token: decimal, or 0x-hex when allowed.
+; pp_parse_u64 - unsigned integer token: decimal, or 0x-hex when allowed.
 ;   in:       rcx = token ptr, edx = token len, r8d = 1 when hex is
 ;             allowed (seed), else 0
 ;   out:      eax = 0 and rdx = value, or eax = PERR_NUM_SYNTAX /
@@ -587,7 +587,7 @@ pp_parse_u64:
         ret
 
 ; ------------------------------------------------------------------
-; pp_parse_f32 — float token per the pinned grammar and conversion:
+; pp_parse_f32 - float token per the pinned grammar and conversion:
 ; [-]digits[.digits], 1..6 fraction digits when the dot is present,
 ; no exponent/inf/nan; value = mantissa-over-all-digits / 10^frac via
 ; one cvtsi2sd, one divsd, one cvtsd2ss.
@@ -640,10 +640,10 @@ pp_parse_f32:
         jmp     .int_loop
   .dot:
         test    r8d, r8d
-        jz      .syntax                 ; ".5" — no integer digits
+        jz      .syntax                 ; ".5" - no integer digits
         inc     rcx
         dec     edx
-        jz      .syntax                 ; "5." — dot with no fraction
+        jz      .syntax                 ; "5." - dot with no fraction
         xor     r9d, r9d                ; fraction digit count
   .frac_loop:
         test    edx, edx
@@ -693,12 +693,12 @@ pp_parse_f32:
         ret
 
 ; ------------------------------------------------------------------
-; pp_check_range — bounds-check an f32 against a table row.
+; pp_check_range - bounds-check an f32 against a table row.
 ;   in:       rcx = table row (KR_LO/KR_HI/KR_FLAGS used), xmm0 = value
 ;   out:      eax = 0 in range, else PERR_RANGE; xmm0 preserved
 ;   clobbers: rax, rcx, rdx, xmm1, flags
 ;   MXCSR:    assumes the pinned seam MXCSR (DAZ: a denormal value
-;             compares as zero and falls to whichever side zero is on —
+;             compares as zero and falls to whichever side zero is on -
 ;             fail-closed for every open-at-zero bound)
 ;   note:     comiss unordered (NaN) rejects via PF
 ; ------------------------------------------------------------------
@@ -730,7 +730,7 @@ pp_check_range:
         ret
 
 ; ------------------------------------------------------------------
-; pp_validate_params — full fail-closed check of an in-memory struct
+; pp_validate_params - full fail-closed check of an in-memory struct
 ; (the layout_bytes entry validation; shares the parser's range table).
 ;   in:       rcx = SwarmParams*
 ;   out:      eax = 0 valid, 1 invalid

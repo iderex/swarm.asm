@@ -5,17 +5,17 @@ namespace Swarm.Tests;
 
 /// <summary>
 /// The M3 worker-pool determinism gate (issue #68). The force+integrate pass is
-/// a pure map — OUT[i] = f(i, IN, cell_start, params) with IN and cell_start
+/// a pure map - OUT[i] = f(i, IN, cell_start, params) with IN and cell_start
 /// frozen by the serial build before any worker runs and disjoint one-writer
-/// ranges covering [0, n) — so the threaded result must be BIT-IDENTICAL to the
+/// ranges covering [0, n) - so the threaded result must be BIT-IDENTICAL to the
 /// serial path for any thread count T, and equal across T. This is the machine-
 /// checked form of <see cref="GridTests.GridPassSplitInvariance"/>, driving the
 /// REAL asm pool at several T instead of decomposing on .NET threads.
 ///
 /// The comparison is EXACT equality, never epsilon: it is the same code path,
-/// just partitioned. A drift here is a real bug — most likely a missed
+/// just partitioned. A drift here is a real bug - most likely a missed
 /// per-thread MXCSR pin (denormal FTZ/DAZ divergence) or a torn/false-shared
-/// boundary write — not a floating-point reordering, so loosening to epsilon
+/// boundary write - not a floating-point reordering, so loosening to epsilon
 /// would mask exactly what the gate exists to catch.
 ///
 /// The pool is process-global mutable state, so this class is a
@@ -158,7 +158,7 @@ public sealed unsafe class ThreadingTests
         foreach (int t in ThreadCounts)
         {
             float[] threaded = ThreadedStep(p, steps, t);
-            Assert.Equal(serial, threaded); // exact — same code path, partitioned
+            Assert.Equal(serial, threaded); // exact - same code path, partitioned
         }
     }
 

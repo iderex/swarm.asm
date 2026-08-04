@@ -1,10 +1,10 @@
-; swarm.exe — the live engine: window, DIB framebuffer, and the render loop
+; swarm.exe - the live engine: window, DIB framebuffer, and the render loop
 ; that steps the simulation and rasters it each frame.
 ;
 ; The kernel sources are included straight in (decision 5: the exe and the test
 ; DLL share the same kernel), reached through the same MXCSR/nonvolatile seam
 ; the DLL uses. `-smoke` on the command line runs a fixed number of real frames
-; and exits 0 — that flag is what CI runs, because the smoke gate needs a
+; and exits 0 - that flag is what CI runs, because the smoke gate needs a
 ; terminating process.
 
 format PE64 GUI 6.0
@@ -34,13 +34,13 @@ TIMER_ALL_ACCESS = 0x1F0003            ; MODIFY_STATE + SYNCHRONIZE + more
 section '.text' code readable executable
 
 ; ------------------------------------------------------------------
-; start — process entry: init, message pump + render loop, clean exit.
+; start - process entry: init, message pump + render loop, clean exit.
 ;   in:       nothing (RSP = 8 mod 16 as delivered by the loader; the
 ;             sub rsp,8 below establishes the 16-alignment every invoke
 ;             in this routine relies on)
 ;   out:      does not return; process exit code 0 (1 on init failure)
 ;   clobbers: n/a (process ends here)
-;   MXCSR:    pinned to 0x9FC0 at entry (decision 2, the exe main-thread pin) —
+;   MXCSR:    pinned to 0x9FC0 at entry (decision 2, the exe main-thread pin) -
 ;             so every main-thread FP op (the matrix reroll) runs under the
 ;             same rounding/FTZ/DAZ policy the kernel does; the seam wrappers
 ;             re-pin around each kernel call, harmlessly idempotent
@@ -80,7 +80,7 @@ start:
 
         ; One 32-bit top-down DIB section is the whole render target
         ; (docs/MASTERPLAN.md, decision 9). Win32 only guarantees DWORD
-        ; alignment for the pixel buffer — the plot pass must check (or
+        ; alignment for the pixel buffer - the plot pass must check (or
         ; not assume) anything wider.
         invoke  CreateDIBSection, 0, bmi, DIB_RGB_COLORS, pixels, 0, 0
         test    rax, rax
@@ -182,7 +182,7 @@ start:
         jne     .plot                   ; paused: skip the step, keep drawing
         mov     rcx, [arena]            ; advance the simulation one step across
         mov     edx, 1                  ;   the worker pool (build serial, pass
-        call    pool_step               ;   parallel) — bit-identical to sim_step
+        call    pool_step               ;   parallel) - bit-identical to sim_step
   .plot:
         mov     rcx, [arena]            ; raster the state into the DIB
         mov     rdx, [pixels]           ; (plot_core clears then plots)
@@ -217,7 +217,7 @@ start:
         invoke  ExitProcess, 1          ; fail closed: no window, no half-run
 
 ; ------------------------------------------------------------------
-; scan_smoke_flag — detect "-smoke" as a whole argument token.
+; scan_smoke_flag - detect "-smoke" as a whole argument token.
 ;   in:       rcx = zero-terminated ANSI command line in GetCommandLine
 ;             form: the program token comes first, possibly quoted
 ;   out:      eax = 1 when a whitespace-delimited argument equals
@@ -268,7 +268,7 @@ scan_smoke_flag:
         jne     .skip_token
         inc     edx
         jmp     .compare
-  .needle_end:                          ; the token must end here too —
+  .needle_end:                          ; the token must end here too -
         test    r8b, r8b                ; "-smokeless" is not "-smoke"
         jz      .present
         cmp     r8b, ' '
@@ -296,14 +296,14 @@ scan_smoke_flag:
         ret
 
 ; ------------------------------------------------------------------
-; WindowProc — window procedure (Win64 ABI callee, callback seam).
+; WindowProc - window procedure (Win64 ABI callee, callback seam).
 ;   in:       rcx hwnd, edx message, r8 wparam, r9 lparam
 ;   out:      rax = message result
 ;   clobbers: volatile registers only
 ;   MXCSR:    untouched
 ; ------------------------------------------------------------------
 ; The arg names deliberately differ from the .data globals ([hwnd] et
-; al.) — a proc arg shadows the global inside the body, and the named
+; al.) - a proc arg shadows the global inside the body, and the named
 ; slots hold caller stack garbage (invoke never homes the registers).
 proc WindowProc wnd, wmsg, wp, lp
         cmp     edx, WM_DESTROY
@@ -369,13 +369,13 @@ include 'kernel/plot.inc'
 include 'platform/pool.inc'
 
 ; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
-; lands the kernel core at rsp = 0 mod 32 — the same contract the DLL exports
+; lands the kernel core at rsp = 0 mod 32 - the same contract the DLL exports
 ; carry, so the exe drives the identical, gate-verified code paths. Each wrapper
 ; therefore exposes the uniform seam contract in its header: it clobbers only
 ; the Win64 volatiles; the seam saves and restores every nonvolatile and MXCSR.
 
 ; ------------------------------------------------------------------
-; sim_layout — seam wrapper over layout_bytes_core.
+; sim_layout - seam wrapper over layout_bytes_core.
 ;   in:       rcx = SwarmParams*
 ;   out:      rax = arena bytes (multiple of 64), or 0 when params invalid
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -385,7 +385,7 @@ include 'platform/pool.inc'
 ; ------------------------------------------------------------------
 seam_wrap sim_layout, layout_bytes_core
 ; ------------------------------------------------------------------
-; sim_init — seam wrapper over init_core.
+; sim_init - seam wrapper over init_core.
 ;   in:       rcx arena, rdx arena_bytes, r8 SwarmParams*
 ;   out:      eax = 0 on success, else IERR_*
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -395,7 +395,7 @@ seam_wrap sim_layout, layout_bytes_core
 ; ------------------------------------------------------------------
 seam_wrap sim_init, init_core
 ; ------------------------------------------------------------------
-; sim_step — seam wrapper over step_core.
+; sim_step - seam wrapper over step_core.
 ;   in:       rcx arena, edx n_steps
 ;   out:      nothing (void); the arena is advanced n_steps
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -405,7 +405,7 @@ seam_wrap sim_init, init_core
 ; ------------------------------------------------------------------
 seam_wrap sim_step, step_core
 ; ------------------------------------------------------------------
-; sim_plot — seam wrapper over plot_core.
+; sim_plot - seam wrapper over plot_core.
 ;   in:       rcx arena, rdx pixels, r8d w, r9d h
 ;   out:      nothing (void); the framebuffer at rdx is written
 ;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
@@ -416,7 +416,7 @@ seam_wrap sim_step, step_core
 seam_wrap sim_plot, plot_core
 
 ; ------------------------------------------------------------------
-; ui_reseed — draw a fresh world seed from the UI RNG stream.
+; ui_reseed - draw a fresh world seed from the UI RNG stream.
 ;   in/out:   mutates [ui_rng] and [sim_params+SP_SEED]
 ;   clobbers: rax, r9, r10, flags
 ;   MXCSR:    untouched (integer only)
@@ -429,7 +429,7 @@ ui_reseed:
         ret
 
 ; ------------------------------------------------------------------
-; ui_reroll_matrix — refill the species_n x species_n attraction block with
+; ui_reroll_matrix - refill the species_n x species_n attraction block with
 ; fresh values a = 2*u01 - 1 in [-1, 1) (decision 8), from the UI RNG stream.
 ;   in/out:   mutates [ui_rng] and the matrix in [sim_params]
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, xmm0, flags
@@ -468,7 +468,7 @@ ui_reroll_matrix:
         ret
 
 ; ------------------------------------------------------------------
-; ui_reinit — re-seed the existing arena from the (edited) params.
+; ui_reinit - re-seed the existing arena from the (edited) params.
 ;   in:       [arena], [arena_bytes], [sim_params] (n/species_n unchanged, so
 ;             the layout is identical and the buffer is reused)
 ;   out:      the arena is fully re-initialized; eax = 0 by construction
@@ -484,7 +484,7 @@ ui_reinit:
         ret
 
 ; ------------------------------------------------------------------
-; frame_pace — wait out the current frame to the 60 fps QPC deadline, then
+; frame_pace - wait out the current frame to the 60 fps QPC deadline, then
 ; advance the deadline (no catch-up: resync if the frame overran; decision 11).
 ;   in/out:   reads [qpc_freq]/[ticks_per_frame]/[htimer], updates [qpc_deadline]
 ;   clobbers: caller-saved, flags

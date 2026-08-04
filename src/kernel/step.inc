@@ -1,9 +1,9 @@
-; step.inc — the force + integrate pass (docs/MASTERPLAN.md force model).
+; step.inc - the force + integrate pass (docs/MASTERPLAN.md force model).
 ;
 ; This is the scalar reference path: one particle, one neighbour at a time, in
 ; the exact operation order of the C# oracle (no FMA). Each op is IEEE-exact,
 ; so the two agree bit-for-bit EXCEPT where the pinned FTZ/DAZ MXCSR (decision
-; 2) flushes a denormal the .NET oracle would keep — a &lt;=~1e-38 divergence the
+; 2) flushes a denormal the .NET oracle would keep - a &lt;=~1e-38 divergence the
 ; oracle test absorbs at its epsilon tier (1e-5 positions / 1e-4 velocities),
 ; never a bit-exact promise across the two runtimes. The AVX2 gather path is a
 ; separate code path added later, validated against this anchor within epsilon
@@ -16,7 +16,7 @@
 ; banks so fusing per particle is safe); swarm_step = n_steps x (build + pass)
 ; and advances the frame counter.
 
-; elem_addr — dst = &bank[comp][idxreg], i.e. base + comp*stride + idxreg*4.
+; elem_addr - dst = &bank[comp][idxreg], i.e. base + comp*stride + idxreg*4.
 ; x86 allows only base+index in one operand, so the three-term address is
 ; folded into a register here. Assumes rbx = bank base, r14 = stride.
 macro elem_addr dst, comp, idxreg {
@@ -114,7 +114,7 @@ macro t_and d, s   { if TAIL_VEX
                        andps d, s
                      end if }
 
-; integrate_and_store — semi-implicit Euler + vmax clamp + torus wrap + write
+; integrate_and_store - semi-implicit Euler + vmax clamp + torus wrap + write
 ; OUT[i], shared by both code paths, and the OUT cell id for next frame's grid
 ; build (M2). Consumes the accumulated force for particle i as SCALARS in
 ; xmm6 (fx) / xmm7 (fy); xmm8/xmm9 hold xi/yi in their low lane; the KP_* const
@@ -194,7 +194,7 @@ macro integrate_and_store vex {
         mov     [r10], r9d
 }
 
-; cache_pass_consts — derive the per-pass scalar constant cache from the params
+; cache_pass_consts - derive the per-pass scalar constant cache from the params
 ; block into the KP_* stack slots. Identical prologue for both pass_scalar and
 ; pass_avx2 (they share the KP_* layout), so it lives once here (decision 5).
 ;   in:       rcx = arena, rsp = the pass frame (KP_* slots reserved)
@@ -240,7 +240,7 @@ macro cache_pass_consts {
 }
 
 ; ------------------------------------------------------------------
-; build_core — produce bank IN for the next pass. Always copies OUT -> IN
+; build_core - produce bank IN for the next pass. Always copies OUT -> IN
 ; (so the pads carry through unchanged); in grid mode (FLAG_GRID) it then
 ; tail-calls grid_sort to overlay IN[0..n) cell-sorted (decision 3).
 ;   in:       rcx = arena
@@ -273,7 +273,7 @@ build_core:
         ret
 
 ; ------------------------------------------------------------------
-; pass_core — dispatch the fused force+integrate to the code path the arena
+; pass_core - dispatch the fused force+integrate to the code path the arena
 ; resolved at init (AH_PATH: 1 AVX2, 2 AVX-512, 3 scalar). Tail jumps preserve
 ; the seam's 0-mod-32 entry, which the SIMD path relies on for aligned spills.
 ;   in:       rcx = arena, edx = first, r8d = last
@@ -287,7 +287,7 @@ pass_core:
                                         ;   512 path exists
 
 ; ------------------------------------------------------------------
-; pass_scalar — the reference path: fused force+integrate for i in
+; pass_scalar - the reference path: fused force+integrate for i in
 ; [first, last), one particle and one neighbour at a time (the semantic anchor).
 ; Each particle's neighbours come from the resolved run set (grid = the 3x3 cell
 ; runs via neighbour_runs, brute = the single run [0, n)), so the scalar path is
@@ -450,7 +450,7 @@ KA_DY     = KA_DX + 32
 KA_RUNBUF = KA_DY + 32                   ; 6 * 8 bytes
 KA_FRAME  = 192                         ; 128 + 48, rounded to a 0-mod-32 frame
 
-; avx2_force_group — one group of 8 neighbours j at [base+r9]; accumulates into
+; avx2_force_group - one group of 8 neighbours j at [base+r9]; accumulates into
 ; ymm6/ymm7. tail=1 ANDs the mask in ymm5 into `valid`. dx/dy are spilled so
 ; the force formula has room; ymm0-5 are the working set, ymm8-15 the persistent
 ; broadcasts. Pinned masking: blend r2 to 1.0 on invalid lanes BEFORE the sqrt.
@@ -510,7 +510,7 @@ macro avx2_force_group tail {
 }
 
 ; ------------------------------------------------------------------
-; pass_avx2 — the 8-wide gather force+integrate (masterplan decision 3).
+; pass_avx2 - the 8-wide gather force+integrate (masterplan decision 3).
 ; For each particle i (scalar), broadcast xi/yi and load its matrix row, then
 ; sweep its neighbour runs eight j at a time: grid mode consumes the 3x3 cell
 ; runs from neighbour_runs (the O(n*k) path), brute mode the degenerate single
@@ -520,7 +520,7 @@ macro avx2_force_group tail {
 ; sqrt) makes a NaN structurally impossible. The 8 partial forces reduce with a
 ; fixed shuffle order across all runs; integration is the shared scalar tail.
 ; Matches the oracle within the epsilon tier (its lane reduction order differs
-; from the scalar path — that is the per-code-path golden's whole reason to exist).
+; from the scalar path - that is the per-code-path golden's whole reason to exist).
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
 ;             ymm0-15, flags (kernel tier; the seam saved the nonvolatiles)
@@ -639,7 +639,7 @@ pass_avx2:
         ret
 
 ; ------------------------------------------------------------------
-; wrap_body — p -= floor(p); if p >= 1.0: p = 0.0. One body, two encodings
+; wrap_body - p -= floor(p); if p >= 1.0: p = 0.0. One body, two encodings
 ; (issue #33): the scalar path calls wrap_scalar (SSE, no AVX guarantee); the
 ; AVX2 tail calls wrap_scalar_avx (VEX.128, bit-identical arithmetic) so the
 ; once-per-particle wrap does not re-enter legacy SSE with dirty ymm upper
@@ -654,13 +654,13 @@ macro wrap_body {
         t_and   xmm4, xmm3              ; p >= 1.0 -> 0
         ret
 }
-; wrap_scalar — SSE-encoded wrap for the scalar reference path.
+; wrap_scalar - SSE-encoded wrap for the scalar reference path.
 ;   in/out:   xmm4 = p -> wrapped [0,1)
 ;   clobbers: xmm1, xmm3
 wrap_scalar:
         TAIL_VEX = 0
         wrap_body
-; wrap_scalar_avx — VEX.128-encoded wrap for the AVX2 tail (issue #33);
+; wrap_scalar_avx - VEX.128-encoded wrap for the AVX2 tail (issue #33);
 ; bit-identical arithmetic to wrap_scalar, additionally zeroing the upper lanes
 ; of ymm1/3/4 (dead registers at this point in the pass).
 ;   in/out:   xmm4 = p -> wrapped [0,1)
@@ -670,7 +670,7 @@ wrap_scalar_avx:
         wrap_body
 
 ; ------------------------------------------------------------------
-; step_core — n_steps x (build + pass over all n), advancing the frame.
+; step_core - n_steps x (build + pass over all n), advancing the frame.
 ;   in:       rcx = arena, edx = n_steps
 ;   out:      the world advanced n_steps; AH_FRAME += n_steps
 ;   clobbers: everything pass_core does (kernel tier; the seam saved it)

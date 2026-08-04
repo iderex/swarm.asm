@@ -1,15 +1,15 @@
-; seam.inc — the DLL-export / thread-entry seam frame (platform layer:
+; seam.inc - the DLL-export / thread-entry seam frame (platform layer:
 ; ldmxcsr/stmxcsr/vzeroupper are banned inside src/kernel/).
 ;
-; Every kernel-calling export wears this pair uniformly — including exports
-; that move no FP today — so a later FP addition cannot miss the MXCSR pin
+; Every kernel-calling export wears this pair uniformly - including exports
+; that move no FP today - so a later FP addition cannot miss the MXCSR pin
 ; (docs/MASTERPLAN.md, decision 2). The frame provides the full seam tier of
 ; decision 4: the correct Win64 nonvolatile set (rbx, rsi, rdi, r12-r15,
 ; xmm6-15), MXCSR save / pin 0x9FC0 / restore, vzeroupper before return,
 ; and a 32-byte-realigned stack such that the kernel call's 8-byte return
 ; push lands the KERNEL ENTRY at rsp = 0 mod 32 exactly.
 ;
-; Frame arithmetic (load-bearing — do not "fix" without re-deriving):
+; Frame arithmetic (load-bearing - do not "fix" without re-deriving):
 ;   export entry        rsp = 8 mod 16   (Win64 call)
 ;   push rbp            rsp = 0 mod 16   (rbp = entry-8; a 5th+ stack arg would
 ;                                         sit at [rbp+48+8k]: +8 return, +32
@@ -78,9 +78,9 @@ macro seam_leave {
         ret
 }
 
-; seam_wrap export, core — the standard shape every FP-seam export takes:
+; seam_wrap export, core - the standard shape every FP-seam export takes:
 ; seam_enter / call <core> / seam_leave, verbatim, nothing in between. Not an
-; indirection that hides the seam — grep for "seam_wrap" finds every site, and
+; indirection that hides the seam - grep for "seam_wrap" finds every site, and
 ; this macro IS the whole contract for each of them (its own register-contract
 ; header, above, already covers what seam_enter/seam_leave do). A wrapper that
 ; needs anything beyond "call the core" between enter and leave does not fit

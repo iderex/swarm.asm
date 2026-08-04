@@ -1,7 +1,7 @@
 namespace Swarm.Tests;
 
 /// <summary>
-/// A minimal PE64 reader — just enough to enumerate the import directory and
+/// A minimal PE64 reader - just enough to enumerate the import directory and
 /// read the headers the conformance tests assert on. Deliberately dependency
 /// free: the point of these tests is to inspect the shipped bytes with our own
 /// eyes, not to trust a library's view of them.
@@ -15,7 +15,7 @@ public sealed class PeImage
 
     public IReadOnlyList<string> ImportedDlls { get; }
 
-    /// <summary>File size in bytes — the size-budget metric.</summary>
+    /// <summary>File size in bytes - the size-budget metric.</summary>
     public int FileSize => _bytes.Length;
 
     private PeImage(byte[] bytes)
@@ -50,7 +50,7 @@ public sealed class PeImage
 
         // The import table is data directory entry 1; PE32+ places the count
         // at optional-header offset 108 and the directory array at 112. A
-        // valid image may carry fewer than 2 directories — then it has no
+        // valid image may carry fewer than 2 directories - then it has no
         // import table at all.
         uint numDirs = BitConverter.ToUInt32(bytes, opt + 108);
         int dirs = opt + 112;

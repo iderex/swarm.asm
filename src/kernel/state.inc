@@ -1,10 +1,10 @@
-; state.inc — the id-ordered copy-out (docs/MASTERPLAN.md, decision 5).
+; state.inc - the id-ordered copy-out (docs/MASTERPLAN.md, decision 5).
 ;
 ; The arena is opaque to consumers: state crosses the seam by copy-out in
 ; original-id order, so the internal SoA/bank layout stays private. Every sort
 ; (M2) permutes the internal order but carries id[] along; scattering by id[i]
 ; restores the caller's 0..n-1 indexing. Right after init id[i] = i, so the
-; copy is the identity — but the id indirection is what keeps the oracle test
+; copy is the identity - but the id indirection is what keeps the oracle test
 ; runnable once real sorts land.
 ;
 ; read_state reads bank OUT, which always holds the current state: init seeds
@@ -12,7 +12,7 @@
 ; IN and writes OUT).
 
 ; ------------------------------------------------------------------
-; copy_scatter — dst[id[i]] = src[i] for i in 0..n-1 (one dword component).
+; copy_scatter - dst[id[i]] = src[i] for i in 0..n-1 (one dword component).
 ;   in:       rcx = src (dword array), rdx = dst (dword array), r8 = id array
 ;             (u32), r9d = n
 ;   out:      dst scattered by id; eax = 0 when every id was in range, 1 when
@@ -20,9 +20,9 @@
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; rbx carries the rejection
 ;             flag across the loop and is saved/restored, so every nonvolatile
 ;             is preserved
-;   note:     dword copy — bit-identical for f32 or u32 components.
+;   note:     dword copy - bit-identical for f32 or u32 components.
 ;   align:    called with rsp = 8 (mod 16) rather than the Win64-conforming 0,
-;             so entered with rsp = 0 (mod 16) rather than 8 — the sole caller
+;             so entered with rsp = 0 (mod 16) rather than 8 - the sole caller
 ;             (swarm_read_state) pushes rbp plus seven nonvolatiles before the
 ;             call. That caller also reserves no 32-byte shadow space, which is
 ;             safe because this routine never homes its register args. Both
@@ -31,8 +31,8 @@
 ;             movaps/movdqa, no xmm/ymm at all, no aligned spill), and its only
 ;             stack traffic is push/pop rbx, which leaves rsp = 8 (mod 16)
 ;             through the loop. Anything added here that calls out or spills a
-;             vector register must realign first (sub rsp, 8) — from 8 (mod 16)
-;             a call site needs 0 — and needs the caller to reserve shadow
+;             vector register must realign first (sub rsp, 8) - from 8 (mod 16)
+;             a call site needs 0 - and needs the caller to reserve shadow
 ;             space, or the callee's own homing stores and aligned spills land
 ;             on the caller's frame.
 ;   bound:    id[0..n-1] should be a permutation of 0..n-1, and the scatter no
@@ -42,7 +42,7 @@
 ;             (init seeds them n, n+1, ...), so one off-by-one in a future sort
 ;             is all that separates the identity case from caller heap
 ;             corruption. The store is therefore bound-checked and dropped when
-;             the check fails — fail closed, never perform an unproven write —
+;             the check fails - fail closed, never perform an unproven write -
 ;             and the drop is REPORTED, so a caller is never handed a silently
 ;             partial copy-out. The compare is unsigned, so a stale or
 ;             negative-as-unsigned word is rejected by the same branch. The
@@ -77,10 +77,10 @@ copy_scatter:
         jmp     .next                   ; straight-line shape
 
 ; ------------------------------------------------------------------
-; scatter_component — copy OUT array `idx` (0 x, 1 y, 2 vx, 3 vy, 4 species)
+; scatter_component - copy OUT array `idx` (0 x, 1 y, 2 vx, 3 vy, 4 species)
 ; to the destination pointer `dst`, scattered by id_out (component 5,
 ; AR_ID_OUT). A macro, so the source-scan contract check that covers column-0
-; labels never reaches it — the fields below are the contract regardless.
+; labels never reaches it - the fields below are the contract regardless.
 ;   in:       rbx = arena, r15d = the rejection flag accumulated so far,
 ;             `dst` = the operand holding the destination array pointer
 ;   out:      dst[id_out[i]] = OUT[idx][i] for every in-range id;

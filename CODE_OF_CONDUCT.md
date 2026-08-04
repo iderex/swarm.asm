@@ -60,7 +60,7 @@ an appointed representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainer, **@iderex**, through GitHub — either as a direct
+reported to the maintainer, **@iderex**, through GitHub - either as a direct
 message or, for reports that are also security-sensitive, via the private
 channel described in [SECURITY.md](SECURITY.md). All complaints will be
 reviewed and investigated promptly and fairly.

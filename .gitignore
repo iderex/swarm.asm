@@ -1,7 +1,7 @@
-# Build output — everything under build/ is reproducible from src/ via build.ps1.
+# Build output - everything under build/ is reproducible from src/ via build.ps1.
 build/
 
-# Bootstrapped toolchain — tools/get-fasm.ps1 re-creates it deterministically
+# Bootstrapped toolchain - tools/get-fasm.ps1 re-creates it deterministically
 # (SHA-256-pinned download); the binaries never enter history.
 tools/fasm/
 
