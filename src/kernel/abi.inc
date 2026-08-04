@@ -71,6 +71,15 @@ ARENA_MAGIC = 0x004D525753             ; 'SWRM\0\0\0' little-endian tag
 CPU_AVX2   = 1                          ; swarm_cpu_paths bit0
 CPU_AVX512 = 2                          ; swarm_cpu_paths bit1
 
+; SIMD path ids - the values SP_FORCE_PATH accepts and AH_PATH stores. A
+; DENSE ID, not a bit mask: PATH_AVX2 and PATH_AVX512 collide numerically with
+; the CPU_AVX2 / CPU_AVX512 support bits above and mean something else, so the
+; two namespaces are spelled apart at every use site.
+PATH_AUTO   = 0                         ; resolve against the CPU at init
+PATH_AVX2   = 1
+PATH_AVX512 = 2
+PATH_SCALAR = 3                         ; always available: the reference path
+
 ; swarm_init return codes: 0 success, else a small negative i32. All three
 ; failures are detected before the first arena write (fail-closed: a rejected
 ; init leaves the arena untouched).
