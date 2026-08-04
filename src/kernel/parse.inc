@@ -263,7 +263,11 @@ parse_preset_core:
         movss   [rsp+PPF_STAGING+SP_MATRIX+rax*4], xmm0
         inc     r9d
         push    r9
-        lea     rcx, [rsp+8+PPF_LINE_P]
+        lea     rcx, [rsp+8+PPF_LINE_P] ; +8: the push r9 above is still live, so
+                                        ;   the frame slot sits one qword higher
+                                        ;   than the plain [rsp+PPF_LINE_P] the
+                                        ;   unpushed sites use. Add or remove a
+                                        ;   push around this and the +8 moves.
         call    pp_next_token
         pop     r9
         mov     r10, rax

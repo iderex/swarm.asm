@@ -3,7 +3,7 @@
 ; This is the scalar reference path: one particle, one neighbour at a time, in
 ; the exact operation order of the C# oracle (no FMA). Each op is IEEE-exact,
 ; so the two agree bit-for-bit EXCEPT where the pinned FTZ/DAZ MXCSR (decision
-; 2) flushes a denormal the .NET oracle would keep - a &lt;=~1e-38 divergence the
+; 2) flushes a denormal the .NET oracle would keep - a <=~1e-38 divergence the
 ; oracle test absorbs at its epsilon tier (1e-5 positions / 1e-4 velocities),
 ; never a bit-exact promise across the two runtimes. The AVX2 gather path is a
 ; separate code path added later, validated against this anchor within epsilon
