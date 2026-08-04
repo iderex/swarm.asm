@@ -5,7 +5,7 @@ namespace Swarm.Tests;
 
 /// <summary>
 /// 1:1 mirror of the native SwarmParams seam struct (src/kernel/abi.inc):
-/// sequential, Pack=4, 304 bytes. Pack=4 is deliberate — it places the u64
+/// sequential, Pack=4, 304 bytes. Pack=4 is deliberate - it places the u64
 /// seed at offset 12, matching the asm layout exactly; the conformance test
 /// asserts the marshaled size so drift fails loudly.
 /// </summary>

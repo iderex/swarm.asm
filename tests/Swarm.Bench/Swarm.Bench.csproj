@@ -4,7 +4,7 @@
     Force-kernel micro-benchmark. Deliberately dependency-free: it drives the
     native kernel through the SAME in-process P/Invoke path the test harness
     uses (NativeLibrary.Load of the freshly assembled DLL), because a spawned
-    benchmark host — BenchmarkDotNet's model — is a fresh unsigned PE that
+    benchmark host - BenchmarkDotNet's model - is a fresh unsigned PE that
     Device Guard / Smart App Control blocks on the dev machine (0x800711C7),
     the same reason the tests run under the trusted dotnet host via MTP. A
     hand-rolled min-of-rounds Stopwatch loop needs no external package, no lock

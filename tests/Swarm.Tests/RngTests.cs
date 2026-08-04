@@ -15,7 +15,7 @@ public sealed class RngTests
     [DllImport("swarm.kernel.dll", CallingConvention = CallingConvention.StdCall)]
     private static extern void swarm_rng_fill(ulong seed, [Out] ulong[] outBuffer, uint count);
 
-    /// <summary>The reference splitmix64 — the exact algorithm the asm claims
+    /// <summary>The reference splitmix64 - the exact algorithm the asm claims
     /// to implement (constants and shifts per rng.inc).</summary>
     private static ulong[] ReferenceStream(ulong seed, int count)
     {
@@ -53,7 +53,7 @@ public sealed class RngTests
     {
         _ = NativeKernel.Handle;
 
-        // A sentinel-filled buffer must come back untouched when count is 0 —
+        // A sentinel-filled buffer must come back untouched when count is 0 -
         // the fill loop's zero-count guard, exercised from the boundary.
         var buffer = new ulong[4];
         Array.Fill(buffer, 0xDEAD_BEEF_DEAD_BEEFUL);

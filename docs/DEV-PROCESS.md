@@ -1,6 +1,6 @@
 # Development process
 
-The engineering discipline behind every change in this repository — how a
+The engineering discipline behind every change in this repository - how a
 single item of work travels from an idea to a merged commit. swarm.asm is a
 hand-written x64 assembly engine: correctness and measured performance come
 before features, and every change earns its merge through the same gated
@@ -45,20 +45,20 @@ criterion; the item does not advance until it is met.
 | 6   | **Merge**              | A merge commit on `main`; the work branch deleted                                                                     | Every finding dispositioned; final sign-off given                                                                            |
 
 The loop is the same whether the change is one instruction or one kernel
-slice — the cost of a phase scales with the change, the _existence_ of the
+slice - the cost of a phase scales with the change, the _existence_ of the
 phase does not.
 
 ## Phase 3 in detail: the adversarial review
 
 Any change touching the kernel math, the internal ABI/register contracts, the
 platform boundary, input parsing, or the build tooling passes a
-refute-by-default review before merge: four lenses — **correctness**,
-**performance**, **robustness**, and **integration** — each read the full
+refute-by-default review before merge: four lenses - **correctness**,
+**performance**, **robustness**, and **integration** - each read the full
 touched files, not just the diff, plus a fifth pass focused on the
 SIMD/assembly domain whenever kernel or ABI code is changed. Each reviewer
 returns free text ending in an explicit verdict; the burden is on the change
 to survive review, not on the reviewer to find fault. Runtime behavior is
-verified **empirically** — a failing test, a probe, a measurement — never
+verified **empirically** - a failing test, a probe, a measurement - never
 accepted from authoritative-sounding reasoning alone. Every real finding is
 fixed in code or declined with a written reason on the PR; nothing is left
 unaddressed.
@@ -73,26 +73,26 @@ locked out of the tree.
 Structural and safety invariants are enforced as code, not convention. They
 live in the test harness and run on every PR. The rule: **every new
 structural property locks in a conformance fitness test in the same PR that
-establishes it** — the suite only ever grows, a one-way ratchet against
+establishes it** - the suite only ever grows, a one-way ratchet against
 regression. Examples already in place: the import allowlist
 (`kernel32`/`user32`/`gdi32`, no CRT), kernel purity (no API calls or I/O in
 the simulation kernel), register-contract-header presence and truthfulness,
 and the binary size budget.
 
 When a review finds a class of defect, the fix includes a fitness test that
-makes that class impossible to reintroduce — an error becomes a mandatory,
+makes that class impossible to reintroduce - an error becomes a mandatory,
 durable process adaptation, not a one-off patch.
 
 ## Governance and escalation
 
 - **Branching:** work branches off freshly-fetched `main`; PR-only;
   merge-commit; the branch is deleted after merge.
-- **Releases and tags are human-gated** — see
+- **Releases and tags are human-gated** - see
   [RELEASE-POLICY.md](RELEASE-POLICY.md). The pipeline never tags or
   publishes on its own.
 - **Documentation is part of every change.** A change that alters behavior,
   configuration, or measured performance updates the affected docs in the
   same PR.
-- **Every item in a PR is explained** — a code comment where non-obvious, a
+- **Every item in a PR is explained** - a code comment where non-obvious, a
   full PR body covering every change, and a fix-or-reasoned-decline reply on
   every review comment. Nothing lands unexplained.

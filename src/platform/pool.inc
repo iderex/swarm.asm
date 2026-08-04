@@ -1,10 +1,10 @@
-; pool.inc — the M3 persistent worker pool (platform layer; docs/MASTERPLAN.md
+; pool.inc - the M3 persistent worker pool (platform layer; docs/MASTERPLAN.md
 ; decision 6, issue #68). Parallelises the force+integrate pass across cores;
 ; the build (counting sort) stays serial in v1.
 ;
 ; Why this is platform, not kernel: the pool is pure OS orchestration
 ; (CreateThread / auto-reset events) and holds mutable state (handles, ranges).
-; The KERNEL never sees a thread — each worker crosses the thread-entry seam and
+; The KERNEL never sees a thread - each worker crosses the thread-entry seam and
 ; then calls the pure per-range pass `swarm_pass(arena, first, last)` semantics
 ; (here `pool_pass`). Kernel purity (no API calls, no writable state in
 ; src/kernel/) is preserved: this file lives in src/platform/ and is excluded
@@ -14,26 +14,26 @@
 ; OUT[i] = f(i, IN, cell_start, params): IN and cell_start are frozen by the
 ; serial build before any worker is signalled, ranges are disjoint and cover
 ; [0,n) exactly, so the OUT bank is bit-identical to the serial pass for ANY
-; thread count, partition, and completion order — the machine-checked form of
+; thread count, partition, and completion order - the machine-checked form of
 ; GridPassSplitInvariance. The one landmine is MXCSR: it is PER THREAD, so a
 ; worker running with the default control word would keep the denormals the
 ; pinned main thread flushes (FTZ/DAZ) and diverge. `pool_pass` is the seam
 ; wrapper over pass_core, so every worker pins its own MXCSR to 0x9FC0 and
-; vzerouppers exactly as the exports do — the per-thread determinism seam.
+; vzerouppers exactly as the exports do - the per-thread determinism seam.
 ;
 ; Distribution: STATIC even split, each range a multiple of 16 (16 consecutive
 ; f32 = one 64-byte line, so 16-aligned boundaries keep the seven disjoint OUT
-; arrays off shared cache lines — no false sharing). Self-scheduling over a
+; arrays off shared cache lines - no false sharing). Self-scheduling over a
 ; shared counter is the noted follow-up (the reference 5950X is homogeneous, so
 ; static-even has no imbalance to absorb and no lock xadd contention).
 ;
 ; Sync primitives are all genuinely kernel32 (CreateThread, CreateEventW,
 ; SetEvent, WaitForSingleObject, WaitForMultipleObjects, CloseHandle,
 ; GetLogicalProcessorInformation, GetSystemInfo). WaitOnAddress/WakeByAddress
-; are deliberately NOT used — they forward through API-MS-Win-Core-Synch-* and
+; are deliberately NOT used - they forward through API-MS-Win-Core-Synch-* and
 ; would break the exe import allowlist.
 ;
-; Reloc-safe by construction: every label reference is RIP-relative — code/data
+; Reloc-safe by construction: every label reference is RIP-relative - code/data
 ; addresses passed as values use `lea reg, [label]` and array indexing loads the
 ; base with `lea` first (an absolute `[label + idx*s]` disp32 cannot hold the
 ; DLL image base and would need a base relocation this image does not carry).
@@ -46,7 +46,7 @@ LPI_REL    = 8                         ; SYSTEM_LOGICAL_PROCESSOR_INFORMATION
 SI_NPROC   = 0x20                      ; SYSTEM_INFO.dwNumberOfProcessors offset
 
 ; ------------------------------------------------------------------
-; pool_pass — the thread-entry seam over pass_core (per-thread MXCSR pin +
+; pool_pass - the thread-entry seam over pass_core (per-thread MXCSR pin +
 ; Win64 nonvolatiles + 0-mod-32 kernel entry + vzeroupper). Both the main
 ; thread (as worker 0) and every worker thread run their sub-range through this
 ; single gate, so the per-thread FTZ/DAZ pin is impossible to miss.
@@ -59,7 +59,7 @@ SI_NPROC   = 0x20                      ; SYSTEM_INFO.dwNumberOfProcessors offset
 seam_wrap pool_pass, pass_core
 
 ; ------------------------------------------------------------------
-; pool_worker_thread — CreateThread entry for worker w (1..T-1).
+; pool_worker_thread - CreateThread entry for worker w (1..T-1).
 ;   in:       ecx = worker index w (the LPVOID thread parameter; low 32 bits)
 ;   out:      eax = 0 at exit
 ;   clobbers: Win64 volatiles; preserves rbx/rsi/rbp (the nonvolatiles it uses)
@@ -101,7 +101,7 @@ pool_worker_thread:
         ret
 
 ; ------------------------------------------------------------------
-; pool_partition — static even 16-aligned split of [0,n) across T workers.
+; pool_partition - static even 16-aligned split of [0,n) across T workers.
 ;   in:       ecx = n; reads [pool_nthreads] = T
 ;   out:      pool_first[w], pool_last[w] for w in 0..T-1: disjoint, covering
 ;             [0,n) exactly, interior boundaries multiples of 16, last[T-1] = n
@@ -109,7 +109,7 @@ pool_worker_thread:
 ;   MXCSR:    untouched (integer only)
 ; ------------------------------------------------------------------
 ; q = round_up_16(ceil(n/T)); first[w] = min(w*q, n); last[w] = min((w+1)*q, n).
-; T <= 64 and n <= 2^20, so w*q < 2^21 — the 32-bit multiply cannot overflow.
+; T <= 64 and n <= 2^20, so w*q < 2^21 - the 32-bit multiply cannot overflow.
 pool_partition:
         push    rbx
         mov     r8d, ecx               ; n
@@ -149,7 +149,7 @@ pool_partition:
         ret
 
 ; ------------------------------------------------------------------
-; pool_fanout — one parallel pass over [0,n): wake workers, run worker 0's
+; pool_fanout - one parallel pass over [0,n): wake workers, run worker 0's
 ; range on this thread, join. No build, no frame advance (the caller owns
 ; those). Assumes IN and cell_start are already frozen by the serial build.
 ;   in:       rcx = arena
@@ -205,7 +205,7 @@ pool_fanout:
         ret
 
 ; ------------------------------------------------------------------
-; pool_pass_all — one parallel pass over [0,n), no build/frame advance. The
+; pool_pass_all - one parallel pass over [0,n), no build/frame advance. The
 ; benchmark seam: repeatable over a frozen IN bank, mirroring swarm_pass.
 ;   in:       rcx = arena
 ;   out:      OUT[0..n) integrated
@@ -216,7 +216,7 @@ pool_pass_all:
         jmp     pool_fanout
 
 ; ------------------------------------------------------------------
-; pool_step — the threaded frame loop: serial build, parallel pass, advance.
+; pool_step - the threaded frame loop: serial build, parallel pass, advance.
 ;   in:       rcx = arena, edx = n_steps
 ;   out:      the world advanced n_steps; AH_FRAME += n_steps. Bit-identical to
 ;             swarm_step for any T (build is serial; the pass is split-invariant)
@@ -249,7 +249,7 @@ pool_step:
         ret
 
 ; ------------------------------------------------------------------
-; pool_detect_cores — physical core count, falling back to the logical count.
+; pool_detect_cores - physical core count, falling back to the logical count.
 ;   in:       nothing
 ;   out:      eax = core count clamped to [1, POOL_MAX]
 ;   clobbers: Win64 volatiles; preserves rbx/rsi/rdi (and rbp)
@@ -318,7 +318,7 @@ pool_detect_cores:
         ret
 
 ; ------------------------------------------------------------------
-; pool_init — create the persistent worker pool once (main is worker 0).
+; pool_init - create the persistent worker pool once (main is worker 0).
 ;   in:       ecx = requested worker count (0 = auto: physical cores)
 ;   out:      eax = actual worker count T (>= 1), or -1 on failure
 ;   clobbers: Win64 volatiles; preserves rbx/rsi/rdi/r12-r14 (and rbp)
@@ -414,7 +414,7 @@ pool_init:
         ret
 
 ; ------------------------------------------------------------------
-; pool_shutdown — signal all workers to exit, join them, close every handle.
+; pool_shutdown - signal all workers to exit, join them, close every handle.
 ;   in:       nothing
 ;   out:      the pool is empty (pool_nthreads = 0). No-op when none exists;
 ;             safe on a partially-created pool (null handle slots are skipped)
@@ -500,7 +500,7 @@ pool_shutdown:
         ret
 
 ; ------------------------------------------------------------------
-; pool_storage — the pool's mutable platform state. Emitted by each shell inside
+; pool_storage - the pool's mutable platform state. Emitted by each shell inside
 ; its own writable data section (kernel purity is untouched: this is platform
 ; state, never the arena and never in src/kernel/). Handle/range arrays are
 ; indexed by worker id w (slot 0 is the main thread and is unused for events).

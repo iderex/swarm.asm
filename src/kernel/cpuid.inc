@@ -1,13 +1,13 @@
-; cpuid.inc — SIMD path detection (docs/MASTERPLAN.md, decision 7).
+; cpuid.inc - SIMD path detection (docs/MASTERPLAN.md, decision 7).
 ;
 ; Detection happens once (at swarm_init) and the result is cached in the arena
 ; header; nothing ever falls through to an unsupported instruction mid-run.
 ; AVX needs both the CPU feature bits AND OS support for the YMM/ZMM state
-; (OSXSAVE + XCR0), so the OS-enable check via xgetbv is mandatory — the CPU
+; (OSXSAVE + XCR0), so the OS-enable check via xgetbv is mandatory - the CPU
 ; feature flag alone is not sufficient.
 
 ; ------------------------------------------------------------------
-; cpu_paths_core — which SIMD code paths this CPU + OS support.
+; cpu_paths_core - which SIMD code paths this CPU + OS support.
 ;   in:       nothing
 ;   out:      eax = CPU_AVX2 (bit0) set when AVX2+FMA usable;
 ;             | CPU_AVX512 (bit1) set when AVX-512 F+DQ+VL usable
