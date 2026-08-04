@@ -18,8 +18,9 @@ PLOT_BG = 0x001A1A22                     ; background (matches the exe clear)
 ; plot_core - raster the state into a w*h BGRA buffer.
 ;   in:       rcx = arena, rdx = bgra (w*h u32), r8d = w, r9d = h
 ;   out:      bgra cleared to PLOT_BG, then one coloured pixel per particle
-;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rbx, rsi, rdi, r12-r15,
-;             xmm0-4, flags (kernel tier; the seam saved them)
+;   clobbers: rax, rcx, rdx, r10, r11, rbx, rsi, rdi, r12-r15, xmm0-1,
+;             xmm3-4, flags (kernel tier; the seam saved them). r8d/r9d stay
+;             the w/h inputs and are read only; xmm2 is never touched.
 ;   MXCSR:    assumes the pinned seam MXCSR (deterministic x*w)
 ; ------------------------------------------------------------------
 plot_core:

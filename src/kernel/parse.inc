@@ -369,7 +369,11 @@ pp_fetch_content_line:
 ; pp_line_must_end - assert the current line slice has no further token.
 ;   in:       implicit: the caller's frame at rsp+8 (parse_preset_core only)
 ;   out:      eax = 0 line exhausted, eax = 1 surplus token present
-;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags
+;   clobbers: rax, rcx, rdx, r8, r9, flags. r10 and r11 are untouched: the
+;             body is the lea into rcx, the call, and the setnz, and
+;             pp_next_token writes neither. No caller depends on that today -
+;             each one reloads the slice - so it is a measurement rather than
+;             a promise anything consumes.
 ;   MXCSR:    untouched
 ; ------------------------------------------------------------------
 pp_line_must_end:
@@ -522,7 +526,8 @@ pp_match_key:
 ;             allowed (seed), else 0
 ;   out:      eax = 0 and rdx = value, or eax = PERR_NUM_SYNTAX /
 ;             PERR_NUM_OVERFLOW (rdx undefined)
-;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags
+;   clobbers: rax, rcx, rdx, r9, r10, r11, flags; r8d is the hex-allowed input
+;             flag, read once and never written
 ;   MXCSR:    untouched
 ; ------------------------------------------------------------------
 pp_parse_u64:
@@ -696,7 +701,8 @@ pp_parse_f32:
 ; pp_check_range - bounds-check an f32 against a table row.
 ;   in:       rcx = table row (KR_LO/KR_HI/KR_FLAGS used), xmm0 = value
 ;   out:      eax = 0 in range, else PERR_RANGE; xmm0 preserved
-;   clobbers: rax, rcx, rdx, xmm1, flags
+;   clobbers: rax, rdx, xmm1, flags; rcx is only the read base into the table
+;             row (KR_FLAGS/KR_LO/KR_HI) and is never written
 ;   MXCSR:    assumes the pinned seam MXCSR (DAZ: a denormal value
 ;             compares as zero and falls to whichever side zero is on -
 ;             fail-closed for every open-at-zero bound)
