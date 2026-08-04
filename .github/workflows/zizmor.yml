@@ -1,6 +1,6 @@
 # Static analysis of the GitHub Actions supply-chain config (zizmor): the
-# workflow YAML and — because the runs below collect over `.`, not over
-# .github/workflows/ alone — the Dependabot config too; zizmor's
+# workflow YAML and - because the runs below collect over `.`, not over
+# .github/workflows/ alone - the Dependabot config too; zizmor's
 # dependabot-cooldown audit is what forced .github/dependabot.yml's cooldown
 # blocks. The workflow YAML is itself part of the supply-chain surface this
 # repo pins against (SECURITY.md: the toolchain bootstrap and all CI actions

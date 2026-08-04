@@ -7,13 +7,13 @@ using System.Runtime.InteropServices;
 // point regardless of the dev machine's locale, so the table is reproducible.
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 
-// swarm.asm — force-kernel micro-benchmark (see docs/BENCHMARKS.md).
+// swarm.asm - force-kernel micro-benchmark (see docs/BENCHMARKS.md).
 //
 // Measures one force+integrate pass (swarm_pass over the whole population) for
 // the scalar reference path and the AVX2 gather path, across a range of
 // particle counts. swarm_pass is the O(n^2) hot loop the SIMD path
-// accelerates; timing it in isolation — build once, then repeat the pass over
-// the frozen IN bank — keeps the measured work identical every iteration and
+// accelerates; timing it in isolation - build once, then repeat the pass over
+// the frozen IN bank - keeps the measured work identical every iteration and
 // free of the bank-swap/copy cost that a full swarm_step would fold in.
 //
 // The report is the AVX2-vs-scalar speedup and the interaction throughput; the
@@ -58,12 +58,12 @@ foreach (int n in ns)
         $"{n,9} {scalarMs,12:0.000} {avxCol,12} {speed,9} {sMp,13:0.0} {aMpCol,12}");
 }
 Console.WriteLine();
-Console.WriteLine("ms = best (min) per-pass time over 9 rounds; per-machine — record in docs/BENCHMARKS.md.");
+Console.WriteLine("ms = best (min) per-pass time over 9 rounds; per-machine - record in docs/BENCHMARKS.md.");
 
 // --- M2 grid: build (counting sort) + 3x3 neighbourhood pass at scale -------
 // The grid replaces the O(n^2) sweep with O(n*k). g = the largest power of two
 // with 1/g >= rmax (clamped [4,512]); a small rmax gives a large g, so cells
-// are sparse and k (neighbours per particle) is small — that is the regime the
+// are sparse and k (neighbours per particle) is small - that is the regime the
 // grid wins in. We time the AVX2 grid frame = build (once, OUT frozen) + the
 // neighbourhood pass (build once, then repeat over the frozen sorted IN), so
 // the work is identical every round. The brute-force frame at these counts is
@@ -152,7 +152,7 @@ if (haveAvx2)
 //
 // ns/candidate is the clock-free measured primitive; cycles are derived at the
 // recorded single-core sustained-AVX2 boost clock (per-machine, like every other
-// number here) — edit RefGhz to your host.
+// number here) - edit RefGhz to your host.
 //
 // The throughput-vs-latency verdict rests on the DEPENDENCY STRUCTURE, not the
 // n-sweep. The only loop-carried dependency across force groups is the fx/fy
@@ -221,7 +221,7 @@ return 0;
 
 // Best-of-rounds per-pass time in milliseconds. The minimum, not the mean:
 // a force pass is a fixed amount of arithmetic, so the fastest observed round
-// is the one least perturbed by scheduling and turbo transitions — the honest
+// is the one least perturbed by scheduling and turbo transitions - the honest
 // lower bound on the kernel's cost.
 static unsafe double TimePass(uint n, uint forcePath)
 {
@@ -520,7 +520,7 @@ internal static unsafe class Native
 }
 
 // 1:1 mirror of the native SwarmParams seam struct (src/kernel/abi.inc):
-// sequential, Pack=4, 304 bytes — Pack=4 places the u64 seed at offset 12,
+// sequential, Pack=4, 304 bytes - Pack=4 places the u64 seed at offset 12,
 // matching the asm. Kept identical to the copy in Swarm.Tests on purpose;
 // this project stays standalone (no cross-reference to the MTP test assembly).
 [StructLayout(LayoutKind.Sequential, Pack = 4)]

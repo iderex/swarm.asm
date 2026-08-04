@@ -8,13 +8,13 @@
 
 SWARM_ABI_VERSION = 1
 
-; SwarmParams — the seam struct, mirrored 1:1 in C# (sequential, Pack=4).
+; SwarmParams - the seam struct, mirrored 1:1 in C# (sequential, Pack=4).
 ; 304 bytes total; matrix rows beyond species_n stay zero and are never read.
 
 SP_VERSION     = 0                      ; u32, must be 1
 SP_N           = 4                      ; u32, [1, 2^20]
 SP_SPECIES_N   = 8                      ; u32, [1, 8]
-SP_SEED        = 12                     ; u64 (unaligned by Pack=4 — by design)
+SP_SEED        = 12                     ; u64 (unaligned by Pack=4 - by design)
 SP_RMAX        = 20                     ; f32, (0, 0.25]
 SP_BETA        = 24                     ; f32, [0.05, 0.95]
 SP_DT          = 28                     ; f32, (0, 0.1]
@@ -33,7 +33,7 @@ SP_FLAGS_VALID = FLAG_GRID               ; mask of accepted flag bits (fail-clos
 ; swarm_parse_preset error encoding: success = 0; failure =
 ;   (i32)(0x80000000 or (code shl 20) or min(line, 0xFFFFF)).
 ; Bit 30 is reserved (always 0); codes are extendable, so tests pin exact
-; codes only for crafted inputs — fuzz asserts the invariants alone.
+; codes only for crafted inputs - fuzz asserts the invariants alone.
 
 PERR_VERSION      = 1                   ; first non-blank line is not: swarm 1
 PERR_UNKNOWN_KEY  = 2                   ; token matches no key, nor matrix/end

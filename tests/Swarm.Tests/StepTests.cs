@@ -7,7 +7,7 @@ namespace Swarm.Tests;
 /// The force+integrate kernel: swarm_build / swarm_pass / swarm_step. These
 /// tests pin the scalar path against the C# oracle (the masterplan force
 /// model) within the epsilon tier, the build bank copy, the frame counter,
-/// determinism, and — the threading-determinism seam — pass-split invariance
+/// determinism, and - the threading-determinism seam - pass-split invariance
 /// (pass(0,n) == pass(0,k);pass(k,n)).
 /// </summary>
 public sealed unsafe class StepTests
@@ -143,7 +143,7 @@ public sealed unsafe class StepTests
     public void Avx2AndScalarAgree()
     {
         // Both paths approximate the same oracle, so they must agree with each
-        // other within ~2x the single-path epsilon — the per-code-path check.
+        // other within ~2x the single-path epsilon - the per-code-path check.
         _ = NativeKernel.Handle;
         const uint n = 300, species = 6;
         var (pAvx, _) = Make(n, species, 0xF00D, 1);
@@ -248,7 +248,7 @@ public sealed unsafe class StepTests
     public void PassSplitInvariance(uint n, uint species, ulong seed, uint k)
     {
         // The fused pass is a pure map (reads frozen IN, writes disjoint OUT[i]),
-        // so pass(0,n) must equal pass(0,k) then pass(k,n) bit-for-bit — the
+        // so pass(0,n) must equal pass(0,k) then pass(k,n) bit-for-bit - the
         // property that makes the M3 threading deterministic, testable from M1.
         _ = NativeKernel.Handle;
         var (p, _) = Make(n, species, seed);

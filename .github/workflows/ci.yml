@@ -1,4 +1,4 @@
-# CI — fast, fail-closed pull-request gate.
+# CI - fast, fail-closed pull-request gate.
 #
 # Runs only on pull requests to `main`, so the mainline scaffolding push does
 # not trigger it. Every PR must assemble, stay inside the size budget,
@@ -36,7 +36,7 @@ jobs:
       contents: read
     env:
       # CI has no application-control policy, so the native DLL must actually
-      # load — the ABI conformance test is required here, never skipped.
+      # load - the ABI conformance test is required here, never skipped.
       SWARM_REQUIRE_NATIVE: "1"
     steps:
       - name: Check out the source
@@ -82,7 +82,7 @@ jobs:
         run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
 
       - name: Build the micro-bench (compile-check only)
-        # The benchmark is run by hand — timing numbers never gate CI (flake).
+        # The benchmark is run by hand - timing numbers never gate CI (flake).
         # This step only keeps it compiling against the kernel P/Invoke surface
         # so it cannot rot between the manual runs recorded in docs/BENCHMARKS.md.
         run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo

@@ -1,4 +1,4 @@
-; rng.inc — splitmix64, the engine's only RNG (docs/MASTERPLAN.md, decision 8).
+; rng.inc - splitmix64, the engine's only RNG (docs/MASTERPLAN.md, decision 8).
 ;
 ; One u64 of state, ~10 instructions, no warm-up. The macro form inlines into
 ; init loops (slice 3); rng_fill_core exposes the raw stream so the harness
@@ -9,7 +9,7 @@ RNG_GAMMA = 0x9E3779B97F4A7C15
 RNG_MIX1  = 0xBF58476D1CE4E5B9
 RNG_MIX2  = 0x94D049BB133111EB
 
-; rng_next — advance the stream one draw.
+; rng_next - advance the stream one draw.
 ;   state: register holding the current state (updated in place)
 ;   value: register receiving the output draw
 ;   tmp:   scratch register (clobbered)
@@ -34,7 +34,7 @@ macro rng_next state, value, tmp {
 }
 
 ; ------------------------------------------------------------------
-; rng_fill_core — write the first count draws of the seed's stream.
+; rng_fill_core - write the first count draws of the seed's stream.
 ;   in:       rcx = seed, rdx = out (u64*, caller-owned, non-null when
 ;             count > 0), r8d = count
 ;   out:      out[0..count) filled; count = 0 writes nothing

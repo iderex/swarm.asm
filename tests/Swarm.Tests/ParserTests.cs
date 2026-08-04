@@ -7,7 +7,7 @@ namespace Swarm.Tests;
 /// <summary>
 /// The preset parser is the engine's fail-closed input boundary (masterplan
 /// decision 10): strict grammar, every key exactly once, pinned ranges,
-/// two-phase commit — any error leaves the output byte-untouched and returns
+/// two-phase commit - any error leaves the output byte-untouched and returns
 /// a packed negative code carrying the offending line. These tests pin the
 /// grammar, the error encoding, the pinned decimal-to-f32 conversion, and the
 /// never-crash / never-partially-apply fuzz property.

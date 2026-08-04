@@ -29,7 +29,7 @@
 - [ ] Review record: per lens, its verdict and its findings, with **CONFIRMED
       __ / PLAUSIBLE __** counts as raised (a finding is CONFIRMED only if a
       reproduction was produced). Every finding of either kind carries a
-      disposition — FIX, a reasoned DECLINE, or DEFER as its own issue.
+      disposition - FIX, a reasoned DECLINE, or DEFER as its own issue.
 
 ## Performance checklist
 
@@ -53,11 +53,11 @@ Fill in for any change on the hot path.
 
 Paste the local gate results (or confirm CI is green).
 
-- [ ] `build.ps1` — assembles clean.
-- [ ] Smoke-run — exit code 0.
-- [ ] `dotnet test` — green (reference equivalence, determinism goldens,
+- [ ] `build.ps1` - assembles clean.
+- [ ] Smoke-run - exit code 0.
+- [ ] `dotnet test` - green (reference equivalence, determinism goldens,
       conformance tests).
-- [ ] Prettier (`**/*.{md,yml,yaml}`) — clean.
+- [ ] Prettier (`**/*.{md,yml,yaml}`) - clean.
 - [ ] Docs synced: MASTERPLAN / README / BENCHMARKS reflect any behavior,
       config, or performance change.
 

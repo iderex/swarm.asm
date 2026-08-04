@@ -60,7 +60,7 @@ public sealed class ConformanceTests
     {
         // Locked-mode restore only enforces against a lock file that exists,
         // and the implicit restore silently REGENERATES a missing one before
-        // any test runs (empirically verified) — so probing the disk cannot
+        // any test runs (empirically verified) - so probing the disk cannot
         // pin this invariant. The git index is the state CI checked out: a
         // PR that drops the lock file fails here even after restore has
         // self-healed the working tree.
@@ -101,7 +101,7 @@ public sealed class ConformanceTests
     }
 
     // The ordered field list of `struct SwarmParams` plus the StructLayout Pack
-    // and the Matrix64 InlineArray size — everything that fixes the marshaled
+    // and the Matrix64 InlineArray size - everything that fixes the marshaled
     // byte layout. Whitespace- and comment-insensitive.
     private static string SeamStructSignature(string source)
     {

@@ -1,4 +1,4 @@
-; plot.inc — rasterize the current state into a BGRA framebuffer (decision 9).
+; plot.inc - rasterize the current state into a BGRA framebuffer (decision 9).
 ;
 ; Pure raster, golden-testable: clear to the background, then plot each of the
 ; first n particles as a single per-species coloured pixel. Reads bank OUT
@@ -15,7 +15,7 @@
 PLOT_BG = 0x001A1A22                     ; background (matches the exe clear)
 
 ; ------------------------------------------------------------------
-; plot_core — raster the state into a w*h BGRA buffer.
+; plot_core - raster the state into a w*h BGRA buffer.
 ;   in:       rcx = arena, rdx = bgra (w*h u32), r8d = w, r9d = h
 ;   out:      bgra cleared to PLOT_BG, then one coloured pixel per particle
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rbx, rsi, rdi, r12-r15,

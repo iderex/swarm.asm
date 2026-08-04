@@ -1,4 +1,4 @@
-; grid.inc — the uniform-grid build (docs/MASTERPLAN.md, decision 3).
+; grid.inc - the uniform-grid build (docs/MASTERPLAN.md, decision 3).
 ;
 ; The integrate pass writes each particle's cell id (grid coordinate) into the
 ; OUT cell-id array; build_core, in grid mode, calls grid_sort to reorder the
@@ -8,7 +8,7 @@
 ; the seed binning, which is IEEE convert/multiply under the pinned MXCSR.
 
 ; ------------------------------------------------------------------
-; seed_cellids — cell id for the seeded reals [0, n), so the first grid build
+; seed_cellids - cell id for the seeded reals [0, n), so the first grid build
 ; sorts by valid keys. cell = cy*g + cx, cx = int(x*g) & (g-1) (decision 3).
 ;   in:       rcx = arena (OUT seeded, AH_G cached)
 ;   out:      cellid[0..n) written; cellid pads (>= n) are left uninitialized
@@ -56,7 +56,7 @@ seed_cellids:
         ret
 
 ; ------------------------------------------------------------------
-; grid_sort — reorder the population cell-sorted, IN[0..n) = the n reals of
+; grid_sort - reorder the population cell-sorted, IN[0..n) = the n reals of
 ; OUT by ascending cell id (stable). build_core has ALREADY copied OUT -> IN
 ; (all padded_n, so the pads carry through); grid_sort overwrites only the
 ; IN[0..n) reals from OUT, using a serial stable counting sort.
@@ -178,7 +178,7 @@ NR_ROWCNT = 16                           ; remaining rows to emit
 NR_LOCALS = 32                           ; 20 used, rounded up
 
 ; ------------------------------------------------------------------
-; neighbour_runs — enumerate the 3x3-neighbourhood runs of cell (cx, cy) into
+; neighbour_runs - enumerate the 3x3-neighbourhood runs of cell (cx, cy) into
 ; buf (docs/MASTERPLAN.md, decision 3). For each of the three rows
 ; ry = (cy-1, cy, cy+1) & (g-1) it appends the contiguous IN run(s) spanning
 ; columns (cx-1, cx, cx+1) & (g-1). Cells inside a row are consecutive cell ids

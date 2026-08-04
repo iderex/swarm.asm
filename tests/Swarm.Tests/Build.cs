@@ -4,7 +4,7 @@ namespace Swarm.Tests;
 
 /// <summary>
 /// Locates the repo root and the build artifacts, assembling them exactly once
-/// per test run — unconditionally, so the tested binaries always match the
+/// per test run - unconditionally, so the tested binaries always match the
 /// current sources and are exactly the ones <c>build.ps1</c> produces. The
 /// harness never assembles differently from the shipping build.
 /// </summary>
