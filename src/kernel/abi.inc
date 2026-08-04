@@ -20,7 +20,7 @@ SP_BETA        = 24                     ; f32, [0.05, 0.95]
 SP_DT          = 28                     ; f32, (0, 0.1]
 SP_FRICTION    = 32                     ; f32, [0, 1]
 SP_FORCE_SCALE = 36                     ; f32, (0, 100]
-SP_FORCE_PATH  = 40                     ; u32, 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar
+SP_FORCE_PATH  = 40                     ; u32, a PATH_* id (see below)
 SP_FLAGS       = 44                     ; u32, only FLAG_* bits may be set
 SP_MATRIX      = 48                     ; f32[8][8], row-major, each [-1, 1]
 SP_SIZE        = 304
@@ -58,7 +58,7 @@ PERR_EXTRA_TOKEN  = 12                  ; surplus token on a structural line
 
 AH_MAGIC   = 0                          ; u64, 'SWRM' arena stamp
 AH_ABI     = 8                          ; u32, = SWARM_ABI_VERSION
-AH_PATH    = 12                         ; u32, selected code path (1 AVX2 / 2 AVX-512 / 3 scalar)
+AH_PATH    = 12                         ; u32, the resolved PATH_* id
 AH_FRAME   = 16                         ; u64, step counter (0 at init)
 AH_RNG     = 24                         ; u64, live splitmix64 state
 AH_PADDED  = 32                         ; u32, cached padded_n
@@ -71,14 +71,20 @@ ARENA_MAGIC = 0x004D525753             ; 'SWRM\0\0\0' little-endian tag
 CPU_AVX2   = 1                          ; swarm_cpu_paths bit0
 CPU_AVX512 = 2                          ; swarm_cpu_paths bit1
 
-; SIMD path ids - the values SP_FORCE_PATH accepts and AH_PATH stores. A
-; DENSE ID, not a bit mask: PATH_AVX2 and PATH_AVX512 collide numerically with
-; the CPU_AVX2 / CPU_AVX512 support bits above and mean something else, so the
-; two namespaces are spelled apart at every use site.
+; SIMD path ids - the values SP_FORCE_PATH accepts. AH_PATH stores the
+; RESOLVED id, so it never holds PATH_AUTO: init either resolves 0 to AVX-512
+; or AVX2 against the CPU, or fails with IERR_PATH. A DENSE ID, not a bit
+; mask: PATH_AVX2 and PATH_AVX512 collide numerically with the CPU_AVX2 /
+; CPU_AVX512 support bits above and mean something else entirely. Every
+; comparison against an id spells the id, so the collision cannot be read as
+; agreement; PATH_AUTO is the one exception, detected by `test r10d, r10d`
+; because naming it there would assemble to a different instruction.
 PATH_AUTO   = 0                         ; resolve against the CPU at init
 PATH_AVX2   = 1
 PATH_AVX512 = 2
-PATH_SCALAR = 3                         ; always available: the reference path
+PATH_SCALAR = 3                         ; the reference path: needs no CPU
+                                        ;   feature beyond the image's own
+                                        ;   AVX1 baseline (the seam's vmovaps)
 
 ; swarm_init return codes: 0 success, else a small negative i32. All three
 ; failures are detected before the first arena write (fail-closed: a rejected
