@@ -560,7 +560,8 @@ section '.data' data readable writeable
   htimer          dq ?                     ; high-resolution waitable timer
 
   align 16
-  mxcsr_pin   dd 0x9FC0                    ; decision 2: FTZ+DAZ, all masked, RN
+  mxcsr_pin   dd SEAM_MXCSR                ; decision 2: FTZ+DAZ, all masked, RN
+                                           ;   (one source of truth: seam.inc)
 
   ; Default preset: a SwarmParams (abi.inc SP_*), 304 bytes, Pack=4. A
   ; four-species world with a varied attraction matrix; rmax/dt/friction
