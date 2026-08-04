@@ -222,7 +222,7 @@ start:
 ;             form: the program token comes first, possibly quoted
 ;   out:      eax = 1 when a whitespace-delimited argument equals
 ;             "-smoke" exactly, else 0
-;   clobbers: rax, rcx, rdx, r8
+;   clobbers: rax, rcx, rdx, r8, flags
 ;   MXCSR:    untouched
 ;   note:     the program token is skipped so a "-smoke" inside the exe
 ;             path never triggers; never reads past the terminator (a
