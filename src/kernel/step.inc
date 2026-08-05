@@ -117,16 +117,21 @@ macro t_and d, s   { if TAIL_VEX
                        andps d, s
                      end if }
 
-; integrate_and_store - semi-implicit Euler + vmax clamp + torus wrap + write
-; OUT[i], shared by both code paths, and the OUT cell id for next frame's grid
-; build (M2). Consumes the accumulated force for particle i as SCALARS in
-; xmm6 (fx) / xmm7 (fy); xmm8/xmm9 hold xi/yi in their low lane; the KP_* const
-; cache is at [rsp] (incl. KP_G/KP_GM1/KP_GF); r12 = i; rbx = bank base,
-; r14 = stride. Clobbers xmm0-4, xmm10, r9, r10, and (via the wrap routine)
-; xmm1/3/4. vex=1 VEX-encodes the tail (issue #33): the emitted arithmetic is
-; identical, and the VEX.128 forms additionally zero the upper lanes of the
-; xmm0-4/xmm10 temporaries -- harmless, as none carry live ymm state past the
-; force loop (the persistent ymm6-15 are read but never written here).
+; integrate_and_store vex - semi-implicit Euler + vmax clamp + torus wrap +
+; write OUT[i], shared by both code paths, and the OUT cell id for next frame's
+; grid build (M2).
+;   in:       xmm6 = fx, xmm7 = fy (the accumulated force for particle i, as
+;             SCALARS), xmm8/xmm9 = xi/yi in their low lane, r12 = i,
+;             rbx = bank base, r14 = stride, and the KP_* const cache at [rsp]
+;             (incl. KP_G/KP_GM1/KP_GF)
+;   out:      OUT[i] velocity and position written, plus the OUT cell id
+;   clobbers: xmm0-4, xmm10, r9, r10, and (via the wrap routine it calls)
+;             xmm1/3/4
+;   note:     vex=1 VEX-encodes the tail (issue #33): the emitted arithmetic is
+;             identical, and the VEX.128 forms additionally zero the upper lanes
+;             of the xmm0-4/xmm10 temporaries - harmless, as none carry live ymm
+;             state past the force loop (the persistent ymm6-15 are read but
+;             never written here).
 macro integrate_and_store vex {
         TAIL_VEX = vex
         elem_addr r10, AR_VX_IN, r12    ; vx = clamp(vx*fric + fx*dt, +/-vmax)

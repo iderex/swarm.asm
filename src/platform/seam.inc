@@ -81,10 +81,21 @@ macro seam_leave {
 ; seam_wrap export, core - the standard shape every FP-seam export takes:
 ; seam_enter / call <core> / seam_leave, verbatim, nothing in between. Not an
 ; indirection that hides the seam - grep for "seam_wrap" finds every site, and
-; this macro IS the whole contract for each of them (its own register-contract
-; header, above, already covers what seam_enter/seam_leave do). A wrapper that
-; needs anything beyond "call the core" between enter and leave does not fit
-; this shape and stays hand-written with its own seam_enter/call/seam_leave.
+; this macro IS the whole contract for each of them. A wrapper that needs
+; anything beyond "call the core" between enter and leave does not fit this
+; shape and stays hand-written with its own seam_enter/call/seam_leave.
+;   in:       export = the label to define, core = the kernel entry to call.
+;             The caller's own arguments are untouched by the frame and reach
+;             <core> exactly as delivered, in rcx/rdx/r8/r9 and xmm0-3; a fifth
+;             stack argument would not (see the frame arithmetic above), and no
+;             current export takes one
+;   out:      whatever <core> returns, in eax/rax or xmm0, passed back untouched
+;   clobbers: the volatile (caller-saved) registers per the Win64 ABI, plus
+;             whatever <core> clobbers among them. Every nonvolatile is
+;             preserved: seam_enter pushes rbx/rsi/rdi/r12-r15 and vmovaps-saves
+;             xmm6-xmm15, seam_leave restores both sets. MXCSR is saved, pinned
+;             to SEAM_MXCSR across the core, and restored, and vzeroupper runs
+;             before the return
 macro seam_wrap export, core {
   export:
         seam_enter
