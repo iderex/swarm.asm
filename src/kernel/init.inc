@@ -60,8 +60,9 @@ init_core:
         mov     r10d, PATH_AVX2
         jmp     .path_ok
   .explicit:
-        cmp     r10d, PATH_SCALAR       ; scalar: always available (the reference
-        je      .path_ok               ;   path; no CPU feature required)
+        cmp     r10d, PATH_SCALAR       ; scalar: accepted against any CPU (the
+        je      .path_ok               ;   reference path; its own floor is
+                                       ;   SSE4.1, see abi.inc's PATH_SCALAR)
         cmp     r10d, PATH_AVX2
         jne     .want512
         test    r9d, CPU_AVX2           ; AVX2 requested
