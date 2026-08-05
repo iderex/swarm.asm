@@ -248,9 +248,31 @@ tables differ between Intel and AMD. Path 4's narrower, same-microarch-only
 guarantee is the deliberate, documented, gated exception recorded above - the
 cross-vendor guarantee is preserved for every path that runs without a
 maintainer opt-in. Worker-entry pinning is stated explicitly because it is
-the exact place the contract must be airtight. The harness scrambles MXCSR
-before a call and asserts an identical state hash plus a restored caller
-MXCSR.
+the exact place the contract must be airtight.
+
+What holds the pin today, named so a reader can check rather than trust.
+`SubnormalPinTests` runs the engine in the range FTZ and DAZ govern and
+asserts the flushed result exactly; 8 of its 22 cases go red when
+`SEAM_MXCSR` is set to the x64 default, which is the measurement recorded on
+issue #159. `KernelSourceConformanceTests` refuses `ldmxcsr`, `stmxcsr` and
+`vzeroupper` anywhere in `src/kernel/`, so a core cannot change the word the
+seam pinned. `ThreadingTests.PassMtMatchesSerialPass` requires the threaded
+pass to equal the serial pass bit-for-bit. The worker pin is not a second
+mechanism: `pool_pass` is a `seam_wrap` over `pass_core`, the same macro the
+exports use, so a worker runs the core under the same pinned word or the
+whole seam is broken for everyone.
+
+What does not exist. No test scrambles MXCSR before calling in, and none
+asserts that the caller's control word comes back untouched: the harness
+cannot read the word the cores run under, which is issue #154, and the
+hostile-caller case is issue #156. The debug-build assertion at the seam and
+at worker entry is issue #155 and is not built. Until those land, a core
+reached without a seam would run under whatever the caller left, and nothing
+here would notice.
+
+The oracle does not model FTZ/DAZ, so in the subnormal range the C#
+comparison is epsilon-bounded rather than bit-exact. Whether to model it or
+to decline it with a stated divergence bound is issue #160 and is open.
 
 **Rejected:** f64 accumulation (2× throughput cost, zero determinism
 benefit); rsqrt+Newton **as an auto-default or as a replacement for the exact
