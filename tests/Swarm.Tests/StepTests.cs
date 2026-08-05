@@ -31,6 +31,14 @@ public sealed unsafe class StepTests
     private static extern int swarm_read_state(
         void* arena, float[] x, float[] y, float[] vx, float[] vy, uint[] species);
 
+    // The 1e-5 position / 1e-4 velocity tolerances below are MEASURED rather
+    // than assumed, and they are bounded by n. OracleDivergenceSweep records
+    // the sweep that established it (100 seeds, 2026-08-05): at n = 200, S = 8
+    // the worst drift is 3.16e-06 position and 6.96e-05 velocity, so the pair
+    // holds here with 3.2x and 1.4x margin. It does NOT hold above this count -
+    // at n = 4096 velocity leaves the tolerance by S = 2 - which is why every
+    // parity case in this file stays at n <= 200. Raising n in a case here
+    // means re-reading that sweep first.
     private const float RMax = 0.2f, Beta = 0.3f, Dt = 0.02f, Friction = 0.71f, ForceScale = 10f;
     private const int AhPadded = 32, AhFrame = 16, AhSize = 512;
 
