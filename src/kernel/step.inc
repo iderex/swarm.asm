@@ -46,7 +46,8 @@ KP_FRAME   = 64                         ; end of the shared const cache
 ; pass_scalar adds a neighbour-run buffer after the const cache: up to 6 runs
 ; (three 3x3 rows, each split at most once by the torus seam) of {base, count}.
 KN_SCAL_RUNBUF = KP_FRAME               ; 6 * 8 bytes after the const cache
-KN_SCAL_FRAME  = 128                    ; 64 + 48, rounded to a 0-mod-32 frame
+KN_SCAL_CACHE  = KN_SCAL_RUNBUF + 48    ; {cx, cy, count} of the resolved cell
+KN_SCAL_FRAME  = 128                    ; 64 + 48 + 12, rounded to a 0-mod-32 frame
 
 ; Integrate-tail scalar-FP encoding switch (issue #33). The fused pass runs the
 ; per-particle integrate tail once, right after the force loop. In the AVX2 pass
@@ -186,21 +187,41 @@ macro cell_id_from_coords vex, movop, xsrc, ysrc, gf, gm1, g, dst, scratch, tmp 
 ; AVX2 pass wants the whole prologue VEX-encoded because its force loop leaves
 ; ymm8-15 dirty (issue #33).
 ;
+; The run set is resolved once per CELL, not once per particle (issue #87).
+; grid_sort leaves IN cell-sorted and the pass walks i ascending, so
+; consecutive particles share a cell; cell_start is fixed for the whole pass,
+; so neighbour_runs is a pure function of (cx, cy) there and every particle in
+; a cell would get the same answer. A three-dword cache in the caller's frame
+; holds the last (cx, cy) and its run count, and a hit skips the call and the
+; run buffer refill. The buffer itself is left exactly as the last call wrote
+; it, which is what makes the hit legal.
+;
+; cx and cy are still computed per particle. They are a handful of uops, they
+; are what detects the cell change, and computing them from the particle rather
+; than trusting a boundary count keeps the resolution a function of the state.
+;
+; invalidate_run_cache resets the cache at pass entry, which is what keeps this
+; invisible to a split pass: pass(0,k);pass(k,n) starts the second call with a
+; miss, so it resolves at k exactly as an unsplit pass resolved at 0, and
+; GridPassSplitInvariance still holds bit-for-bit.
+;
 ;   in:       vex = 1 to VEX-encode, runbuf = the caller's frame offset for the
-;             6-entry {base, count} run buffer, countreg = the caller's 32-bit
-;             run-count register (must survive a call: neighbour_runs preserves
-;             r12-r15 and this writes countreg after it returns)
+;             6-entry {base, count} run buffer, cache = its frame offset for the
+;             three-dword {cx, cy, count} cell cache, countreg = the caller's
+;             32-bit run-count register (must survive a call: neighbour_runs
+;             preserves r12-r15 and this writes countreg after it returns)
 ;             rbx = bank base, r14 = stride, xmm8/xmm9 = xi/yi in their low
 ;             lane, and the KP_* const cache at [rsp]
-;   out:      grid mode: countreg = run count, [rsp+runbuf] filled, control
-;             falls through to the caller's `.have_runs`
+;   out:      grid mode: countreg = run count, [rsp+runbuf] holds the runs of
+;             this particle's cell, control falls through to the caller's
+;             `.have_runs`
 ;             brute mode: jumps to the caller's `.single_run`, which owes the
 ;             degenerate run and countreg = 1
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, countreg, xmm0, flags
 ;   note:     the caller must define both `.single_run` and `.have_runs`; a
 ;             missing one is an assemble-time error rather than a silent fall
 ;             into the wrong branch.
-macro resolve_neighbour_runs vex, runbuf, countreg {
+macro resolve_neighbour_runs vex, runbuf, cache, countreg {
         TAIL_VEX = vex
         mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]  ; arena = bank base - header
         test    eax, FLAG_GRID
@@ -213,14 +234,38 @@ macro resolve_neighbour_runs vex, runbuf, countreg {
         t_cvtt  eax, xmm0
         and     eax, [rsp+KP_GM1]
         mov     edx, eax
+        cmp     ecx, [rsp+cache]            ; same cell as the previous particle?
+        jne     .resolve
+        cmp     edx, [rsp+cache+4]
+        jne     .resolve
+        mov     countreg, [rsp+cache+8]     ; hit: the run buffer already holds it
+        jmp     .have_runs
+  .resolve:
+        mov     [rsp+cache], ecx
+        mov     [rsp+cache+4], edx
         mov     r8d, [rsp+KP_G]
         mov     r9d, [rsp+KP_GM1]
         imul    rax, r14, AR_ARRAYS         ; cell_start base = bank base + 13*stride
         lea     r10, [rbx+rax]
         lea     r11, [rsp+runbuf]
         call    neighbour_runs              ; eax = run count, buf filled
+        mov     [rsp+cache+8], eax
         mov     countreg, eax
         jmp     .have_runs
+}
+
+; invalidate_run_cache - arm the cell cache above for a fresh pass.
+;
+; cx lives in [0, g) and g is clamped to at most 512, so -1 is a cell
+; coordinate no particle can produce and the first comparison always misses.
+; This must run once per pass entry rather than once per frame: cell_start is
+; rebuilt by every grid_sort, so a cache surviving into the next pass would
+; hand a particle the run set of a partition that no longer exists.
+;   in:       cache = the caller's frame offset for the three-dword cache
+;   out:      the cache cannot match any cell
+;   clobbers: nothing but memory
+macro invalidate_run_cache cache {
+        mov     dword [rsp+cache], -1
 }
 
 ; integrate_and_store vex - semi-implicit Euler + vmax clamp + torus wrap +
@@ -460,6 +505,7 @@ pass_scalar:
         lea     r13, [rcx+AH_PARAMS+SP_MATRIX]
 
         cache_pass_consts               ; derive KP_* from the params block
+        invalidate_run_cache KN_SCAL_CACHE
 
   .outer:
         cmp     r12d, [rsp+KP_LAST]
@@ -474,7 +520,7 @@ pass_scalar:
 
         ; --- resolve the neighbour run set: grid mode = the 3x3 cell runs,
         ;     brute = the degenerate single run [0, n) (decision 3) ---------
-        resolve_neighbour_runs 0, KN_SCAL_RUNBUF, ecx
+        resolve_neighbour_runs 0, KN_SCAL_RUNBUF, KN_SCAL_CACHE, ecx
   .single_run:
         mov     dword [rsp+KN_SCAL_RUNBUF], 0   ; base = 0
         mov     [rsp+KN_SCAL_RUNBUF+4], r15d    ; count = n
@@ -578,7 +624,8 @@ pass_scalar:
 KA_DX     = KP_FRAME                    ; first slot after the const cache
 KA_DY     = KA_DX + 32
 KA_RUNBUF = KA_DY + 32                   ; 6 * 8 bytes
-KA_FRAME  = 192                         ; 128 + 48, rounded to a 0-mod-32 frame
+KA_CACHE  = KA_RUNBUF + 48               ; {cx, cy, count} of the resolved cell
+KA_FRAME  = 192                         ; 128 + 48 + 12, rounded to a 0-mod-32 frame
 
 ; avx2_force_group - one group of 8 neighbours j at [base+r9]; accumulates into
 ; ymm6/ymm7. tail=1 ANDs the mask in ymm5 into `valid`. dx/dy are spilled so
@@ -667,6 +714,7 @@ pass_avx2:
         mov     r15d, [rcx+AH_PARAMS+SP_N]
 
         cache_pass_consts               ; same KP_* layout as pass_scalar
+        invalidate_run_cache KA_CACHE
 
         ; --- ymm constants that live the whole routine -------------------
         vbroadcastss ymm11, [rsp+KP_RMAX2]
@@ -694,7 +742,7 @@ pass_avx2:
 
         ; --- resolve the neighbour run set (decision 3): grid = the 3x3 cell
         ;     runs, brute = the degenerate single run [0, n) ------------------
-        resolve_neighbour_runs 1, KA_RUNBUF, r13d
+        resolve_neighbour_runs 1, KA_RUNBUF, KA_CACHE, r13d
   .single_run:
         lea     r11, [rsp+KA_RUNBUF]
         mov     dword [r11], 0           ; base = 0
