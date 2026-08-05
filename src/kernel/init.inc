@@ -48,6 +48,17 @@ init_core:
         call    cpu_paths_core          ; 3. resolve the path (fail-closed)
         mov     r9d, eax                ; supported bits
         mov     r8, [rsp+16]
+        ; CALLER MEMORY, RE-READ. pp_validate_params above read the caller's
+        ; struct in place; this reads it again, and so do arena_dims_core and
+        ; the rep movsq below. A caller mutating the struct between those reads
+        ; puts unvalidated values into the arena header. Nothing here closes
+        ; that window: it would need the struct copied to a private buffer
+        ; before validation, which is an alignment-sensitive change to this
+        ; routine's frame and is deliberately not made here (#203). The
+        ; fail-closed claim in the banner is a different property and still
+        ; holds - a rejected init writes no arena byte - and the window is only
+        ; reachable by a caller mutating its own parameters concurrently with
+        ; the call, which the seam contract does not permit.
         mov     r10d, [r8+SP_FORCE_PATH] ; a PATH_* id, not a CPU_* bit mask
         test    r10d, r10d              ; PATH_AUTO = 0
         jnz     .explicit
@@ -97,6 +108,9 @@ init_core:
         mov     rax, [r8+SP_SEED]
         mov     [r11+AH_RNG], rax       ; live RNG state = seed
 
+        ; The third read of caller memory; see the note at the SP_FORCE_PATH
+        ; read above. "validated" here means validated as they were read then,
+        ; not re-checked now.
         mov     rsi, r8                 ; copy the validated params into the header
         lea     rdi, [r11+AH_PARAMS]
         mov     ecx, SP_SIZE/8

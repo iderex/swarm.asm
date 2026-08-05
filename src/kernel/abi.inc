@@ -57,8 +57,21 @@ PERR_EXTRA_TOKEN  = 12                  ; surplus token on a structural line
 ; total; init_core fills the header and bank OUT. A change to any offset or to
 ; swarm_layout_bytes' result for the same params is an ABI version bump.
 
-AH_MAGIC   = 0                          ; u64, 'SWRM' arena stamp
-AH_ABI     = 8                          ; u32, = SWARM_ABI_VERSION
+; AH_MAGIC and AH_ABI are DIAGNOSTIC ONLY. init_core writes both and NOTHING
+; in the engine ever reads either back, so neither authenticates anything: a
+; zeroed or foreign buffer handed across the seam is not detected here, and
+; pass_core dispatches on an AH_PATH it has not checked. They exist to make a
+; hex dump of an arena readable, and that is their whole job. This is written
+; down because the word "magic" reads as a guard, and a reader who assumed one
+; would be assuming a check that is not in the tree (#203). The engine cannot
+; hold one at this tier either: swarm_build, swarm_pass, swarm_step and
+; swarm_plot all return void, so there is no channel through which a mismatch
+; could fail closed rather than be swallowed. Giving the stamp force is an ABI
+; change, not a comment change. A conformance test asserts that no read of
+; either field exists anywhere in src/, so adding one fails the build until
+; this paragraph moves with it.
+AH_MAGIC   = 0                          ; u64, 'SWRM' arena stamp (diagnostic)
+AH_ABI     = 8                          ; u32, = SWARM_ABI_VERSION (diagnostic)
 AH_PATH    = 12                         ; u32, the resolved PATH_* id
 AH_FRAME   = 16                         ; u64, step counter (0 at init)
 AH_RNG     = 24                         ; u64, live splitmix64 state
