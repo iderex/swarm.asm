@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; state.inc - the id-ordered copy-out (docs/MASTERPLAN.md, decision 5).
 ;
 ; The arena is opaque to consumers: state crosses the seam by copy-out in

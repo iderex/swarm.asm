@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; step.inc - the force + integrate pass (docs/MASTERPLAN.md force model).
 ;
 ; This is the scalar reference path: one particle, one neighbour at a time, in

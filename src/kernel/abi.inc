@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; ABI constants shared by every build target (docs/MASTERPLAN.md, decision 5).
 ;
 ; SWARM_ABI_VERSION versions the DLL seam: the C# harness hard-asserts it via

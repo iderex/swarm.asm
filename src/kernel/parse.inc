@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; parse.inc - the preset parser (docs/MASTERPLAN.md, decision 10).
 ;
 ; Fail-closed two-phase commit: phase 1 tokenizes and validates everything

@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; rng.inc - splitmix64, the engine's only RNG (docs/MASTERPLAN.md, decision 8).
 ;
 ; One u64 of state, ~10 instructions, no warm-up. The macro form inlines into

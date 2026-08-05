@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; plot.inc - rasterize the current state into a BGRA framebuffer (decision 9).
 ;
 ; Pure raster, golden-testable: clear to the background, then plot each of the
