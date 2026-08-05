@@ -348,15 +348,18 @@ proc WindowProc wnd, wmsg, wp, lp
         ret
 endp
 
-; --- the simulation kernel, shared verbatim with the test DLL (decision 5) ---
+; --- the simulation kernel, shared with the test DLL (decision 5) ---
 ; Pure computation, no imports; the exe stays within kernel32/user32/gdi32.
+; One slice is deliberately absent here: kernel/state.inc holds the id-ordered
+; copy-out that backs the DLL's swarm_read_state export, and the exe has no
+; equivalent. FASM emits every assembled label, so including it would put a
+; routine nothing calls into the shipped .text (#80).
 include 'platform/seam.inc'
 include 'kernel/rng.inc'
 include 'kernel/parse.inc'
 include 'kernel/layout.inc'
 include 'kernel/cpuid.inc'
 include 'kernel/init.inc'
-include 'kernel/state.inc'
 include 'kernel/step.inc'
 include 'kernel/grid.inc'
 include 'kernel/plot.inc'
