@@ -528,6 +528,133 @@ public sealed class KernelSourceConformanceTests
             string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// A macro whose body emits a `call` is routine-like and carries the full
+    /// register-contract header: `in:`, `out:` and `clobbers:` (issue #117).
+    ///
+    /// The other two scans find routines by column-0 `name:` labels, `proc NAME`
+    /// definitions and `seam_wrap` sites. A `macro NAME` definition matches none
+    /// of those, so a macro that emits real code dropped out of the gate while
+    /// the suite stayed green - the same coverage shape as #53 and #57, where a
+    /// routine written in an unrecognised form left the scan set silently.
+    ///
+    /// The rule is deliberately narrow. A blanket "every macro carries contract
+    /// fields" fires on the one-instruction encoding helpers (`t_mul`,
+    /// `elem_addr`, `t_round`), whose whole banner is one line and for which
+    /// three fields would be noise. Emitting a `call` is the line: past it the
+    /// macro reaches a callee's clobber set, which is exactly what a reader
+    /// cannot see at the expansion site.
+    /// </summary>
+    [Fact]
+    public void CallingMacroContractHeaderPresent()
+    {
+        var offenders = new List<string>();
+        int macros = 0;
+        int calling = 0;
+
+        foreach (var path in KernelIncFiles().Concat(PlatformIncFiles()).Concat(ShellAsmFiles()))
+        {
+            var name = Path.GetFileName(path);
+            var lines = File.ReadAllLines(path);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var m = MacroDefRegex.Match(lines[i]);
+                if (!m.Success)
+                {
+                    continue;
+                }
+
+                macros++;
+                int macroLine = i;
+                var (end, body) = MacroBody(lines, macroLine);
+                i = end; // skip the body: a `macro` line inside it belongs to this one
+
+                if (!CallMnemonic.IsMatch(body))
+                {
+                    continue;
+                }
+
+                calling++;
+                var missing = new List<string>();
+                foreach (var (field, label) in new[] { (InField, "in:"), (OutField, "out:"), (ClobbersField, "clobbers:") })
+                {
+                    if (!HasHeaderField(lines, macroLine, field))
+                    {
+                        missing.Add(label);
+                    }
+                }
+
+                if (missing.Count > 0)
+                {
+                    offenders.Add(
+                        $"{name}: macro '{m.Groups[1].Value}' emits a call and is missing " +
+                        string.Join(", ", missing));
+                }
+            }
+        }
+
+        // Non-vacuity in both directions: a scan that stopped finding macros, or
+        // stopped finding the calling ones, would pass while covering nothing.
+        Assert.True(macros > 0, "no `macro` definition found in the source tree - the scan covered nothing");
+        Assert.True(calling > 0, "no call-emitting macro found - the scan's rule matched nothing");
+
+        Assert.True(
+            offenders.Count == 0,
+            "a macro whose body emits a `call` reaches a callee's clobber set that the " +
+            "expansion site cannot see, so it carries the full contract header (in:, out:, " +
+            "clobbers:) like any routine (issue #117):\n  " +
+            string.Join("\n  ", offenders));
+    }
+
+    // A `macro NAME ...` definition at column 0 (FASM). Group 1 is the name.
+    private static readonly Regex MacroDefRegex =
+        new(@"^macro\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.CultureInvariant);
+
+    private static readonly Regex CallMnemonic =
+        new(BackBoundary + "call" + FwdBoundary, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex InField =
+        new(@"^\s*;\s*(in|in/out)\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex OutField =
+        new(@"^\s*;\s*(out|in/out)\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // The macro body from its `macro` line to the line closing its brace, with
+    // comments stripped so a `;`-quoted mnemonic in prose is not read as code.
+    // An unterminated macro swallows the rest of the file, which fails loud on
+    // the contract check rather than quietly shortening the scan.
+    private static (int End, string Body) MacroBody(string[] lines, int start)
+    {
+        var body = new System.Text.StringBuilder();
+        int depth = 0;
+        bool opened = false;
+
+        for (int j = start; j < lines.Length; j++)
+        {
+            var code = StripComment(lines[j]);
+            body.AppendLine(code);
+            foreach (char c in code)
+            {
+                if (c == '{')
+                {
+                    depth++;
+                    opened = true;
+                }
+                else if (c == '}')
+                {
+                    depth--;
+                }
+            }
+
+            if (opened && depth <= 0)
+            {
+                return (j, body.ToString());
+            }
+        }
+
+        return (lines.Length - 1, body.ToString());
+    }
+
     // A column-0 label is a data table when its first non-blank body token is a
     // FASM data directive (db/dd/...) or a struct-type name (WNDCLASSEX/...).
     // The token may sit inline after the colon or on a following line (comments
