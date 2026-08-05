@@ -26,8 +26,17 @@ touched - run on every change to the kernel math, the internal ABI, the
 platform boundary, input parsing, or the build tooling (see
 [docs/DEV-PROCESS.md](docs/DEV-PROCESS.md)). No external review, quality, or
 analysis service is used or trusted; those gates are the entire
-independent-review layer, and a conformance test keeps such services locked
-out of the repository.
+independent-review layer.
+
+A conformance test backs that policy over a named list rather than over the
+class. `tests/Swarm.Tests/NoExternalReviewServiceConfigTests.cs` refuses four
+config files at the repository root (`.coderabbit.yaml`, `.coderabbit.yml`,
+`sonar-project.properties`, `.sonarcloud.properties`) and three substrings in
+any workflow file (`sonar`, `coderabbit`, `copilot`). A service that is on
+neither list is refused by nothing: a workflow step invoking one lands green,
+measured by adding Codecov, Codacy and Snyk steps to a workflow and watching
+both tests pass. What stands against that case is this policy and the review,
+not a machine.
 
 ## Decision-making
 
