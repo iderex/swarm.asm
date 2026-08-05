@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; pool.inc - the M3 persistent worker pool (platform layer; docs/MASTERPLAN.md
 ; decision 6, issue #68). Parallelises the force+integrate pass across cores;
 ; the build (counting sort) stays serial in v1.

@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; layout.inc - the arena size function (docs/MASTERPLAN.md, decisions 1 & 3).
 ;
 ; The layout is part of the ABI contract (abi.inc): any change to the result

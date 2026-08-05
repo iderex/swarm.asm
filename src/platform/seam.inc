@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; seam.inc - the DLL-export / thread-entry seam frame (platform layer:
 ; ldmxcsr/stmxcsr/vzeroupper are banned inside src/kernel/).
 ;

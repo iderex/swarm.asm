@@ -545,6 +545,59 @@ public sealed class KernelSourceConformanceTests
     /// macro reaches a callee's clobber set, which is exactly what a reader
     /// cannot see at the expansion site.
     /// </summary>
+    /// <summary>
+    /// Every assembler source carries an SPDX licence identifier on its first
+    /// line (issue #102).
+    ///
+    /// The tree ships as a set of files that travel: an .inc lifted out of
+    /// `src/kernel/` into a gist or a bug report carries no licence at all
+    /// unless it carries its own line. Machine-readable per-file provenance is
+    /// what SPDX is for, and the first line is where a tool and a reader both
+    /// look.
+    ///
+    /// The scan set is the one the contract-header scans already use, so a new
+    /// source file is covered here the moment it exists, and the flat-directory
+    /// and stray-file guards those sets carry apply to this rule too.
+    /// </summary>
+    [Fact]
+    public void SpdxLicenseHeaderPresent()
+    {
+        // The identifier this repository ships under. Cross-checked against
+        // LICENSE below rather than trusted, because two places naming a
+        // licence is two places that can disagree.
+        const string SpdxId = "MIT";
+        const string HeaderLine = "; SPDX-License-Identifier: " + SpdxId;
+
+        var license = File.ReadAllLines(Path.Combine(Build.RepoRoot, "LICENSE"));
+        Assert.True(license.Length > 0, "LICENSE is empty");
+        Assert.StartsWith(
+            SpdxId,
+            license[0],
+            StringComparison.Ordinal);
+
+        var offenders = new List<string>();
+        var scanned = 0;
+        foreach (var path in KernelIncFiles().Concat(PlatformIncFiles()).Concat(ShellAsmFiles()))
+        {
+            scanned++;
+            var lines = File.ReadAllLines(path);
+            var first = lines.Length > 0 ? lines[0] : string.Empty;
+            if (!string.Equals(first, HeaderLine, StringComparison.Ordinal))
+            {
+                offenders.Add($"{Path.GetFileName(path)}:1: expected '{HeaderLine}', found '{first}'");
+            }
+        }
+
+        Assert.True(scanned > 0, "no assembler source found - the scan covered nothing");
+
+        Assert.True(
+            offenders.Count == 0,
+            "every .asm and .inc source carries its licence on its own first line, so a file " +
+            "read outside this repository still says what it is licensed under (issue #102). " +
+            "The line is exact, including the leading comment marker and the single spaces:\n  " +
+            string.Join("\n  ", offenders));
+    }
+
     [Fact]
     public void CallingMacroContractHeaderPresent()
     {

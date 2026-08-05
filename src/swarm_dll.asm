@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; swarm.kernel.dll - the simulation kernel packaged for the C# test harness.
 ;
 ; Test artifact only, never shipped. Both build targets include the same

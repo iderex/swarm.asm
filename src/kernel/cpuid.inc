@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; cpuid.inc - SIMD path detection (docs/MASTERPLAN.md, decision 7).
 ;
 ; Detection happens once (at swarm_init) and the result is cached in the arena

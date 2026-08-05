@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; swarm.exe - the live engine: window, DIB framebuffer, and the render loop
 ; that steps the simulation and rasters it each frame.
 ;

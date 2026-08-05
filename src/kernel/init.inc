@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; init.inc - arena initialization (docs/MASTERPLAN.md, decisions 1, 7, 8).
 ;
 ; swarm_init validates the params, checks the caller's arena is large enough

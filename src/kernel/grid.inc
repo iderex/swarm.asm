@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MIT
 ; grid.inc - the uniform-grid build (docs/MASTERPLAN.md, decision 3).
 ;
 ; The integrate pass writes each particle's cell id (grid coordinate) into the
