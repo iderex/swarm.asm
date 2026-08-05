@@ -227,25 +227,33 @@ ecosystem for it, and no cooldown applies. It is listed because a list of
 ingestion paths that omits the substrate all of them run on is not a complete
 list, and not because pinning it is being proposed here.
 
-### A manifest nothing watches
+### A manifest watched but not locked
 
-`tests/Swarm.Bench/Swarm.Bench.csproj` is a manifest, and neither
-`.github/dependabot.yml` entry covers it: the two watched directories are `/`
-(`dependabot.yml:30`, github-actions only) and `/tests/Swarm.Tests`
-(`dependabot.yml:46`, nuget only). Today that costs nothing, and the
-measurement is why:
+`tests/Swarm.Bench/Swarm.Bench.csproj` is a second manifest and it is compiled
+inside the required `build` job, at `ci.yml:88`
+`run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`.
+It carries no dependency today, which the file states as a deliberate choice at
+`:4` `Force-kernel micro-benchmark. Deliberately dependency-free: it drives the`
+and which the tree confirms:
 
 ```
 git show origin/main:tests/Swarm.Bench/Swarm.Bench.csproj | grep -c PackageReference
 0
 ```
 
-which the file states as a deliberate choice at `:4`
-`Force-kernel micro-benchmark. Deliberately dependency-free: it drives the`.
-It is listed because on the day a `PackageReference` is added there it is
-unwatched and silently so, and because `ci.yml:88`
-`run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`
-compiles it inside the required `build` job. Issue #198 owns that gap.
+Dependabot watches it anyway, on the entry added for #198: a third
+`package-ecosystem: nuget` block with `directory: "/tests/Swarm.Bench"`,
+carrying the same `default-days: 7` and `semver-major-days: 14` tiers as the
+harness entry. The entry finds nothing to do while the project stays
+dependency-free, and it exists so that the day a `PackageReference` is added
+there, the arrival is not silent.
+
+What it is not is locked. Unlike `/tests/Swarm.Tests`, this project has no
+`packages.lock.json` and `ci.yml:88` does not restore in locked mode, so a
+package added here would have the cooldown as its only hold and nothing that
+fails the build on a resolved version drifting from a committed hash. That is
+the residual, and it is a property of the project rather than of the updater
+entry.
 
 ### What this section does not cover
 
