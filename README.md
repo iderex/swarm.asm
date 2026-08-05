@@ -131,3 +131,5 @@ Issue-driven: every change starts as an issue and lands as a gated PR - see
 ## License
 
 [MIT](LICENSE)
+
+See NOTICE.md for the intended-use notice.
