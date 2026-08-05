@@ -54,8 +54,11 @@ KN_SCAL_FRAME  = 128                    ; 64 + 48, rounded to a 0-mod-32 frame
 ; helpers emit the VEX.128 form when TAIL_VEX=1 (bit-identical scalar arithmetic
 ; -- encoding only, so determinism per code path is preserved) and the legacy
 ; SSE form otherwise, keeping the AVX2 tail all-VEX while the scalar reference
-; path stays SSE. The scalar path is guaranteed to run without AVX (init.inc:
-; "scalar: always available; no CPU feature required"), so it MUST NOT emit VEX.
+; path stays SSE. The scalar path's BODY must run without AVX, so it MUST NOT
+; emit VEX; its own floor is SSE4.1, set by the roundss the min-image round uses
+; (:373, :377) and not by the SSE2 x86-64 baseline. That is a property of the
+; body rather than of the shipped image: every route into it today crosses the
+; seam, which saves xmm6-xmm15 with VEX vmovaps and so needs AVX1 regardless.
 TAIL_VEX = 0
 
 macro t_movss d, s { if TAIL_VEX

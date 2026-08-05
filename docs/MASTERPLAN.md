@@ -453,7 +453,13 @@ ever falls through mid-run; AVX2 absent → message box + exit - there is no
 _automatic_ fallback to the scalar path on AVX2-absent hardware. A
 _selectable_ scalar path does exist (`force_path = 3`, the reference kernel
 the tests and the bench run against); it is a caller-pinned choice, never an
-automatic one. What AVX-512 buys: 16 lanes, k-register masking deletes
+automatic one. **ISA floors, stated rather than left to be inferred:** path 1
+needs AVX2 with FMA, path 2 needs F+DQ+VL, and the scalar path's own floor is
+**SSE4.1** - `roundss`, for the min-image round - not the SSE2 the x86-64
+baseline guarantees. The shipped image sits above all three regardless: the
+seam saves `xmm6`-`xmm15` with VEX `vmovaps`, so AVX1 is required to reach any
+core at all, and "the scalar path runs without AVX" is a property of its body
+and not a claim about the binary. What AVX-512 buys: 16 lanes, k-register masking deletes
 the blend chain and the tail-mask LUT (`bzhi`+`kmovw`), one `vpermps zmm`
 covers 16 species (the only path to lifting the species-8 cap). Honest
 expectation: the loop is divider-bound and divide throughput per element is

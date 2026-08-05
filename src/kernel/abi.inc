@@ -82,9 +82,11 @@ CPU_AVX512 = 2                          ; swarm_cpu_paths bit1
 PATH_AUTO   = 0                         ; resolve against the CPU at init
 PATH_AVX2   = 1
 PATH_AVX512 = 2
-PATH_SCALAR = 3                         ; the reference path: needs no CPU
-                                        ;   feature beyond the image's own
-                                        ;   AVX1 baseline (the seam's vmovaps)
+PATH_SCALAR = 3                         ; the reference path: its own floor is
+                                        ;   SSE4.1 (step.inc's roundss), under
+                                        ;   the image's own AVX1 baseline (the
+                                        ;   seam's vmovaps), so init accepts it
+                                        ;   against any CPU that gets that far
 
 ; swarm_init return codes: 0 success, else a small negative i32. All three
 ; failures are detected before the first arena write (fail-closed: a rejected
