@@ -134,9 +134,15 @@ editing two lines. Credentials in scope: the `build` job's contents-read
 token, no secret.
 
 The test harness's NuGet packages. `tests/Swarm.Tests/Swarm.Tests.csproj:28`
-`<PackageReference Include="xunit.v3" Version="3.2.2" />` is the only direct
-package reference in the tree, and `tests/Swarm.Tests/packages.lock.json`
-carries 20 `"resolved"` entries, each with a `contentHash`, starting at `:5-9`.
+`<PackageReference Include="xunit.v3" Version="3.2.2" />` and
+`tests/Swarm.Tests/Swarm.Tests.csproj:29`
+`<PackageReference Include="YamlDotNet" Version="18.1.0" />` are the only two
+direct package references in the tree, and `tests/Swarm.Tests/packages.lock.json`
+carries 21 `"resolved"` entries, each with a `contentHash`, starting at `:5-9`.
+`YamlDotNet` is a test-only reader for `.github/dependabot.yml`: the harness
+asserts that file's cooldown policy against a loader rather than against a line
+scanner, because indentation is not scope in YAML. It is never referenced by
+`swarm.exe`, which links no managed code at all.
 Restore runs in locked mode at `ci.yml:82` `-p:RestoreLockedMode=true`, so a
 package drifting from the lock file fails the build instead of floating
 silently. Dependabot watches it at `dependabot.yml:45`
