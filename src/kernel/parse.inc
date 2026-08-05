@@ -249,12 +249,10 @@ parse_preset_core:
         pop     r9
         test    eax, eax
         jnz     .fail_code_eax
-        push    r9
         mov     rcx, kr_matrix
-        call    pp_check_range
-        pop     r9
-        test    eax, eax
-        jnz     .range_fail
+        call    pp_check_range          ; no save: it writes only rax, rdx,
+        test    eax, eax                ;   xmm1 and flags, and r9 is the
+        jnz     .range_fail             ;   column index the loop carries
         cmp     r9d, [rsp+PPF_STAGING+SP_SPECIES_N]
         jae     .shape_fail             ; too many columns
         mov     eax, [rsp+PPF_ROW]
@@ -800,18 +798,10 @@ pp_validate_params:
         shl     eax, 3
         add     eax, edx
         movss   xmm0, [r10+SP_MATRIX+rax*4]
-        push    r8
-        push    r9
-        push    r10
-        push    r11
         mov     rcx, kr_matrix
-        call    pp_check_range
-        pop     r11
-        pop     r10
-        pop     r9
-        pop     r8
-        test    eax, eax
-        jnz     .bad
+        call    pp_check_range          ; no saves: it writes only rax, rdx,
+        test    eax, eax                ;   xmm1 and flags, so the four loop
+        jnz     .bad                    ;   registers survive the call
         inc     r9d
         jmp     .mat
   .ok:
