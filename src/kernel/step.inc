@@ -117,6 +117,16 @@ macro t_and d, s   { if TAIL_VEX
                      else
                        andps d, s
                      end if }
+; d = s * m with s left intact. Separate from t_mul because the non-destructive
+; form is one instruction under VEX and two without it, and the two-operand
+; helper above cannot express that: writing t_copy + t_mul would emit the extra
+; vmovaps in the VEX case, in the per-particle prologue of the AVX2 pass.
+macro t_mul_from d, s, m { if TAIL_VEX
+                       vmulss d, s, m
+                     else
+                       movaps d, s
+                       mulss  d, m
+                     end if }
 
 ; cell_id_from_coords - decision 3's binning rule, written once:
 ;   cx = int(x*g) & (g-1), cy = int(y*g) & (g-1), cell = cy*g + cx.
@@ -155,6 +165,62 @@ macro cell_id_from_coords vex, movop, xsrc, ysrc, gf, gm1, g, dst, scratch, tmp 
         and     scratch, gm1            ; cy
         imul    scratch, g              ; cy*g
         add     dst, scratch            ; cell = cy*g + cx
+}
+
+; resolve_neighbour_runs - the per-particle prologue both force passes run
+; before their j loop: decide which IN particles particle i may interact with.
+; In grid mode that is the 3x3 cell neighbourhood of i's own cell, enumerated
+; into the caller's frame run buffer by neighbour_runs; in brute mode it is the
+; degenerate single run [0, n), which the caller writes itself because the two
+; passes address their run buffers differently there.
+;
+; Written once because the cx/cy it computes must reproduce the cell id
+; grid_sort binned by, bit-for-bit, or a particle reads a neighbourhood it is
+; not in. That is one rule, and it was previously spelled out twice - the same
+; fourteen lines in two routines four hundred lines apart, in two encodings, to
+; be changed in both or in neither.
+;
+; `vex` selects the encoding of the two multiply/convert pairs exactly as the
+; t_* helpers do elsewhere in this file: the arithmetic is identical and only
+; the emitted form differs, so determinism per code path is unaffected. The
+; AVX2 pass wants the whole prologue VEX-encoded because its force loop leaves
+; ymm8-15 dirty (issue #33).
+;
+;   in:       vex = 1 to VEX-encode, runbuf = the caller's frame offset for the
+;             6-entry {base, count} run buffer, countreg = the caller's 32-bit
+;             run-count register (must survive a call: neighbour_runs preserves
+;             r12-r15 and this writes countreg after it returns)
+;             rbx = bank base, r14 = stride, xmm8/xmm9 = xi/yi in their low
+;             lane, and the KP_* const cache at [rsp]
+;   out:      grid mode: countreg = run count, [rsp+runbuf] filled, control
+;             falls through to the caller's `.have_runs`
+;             brute mode: jumps to the caller's `.single_run`, which owes the
+;             degenerate run and countreg = 1
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, countreg, xmm0, flags
+;   note:     the caller must define both `.single_run` and `.have_runs`; a
+;             missing one is an assemble-time error rather than a silent fall
+;             into the wrong branch.
+macro resolve_neighbour_runs vex, runbuf, countreg {
+        TAIL_VEX = vex
+        mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]  ; arena = bank base - header
+        test    eax, FLAG_GRID
+        jz      .single_run
+        t_mul_from xmm0, xmm8, [rsp+KP_GF]  ; cx = int(xi*g) & (g-1) (reproduces
+        t_cvtt  eax, xmm0                   ;   the cell id the sort used)
+        and     eax, [rsp+KP_GM1]
+        mov     ecx, eax
+        t_mul_from xmm0, xmm9, [rsp+KP_GF]  ; cy = int(yi*g) & (g-1)
+        t_cvtt  eax, xmm0
+        and     eax, [rsp+KP_GM1]
+        mov     edx, eax
+        mov     r8d, [rsp+KP_G]
+        mov     r9d, [rsp+KP_GM1]
+        imul    rax, r14, AR_ARRAYS         ; cell_start base = bank base + 13*stride
+        lea     r10, [rbx+rax]
+        lea     r11, [rsp+runbuf]
+        call    neighbour_runs              ; eax = run count, buf filled
+        mov     countreg, eax
+        jmp     .have_runs
 }
 
 ; integrate_and_store vex - semi-implicit Euler + vmax clamp + torus wrap +
@@ -373,32 +439,12 @@ pass_scalar:
 
         ; --- resolve the neighbour run set: grid mode = the 3x3 cell runs,
         ;     brute = the degenerate single run [0, n) (decision 3) ---------
-        mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]  ; arena = bank base - header
-        test    eax, FLAG_GRID
-        jz      .single_run
-        movaps  xmm0, xmm8             ; cx = int(xi*g) & (g-1) (reproduces the
-        mulss   xmm0, [rsp+KP_GF]      ;   cell id the sort used, bit-exact)
-        cvttss2si eax, xmm0
-        and     eax, [rsp+KP_GM1]
-        mov     ecx, eax
-        movaps  xmm0, xmm9             ; cy = int(yi*g) & (g-1)
-        mulss   xmm0, [rsp+KP_GF]
-        cvttss2si eax, xmm0
-        and     eax, [rsp+KP_GM1]
-        mov     edx, eax
-        mov     r8d, [rsp+KP_G]
-        mov     r9d, [rsp+KP_GM1]
-        imul    rax, r14, AR_ARRAYS    ; cell_start base = bank base + 13*stride
-        lea     r10, [rbx+rax]
-        lea     r11, [rsp+KN_SCAL_RUNBUF]
-        call    neighbour_runs         ; eax = run count, buf filled
-        mov     ecx, eax
-        jmp     .runs
+        resolve_neighbour_runs 0, KN_SCAL_RUNBUF, ecx
   .single_run:
         mov     dword [rsp+KN_SCAL_RUNBUF], 0   ; base = 0
         mov     [rsp+KN_SCAL_RUNBUF+4], r15d    ; count = n
         mov     ecx, 1
-  .runs:
+  .have_runs:
         lea     r8, [rsp+KN_SCAL_RUNBUF]        ; run-buffer walk pointer (ecx runs left)
   .run_loop:
         mov     edx, [r8]              ; base = particle index of this run
@@ -613,25 +659,7 @@ pass_avx2:
 
         ; --- resolve the neighbour run set (decision 3): grid = the 3x3 cell
         ;     runs, brute = the degenerate single run [0, n) ------------------
-        mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]
-        test    eax, FLAG_GRID
-        jz      .single_run
-        vmulss  xmm0, xmm8, [rsp+KP_GF]  ; cx = int(xi*g) & (g-1) (reproduces the
-        vcvttss2si eax, xmm0             ;   cell id the sort used, bit-exact)
-        and     eax, [rsp+KP_GM1]
-        mov     ecx, eax
-        vmulss  xmm0, xmm9, [rsp+KP_GF]  ; cy = int(yi*g) & (g-1)
-        vcvttss2si eax, xmm0
-        and     eax, [rsp+KP_GM1]
-        mov     edx, eax
-        mov     r8d, [rsp+KP_G]
-        mov     r9d, [rsp+KP_GM1]
-        imul    rax, r14, AR_ARRAYS      ; cell_start base = bank base + 13*stride
-        lea     r10, [rbx+rax]
-        lea     r11, [rsp+KA_RUNBUF]
-        call    neighbour_runs           ; eax = run count, buf filled
-        mov     r13d, eax
-        jmp     .have_runs
+        resolve_neighbour_runs 1, KA_RUNBUF, r13d
   .single_run:
         lea     r11, [rsp+KA_RUNBUF]
         mov     dword [r11], 0           ; base = 0
