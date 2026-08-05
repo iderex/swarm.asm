@@ -703,6 +703,23 @@ disclosed reference machine only).
    unfused-oracle rests on assumed divergence growth. Probe: measure empirical
    per-step divergence growth at n = 4096 across 100 seeds; tighten tolerances
    or horizons from data, recorded in the test with the measurement.
+   **Resolution (2026-08-05, #120):** the probe ran, as the opt-in sweep in
+   `tests/Swarm.Tests/OracleDivergenceSweep.cs`, at n in {200, 1024, 4096}
+   across 100 seeds. Two results. The scalar path (`force_path = 3`) is
+   **bit-exact** against the oracle at every count and every horizon measured -
+   drift is 0, not small - so the epsilon does no work on that path at all.
+   The AVX2 path holds the 1e-5 / 1e-4 pair **only at n = 200**, and there with
+   3.2x margin on position and 1.4x on velocity at S = 8 (3.16e-06 and
+   6.96e-05). Above that count it does not: at n = 1024 position leaves by
+   S = 6, at n = 4096 velocity leaves by S = 2 and position by S = 3, reaching
+   7.6e-03 / 3.08e-01 by S = 8. Growth is roughly an order of magnitude per
+   step, which is Lyapunov separation amplifying a summation-order difference
+   rather than error accumulating, and a larger n means more terms per sum and
+   so a larger starting difference. **The pair is therefore confirmed for the
+   domain the harness uses it in and is not a general statement**: every parity
+   case in the tree runs at n <= 200, inside the measured domain, so nothing
+   asserted today sits outside it. What this line previously got wrong was
+   stating the tolerance without the count it is bounded by.
 6. **Wrap canonicalization completeness.** The p ≥ 1.0 pin is proven for the
    floor-subtract path; other producers of boundary values (clamp
    interactions, minimum image at exactly 0.5) need an empirical sweep.
