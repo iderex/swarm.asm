@@ -305,15 +305,33 @@ Newton-3rd pairing is not merely undesirable - the matrix is asymmetric
 (`a[i][j] != a[j][i]`), so the pair force is not equal-and-opposite; the
 "halve the work" intuition is simply wrong here. Budget, headline scene
 (n = 1,000,000, rmax = 1/512, g = 512, ~3.8 particles/cell, k ≈ 12,
-~34 candidates → ~6 vector groups/particle; divider-bound at ~12
-cycles/group for `vsqrtps`+`vdivps`): force+integrate ≈ (72 + ~40
-setup/reduce/integrate) cycles/particle ≈ 3.1 ms on 8 cores at 4.5 GHz;
-build ≈ 4 ms serial; plot+clear ≈ 1.2 ms; blit ≈ 1-2 ms; **total ≈ 9.5-10.5
-ms, ~1.6× margin against the 16.67 ms p99 line**, without SMT, approximation
-instructions, or AVX-512. The dense scene (rmax = 1/256, k ≈ 48) lands at
-≈ 14-15 ms - reported in the benchmark table; if it must hit 60, the named
-contingency is the parallel scatter (decision 6), never approximation
-instructions.
+~34 candidates → ~6 vector groups/particle; **measured ~31 cycles/group**,
+#59): force+integrate ≈ (186 + ~40 setup/reduce/integrate) cycles/particle
+≈ 5.9 ms on 8 cores; build ≈ 4 ms serial; plot+clear ≈ 1.2 ms; blit ≈ 1-2 ms;
+**total ≈ 12.1-13.1 ms, ~1.3× margin against the 16.67 ms p99 line**, without
+SMT, approximation instructions, or AVX-512. The dense scene (rmax = 1/256,
+k ≈ 48) is re-based by the same factor on its force term and lands at
+≈ 23-27 ms, which does **not** hold 60 fps on 8 cores; the named contingencies
+are more cores than the eight this line assumes (the reference machine has
+sixteen, and the M3 pool measures 12.6× at T = 16) and the parallel scatter
+(decision 6), never approximation instructions.
+
+**Budget re-base (recorded 2026-08-05, #67).** The line above originally read
+"divider-bound at ~12 cycles/group", giving ≈ 3.1 ms force+integrate, a total
+of ≈ 9.5-10.5 ms and ~1.6× margin, with the dense scene at ≈ 14-15 ms. #59
+measured the group instead of estimating it: **31.3 cycles/group, 3.91
+cycles/candidate** at n = 16384 (docs/BENCHMARKS.md), which is ~2.6× the
+estimate, and it also refuted the word _divider-bound_ - the divide unit is
+roughly half the loop and the ~33 non-divide FP ops co-limit it. The
+re-based figures above substitute that one input and change nothing else: 6
+groups × 31.3 cyc = 186 cyc/particle for the force, the ~40 cyc/particle of
+setup, reduce and integrate untouched, the same 8-core basis, the same serial
+build, plot and blit. The dense figure is weaker than the headline one and is
+labelled so: this document never stated that scene's group count, so its force
+term is back-solved from its own ≈ 14-15 ms total and scaled by 2.6×. Both
+remain **projections**. #176 replaces them with a measured 1M baseline, and
+this re-base exists so that the number they are measured against was not the
+optimistic one.
 
 **Rejected:** grid-in-M1 (front-loads all of M2 into the first shipping
 milestone); a parallel counting sort as v1 architecture (correct and kept
@@ -660,6 +678,13 @@ disclosed reference machine only).
    Probe: the kernel PR ships an isolated inner-loop microbench
    (cycles/candidate over 1e9 candidates); if measured > 14, the fallback is
    software-pipelining two j-groups per i - never approximation instructions.
+   **Measured 2026-07-17 (#59, docs/BENCHMARKS.md): 3.91 cycles/candidate,
+   31.3 per group.** The escalation threshold is stated per candidate and
+   3.91 does not trip it, so the software-pipelining fallback was declined
+   (#61) - and it would not have helped, because the loop is
+   throughput-bound rather than latency-bound. The group cost itself is
+   ~2.6× the estimate this line carries, which is what the budget re-base in
+   decision 3 corrects.
 2. **Serial build cost at 1M.** The histogram pass's same-address dependent
    chain on near-sorted input is estimated 8-12 cycles/particle; materially
    above ~4.5 ms erodes the frame margin. Probe: per-pass timing at 500k and
@@ -669,8 +694,9 @@ disclosed reference machine only).
    degrades write locality. Probe: an adversarial preset (all |a| = 1, high
    force) vs the coherent scene; fallback is a two-pass radix (cell row, then
    cell).
-4. **p99 under Windows/GDI jitter.** ~10 ms p50 leaves ~6 ms for scheduler
-   and GDI noise on the p99 claim. Probe: run the 3600-frame histogram early
+4. **p99 under Windows/GDI jitter.** The re-based ~12-13 ms p50 leaves ~4 ms
+   for scheduler and GDI noise on the p99 claim, where the pre-#59 projection
+   left ~6 ms. Probe: run the 3600-frame histogram early
    (M1 scale, again at each milestone) so the reference machine's jitter
    floor is known before the 1M claim is due.
 5. **Oracle epsilon horizon.** 1e-5 absolute at S = 8 for FMA-asm vs
