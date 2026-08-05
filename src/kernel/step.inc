@@ -343,15 +343,33 @@ macro cache_pass_consts {
 }
 
 ; ------------------------------------------------------------------
-; build_core - produce bank IN for the next pass. Always copies OUT -> IN
-; (so the pads carry through unchanged); in grid mode (FLAG_GRID) it then
-; tail-calls grid_sort to overlay IN[0..n) cell-sorted (decision 3).
+; build_core - produce bank IN for the next pass.
+;
+; Brute mode copies the whole OUT bank into IN: the pass reads IN as the frozen
+; prior state, so next step's IN must equal this step's OUT, element for
+; element.
+;
+; Grid mode does NOT, and copying it there was pure waste. grid_sort overwrites
+; IN[0..n) for all six components out of OUT (grid.inc, the backward scatter),
+; so every dword the full-bank copy wrote for a real particle was rewritten
+; before anything read it. At n = 1M that is 6M dwords written and immediately
+; overwritten, roughly 24 MB of avoidable write traffic per step. What grid_sort
+; never touches is the pad tail [n, padded_n) of each array, and the pass DOES
+; read it: the AVX2 tail over-reads the final group and masks it out, which is
+; safe only because those lanes hold the finite values init pinned there. So
+; grid mode carries the pads and nothing else. padded_n = ((n+15) & ~15) + 16,
+; so that is 16 to 31 dwords per array rather than padded_n.
+;
+; Bit-exact either way: IN[0..n) ends up byte-identical because grid_sort
+; derives it from OUT, and the pads are propagated by both branches.
+;
 ;   in:       rcx = arena
-;   out:      brute: IN = OUT (all six arrays, incl. pads). grid: additionally
-;             IN[0..n) reordered by ascending cell id, cell_start filled.
-;   clobbers: rax, rcx, r10, flags (grid mode additionally clobbers r11 via
-;             grid_sort); saves+restores rbx, rsi, rdi (grid_sort preserves
-;             the remaining nonvolatiles it uses)
+;   out:      brute: IN = OUT (all six arrays, incl. pads). grid: IN pads = OUT
+;             pads, and IN[0..n) reordered by ascending cell id, cell_start
+;             filled.
+;   clobbers: rax, rcx, r10, r11, flags (grid mode additionally clobbers what
+;             grid_sort does); saves+restores rbx, rsi, rdi (grid_sort
+;             preserves the remaining nonvolatiles it uses)
 ;   MXCSR:    untouched (integer copy / sort)
 ; ------------------------------------------------------------------
 build_core:
@@ -363,17 +381,34 @@ build_core:
         lea     rsi, [rbx+AH_SIZE]      ; bank OUT base
         imul    r10d, eax, AR_X_IN      ; 6*padded_n dwords = one bank
         lea     rdi, [rsi+r10*4]        ; bank IN base = OUT + 6*stride
-        mov     ecx, r10d               ; copy the whole OUT bank -> IN
         cld
+        mov     r11d, [rbx+AH_PARAMS+SP_FLAGS]
+        test    r11d, FLAG_GRID
+        jnz     .pads_only
+        mov     ecx, r10d               ; brute: copy the whole OUT bank -> IN
         rep     movsd
         pop     rdi
         pop     rsi
-        mov     eax, [rbx+AH_PARAMS+SP_FLAGS]
-        test    eax, FLAG_GRID          ; ZF survives the mov/pop below
+        pop     rbx
+        ret
+  .pads_only:
+        mov     r11d, [rbx+AH_PARAMS+SP_N]  ; n (zero-extended: r11 is an index)
+        sub     eax, r11d               ; pad = padded_n - n, in [16, 31]
+        lea     rsi, [rsi+r11*4]        ; &OUT.x[n], the first pad element
+        lea     rdi, [rdi+r11*4]        ; &IN.x[n]
+        mov     r10d, AR_X_IN           ; six arrays to carry
+  .pad:
+        mov     ecx, eax
+        rep     movsd                   ; leaves rsi/rdi at element 0 of the next
+        lea     rsi, [rsi+r11*4]        ;   array, so +n lands on its pad again
+        lea     rdi, [rdi+r11*4]
+        dec     r10d
+        jnz     .pad
+        pop     rdi
+        pop     rsi
         mov     rcx, rbx                ; grid_sort takes the arena in rcx
         pop     rbx
-        jnz     grid_sort               ; grid: overlay IN[0..n); rets to caller
-        ret
+        jmp     grid_sort               ; overlay IN[0..n); rets to caller
 
 ; ------------------------------------------------------------------
 ; pass_core - dispatch the fused force+integrate to the code path the arena

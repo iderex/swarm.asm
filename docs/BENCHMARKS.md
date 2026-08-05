@@ -169,6 +169,35 @@ the regime the grid wins in.
   pass on this machine was 5.923 / 5.986 / 84.075 / 62.351 ms for the four rows;
   brute is unaffected (the tail is negligible there).
 
+### Grid build after the pad-only copy (#77)
+
+`build_core` used to copy the whole OUT bank into IN in grid mode as well, and
+`grid_sort` then overwrote `IN[0..n)` out of OUT for all six components. Only
+the pad tail `[n, padded_n)` genuinely had to carry over. The table above was
+taken before that change; the build column moves and nothing else does.
+
+| n       | rmax  | g   | build ms before | build ms after | delta |
+| ------- | ----- | --- | --------------- | -------------- | ----- |
+| 50,000  | 1/256 | 256 | 0.302 / 0.300   | 0.209 / 0.208  | -31%  |
+| 50,000  | 1/512 | 512 | 0.497 / 0.514   | 0.375 / 0.376  | -26%  |
+| 500,000 | 1/256 | 256 | 3.214 / 3.159   | 2.604 / 2.572  | -19%  |
+| 500,000 | 1/512 | 512 | 3.248 / 3.289   | 2.781 / 2.790  | -15%  |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11,
+  **single-threaded**, AVX2 + FMA, `FLAG_GRID`, seed `0x5EED`, 6 species, the
+  same uniform-random initial frame the table above uses.
+- Two independent runs of `Swarm.Bench` per build, both listed, each already a
+  min over the bench's 9 rounds. The two builds differ only in
+  `src/kernel/step.inc`; the same bench binary and the same kernel DLL slot
+  were used, swapping only the DLL.
+- **pass ms** did not move outside run-to-run spread: 44.05 / 44.35 after
+  against 44.33 / 44.30 before at `n = 500,000, rmax = 1/256`, and 24.01 /
+  23.77 against 23.99 / 23.89 at `rmax = 1/512`. The change touches the build
+  and nothing the pass reads.
+- **Date**: 2026-08-06. Bit-exactness is not inferred from these numbers: the
+  whole arena hashes identically across the change for 84 configurations, which
+  is recorded on the pull request that closed #77.
+
 ### Reading the M2 numbers
 
 **50,000 particles hold 60 fps on one core with room to spare** - ~402 fps,
@@ -184,7 +213,8 @@ which the M3 worker-pool fan-out across cores closes: the neighbourhood pass is
 already **split-invariant** (`GridPassSplitInvariance`,
 `pass(0,n) == pass(0,k);pass(k,n)` bit-for-bit), so it parallelises without a
 determinism change. The counting-sort **build is cheap** (0.3 ms at 50k, ~3 ms
-at 500k) and never the bottleneck; the pass dominates, and a larger `g` (sparser
+at 500k in this table, and lower again after #77 above) and never the
+bottleneck; the pass dominates, and a larger `g` (sparser
 cells, smaller `k`) is the lever - g = 512 beats g = 256 at 500k (24 vs 44 ms)
 for that reason.
 
