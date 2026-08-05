@@ -36,16 +36,11 @@ seed_cellids:
         mov     r8d, ecx
         dec     r8d                     ; g - 1 (cell wrap mask)
   .loop:
-        movss   xmm1, [rsi]             ; cx = int(x*g) & (g-1)
-        mulss   xmm1, xmm0
-        cvttss2si eax, xmm1
-        and     eax, r8d
-        movss   xmm1, [rdi]             ; cy = int(y*g) & (g-1)
-        mulss   xmm1, xmm0
-        cvttss2si edx, xmm1
-        and     edx, r8d
-        imul    edx, ecx                ; cy*g
-        add     eax, edx                ; cell = cy*g + cx
+        ; The same binning rule the integrate tail writes for every later
+        ; frame; this lays down the keys for the first build, before any pass
+        ; has run. Never VEX here: this is not the tail and there is no ymm
+        ; state to keep clean.
+        cell_id_from_coords 0, movss, [rsi], [rdi], xmm0, r8d, ecx, eax, edx, xmm1
         mov     [r11], eax
         add     rsi, 4
         add     rdi, 4

@@ -118,6 +118,45 @@ macro t_and d, s   { if TAIL_VEX
                        andps d, s
                      end if }
 
+; cell_id_from_coords - decision 3's binning rule, written once:
+;   cx = int(x*g) & (g-1), cy = int(y*g) & (g-1), cell = cy*g + cx.
+; Power-of-two g makes int(coord*g) exact for coord in [0,1); the & (g-1) mask
+; is the belt that keeps cell in [0, g*g) unconditionally, which is what bounds
+; the histogram and the scatter.
+;
+; Every operand is a parameter because the two call sites genuinely differ in
+; all of them, and the alternative to parameterising them is what this replaces:
+; the same ten lines written twice, in two files, for a rule that must change in
+; both or in neither. `movop` is a parameter for the same reason and is the one
+; that is easy to miss - seed_cellids brings each coordinate in from memory and
+; the integrate tail already holds it in a register, so one site needs a load
+; and the other a register copy. Substituting one for the other would change
+; the emitted bytes in the hot tail, where `t_copy` is a full overwrite and a
+; scalar move would be a merge into the destination's upper lanes.
+;
+; It sets TAIL_VEX, exactly as integrate_and_store does, so `vex` selects the
+; encoding of the two arithmetic ops the same way the t_* helpers do everywhere
+; else in this file.
+;   in:       vex = 1 to VEX-encode, movop = the mnemonic that brings a
+;             coordinate into tmp, xsrc/ysrc = its two sources, gf/gm1/g = the
+;             grid triple as f32 / mask / integer, in any operand form movop's
+;             site can supply
+;   out:      dst = the cell id
+;   clobbers: dst, scratch, tmp, flags
+macro cell_id_from_coords vex, movop, xsrc, ysrc, gf, gm1, g, dst, scratch, tmp {
+        TAIL_VEX = vex
+        movop   tmp, xsrc
+        t_mul   tmp, gf
+        t_cvtt  dst, tmp                ; int(x*g), truncation = floor for x>=0
+        and     dst, gm1                ; cx
+        movop   tmp, ysrc
+        t_mul   tmp, gf
+        t_cvtt  scratch, tmp
+        and     scratch, gm1            ; cy
+        imul    scratch, g              ; cy*g
+        add     dst, scratch            ; cell = cy*g + cx
+}
+
 ; integrate_and_store vex - semi-implicit Euler + vmax clamp + torus wrap +
 ; write OUT[i], shared by both code paths, and the OUT cell id for next frame's
 ; grid build (M2).
@@ -184,21 +223,10 @@ macro integrate_and_store vex {
         mov     r9d, [r10]
         elem_addr r10, AR_ID_OUT, r12
         mov     [r10], r9d
-        ; cell id for next frame's grid build (M2): cell = cy*g + cx,
-        ; cx = int(x'*g) & (g-1), cy = int(y'*g) & (g-1). Power-of-two g makes
-        ; int(coord*g) exact (coord in [0,1) from wrap_scalar, so already
-        ; < g); the & (g-1) mask is the belt that keeps cell in [0, g*g)
-        ; unconditionally, which is what bounds the histogram/scatter.
-        t_copy  xmm0, xmm10             ; x' (still live from the store above)
-        t_mul   xmm0, [rsp+KP_GF]
-        t_cvtt  r9d, xmm0               ; int(x'*g), truncation = floor for x'>=0
-        and     r9d, [rsp+KP_GM1]       ; cx
-        t_copy  xmm0, xmm4              ; y'
-        t_mul   xmm0, [rsp+KP_GF]
-        t_cvtt  r10d, xmm0
-        and     r10d, [rsp+KP_GM1]      ; cy
-        imul    r10d, [rsp+KP_G]        ; cy*g
-        add     r9d, r10d               ; cell id
+        ; cell id for next frame's grid build (M2). x' is still live in xmm10
+        ; from the store above and y' in xmm4, both in [0,1) from wrap_scalar.
+        cell_id_from_coords vex, t_copy, xmm10, xmm4, \
+                [rsp+KP_GF], [rsp+KP_GM1], [rsp+KP_G], r9d, r10d, xmm0
         elem_addr r10, AR_CELLID, r12
         mov     [r10], r9d
 }
