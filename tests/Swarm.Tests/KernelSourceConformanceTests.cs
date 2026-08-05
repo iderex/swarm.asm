@@ -23,28 +23,8 @@ public sealed class KernelSourceConformanceTests
 {
     // The kernel slices, scanned as text (never assembled here). Sorted so the
     // failure list is stable across runs.
-    private static string[] KernelIncFiles()
-    {
-        var dir = Path.Combine(Build.RepoRoot, "src", "kernel");
-        var incFiles = Directory.GetFiles(dir, "*.inc");
-        Array.Sort(incFiles, StringComparer.Ordinal);
-        Assert.NotEmpty(incFiles); // a moved/renamed kernel dir must fail loudly, not pass vacuously
-
-        // Fail-closed: the kernel dir must hold ONLY .inc sources. A future
-        // src/kernel/foo.asm (or .s) would otherwise slip past the *.inc glob
-        // and go entirely unscanned - a silent purity/contract hole. Make that
-        // a loud failure that forces a human decision, not a quiet gap.
-        var stray = Directory.GetFiles(dir)
-            .Where(f => !f.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
-            .Select(Path.GetFileName)
-            .ToArray();
-        Assert.True(
-            stray.Length == 0,
-            "src/kernel must contain only .inc sources so the *.inc scan covers every kernel " +
-            "file; stray non-.inc file(s): " + string.Join(", ", stray));
-
-        return incFiles;
-    }
+    private static string[] KernelIncFiles() =>
+        FlatIncSources(Path.Combine(Build.RepoRoot, "src", "kernel"), "src/kernel");
 
     // The shell sources: the exe host (src/swarm.asm) and the test-DLL host
     // (src/swarm_dll.asm). These are the OS seam - exempt from the purity scan,
@@ -62,26 +42,51 @@ public sealed class KernelSourceConformanceTests
     // routines and OS-seam frames (seam.inc) that back the shells. Like the
     // shells, this is OS-seam code - exempt from the kernel purity scan, but
     // still header-checked by ShellRoutineContractHeaderPresent (issue #88).
-    private static string[] PlatformIncFiles()
+    private static string[] PlatformIncFiles() =>
+        FlatIncSources(Path.Combine(Build.RepoRoot, "src", "platform"), "src/platform");
+
+    // The .inc sources of a flat source directory, with the two ways that scan
+    // set can silently stop covering the tree refused.
+    //
+    // Fail-closed on a stray file: the directory must hold ONLY .inc sources.
+    // A future src/kernel/foo.asm (or .s) would otherwise slip past the *.inc
+    // glob and go entirely unscanned - a silent purity and contract hole.
+    //
+    // Fail-closed on a subdirectory: Directory.GetFiles does not descend and
+    // does not return a directory either, so a nested src/platform/sub/foo.inc
+    // is invisible to the glob AND to the stray-file check, which is the same
+    // hole one level deeper (issue #93). The flat layout is the convention
+    // docs/MASTERPLAN.md describes; this makes breaking it a loud failure that
+    // forces a decision about the scan, rather than a quiet gap in it.
+    private static string[] FlatIncSources(string dir, string label)
     {
-        var dir = Path.Combine(Build.RepoRoot, "src", "platform");
         var incFiles = Directory.GetFiles(dir, "*.inc");
         Array.Sort(incFiles, StringComparer.Ordinal);
-        Assert.NotEmpty(incFiles); // a moved/renamed platform dir must fail loudly, not pass vacuously
+        Assert.NotEmpty(incFiles); // a moved/renamed source dir must fail loudly, not pass vacuously
 
-        // Fail-closed, mirroring the src/kernel guard above: the platform dir
-        // must hold ONLY .inc sources so the *.inc glob covers every platform
-        // file. Without this, a future src/platform/foo.asm would slip past
-        // the glob and go entirely unscanned - the same silent contract-header
-        // hole this method exists to close.
         var stray = Directory.GetFiles(dir)
             .Where(f => !f.EndsWith(".inc", StringComparison.OrdinalIgnoreCase))
             .Select(Path.GetFileName)
+            .OrderBy(f => f, StringComparer.Ordinal)
             .ToArray();
         Assert.True(
             stray.Length == 0,
-            "src/platform must contain only .inc sources so the *.inc scan covers every " +
-            "platform file; stray non-.inc file(s): " + string.Join(", ", stray));
+            $"{label} must contain only .inc sources so the *.inc scan covers every file in " +
+            "it; stray non-.inc file(s): " + string.Join(", ", stray));
+
+        var nested = Directory.GetDirectories(dir)
+            .Select(Path.GetFileName)
+            .OrderBy(d => d, StringComparer.Ordinal)
+            .ToArray();
+        Assert.True(
+            nested.Length == 0,
+            $"{label} must stay flat: every source scan over it enumerates that one directory " +
+            "and does not descend, so anything under a subdirectory is scanned by nothing at " +
+            "all - not for kernel purity, not for register-contract headers, and not by the " +
+            "stray-file check above, which sees files and not directories. Either flatten the " +
+            "file back or teach every scan here to descend; both are decisions, and a " +
+            "silently uncovered subtree is not (issue #93). Subdirector(y/ies): " +
+            string.Join(", ", nested));
 
         return incFiles;
     }
