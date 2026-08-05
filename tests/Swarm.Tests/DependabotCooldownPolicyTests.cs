@@ -14,6 +14,12 @@ namespace Swarm.Tests;
 /// key, a duplicated entry, an undecided carve-out (`include`/`exclude`), an
 /// extra tier and an ecosystem with no policy row all fail here.
 ///
+/// A second and different assertion sits beside it (#187): a `semver-*-days`
+/// key must sit on an ecosystem that supports the key at all. That one is not
+/// "the hold is the right length" but "this key does anything". GitHub decides
+/// tier-key support per ecosystem, and a tier key on an ecosystem outside that
+/// table is a silent no-op that reads as policy and holds nothing.
+///
 /// What it does not do: it asserts nothing about any key outside a `cooldown:`
 /// block, so schedules, groups and open-pull-requests limits are not held by
 /// this test. It also fails a hold that is made *longer*, because it compares
@@ -47,6 +53,45 @@ public sealed class DependabotCooldownPolicyTests
                 + "is meant to change - edit the Policy table in this test in the same "
                 + "commit, so the recorded decision and the config move together:\n  "
                 + string.Join("\n  ", violations));
+    }
+
+    // Which ecosystems support the semver tier keys, and which are known not
+    // to. SOURCE: GitHub's "Dependabot options reference", the table titled
+    // "SemVer-bump days supported" under the `cooldown` configuration heading,
+    // together with the `package-ecosystem` identifiers listed on the same
+    // page. Read 2026-08-05. It is a transcription of a table that GitHub
+    // moves without announcing, so a reader who suspects it has changed should
+    // re-read the page rather than trust these two lines.
+    //
+    // Split into supported and known-unsupported rather than one list, so an
+    // ecosystem in neither is reported as unknown instead of being guessed at
+    // in either direction.
+    private static readonly string[] TierKeysSupported =
+    [
+        "bun", "bundler", "cargo", "composer", "conda", "deno", "dotnet", "elm", "gomod", "gradle",
+        "hex", "julia", "maven", "npm", "nuget", "pip", "pub", "rust-toolchain", "sbt", "swift", "uv",
+    ];
+
+    private static readonly string[] TierKeysNotSupported =
+    [
+        "bazel", "devcontainers", "docker", "docker-compose", "github-actions", "gitsubmodule",
+        "helm", "nix", "opentofu", "pre-commit", "terraform", "vcpkg",
+    ];
+
+    private static readonly string[] TierKeys = ["semver-major-days", "semver-minor-days", "semver-patch-days"];
+
+    [Fact]
+    public void TierKeysSitOnlyOnEcosystemsThatSupportThem()
+    {
+        var path = Path.Combine(Build.RepoRoot, ".github", "dependabot.yml");
+        Assert.True(File.Exists(path), $"expected {path} to exist");
+
+        var unsupported = UnsupportedTierKeys(File.ReadAllText(path));
+
+        Assert.True(
+            unsupported.Count == 0,
+            "a cooldown tier key sits on an ecosystem that does not support it, so it reads "
+                + "as a policy and holds nothing:\n  " + string.Join("\n  ", unsupported));
     }
 
     /// <summary>
@@ -195,6 +240,74 @@ public sealed class DependabotCooldownPolicyTests
         found.AddRange(
             Policy.Where(p => !seen.Contains($"{p.Ecosystem} {p.Directory}"))
                 .Select(p => $"{p.Ecosystem} {p.Directory}: the policy has a row for it and dependabot.yml has no entry - restore the entry, or drop the row here if the manifest is gone"));
+
+        return found;
+    }
+
+    // The worked example the issue names, its siblings, and the green case
+    // that proves this is not simply a ban on the key.
+    public static TheoryData<string, string, bool> TierKeySupportCases() =>
+        new()
+        {
+            { "semver-patch-days under github-actions", Entries(githubActions: "    cooldown:\n      default-days: 7\n      semver-patch-days: 3\n"), false },
+            { "semver-major-days under github-actions", Entries(githubActions: "    cooldown:\n      default-days: 7\n      semver-major-days: 14\n"), false },
+            { "a tier key on an ecosystem the table does not name", Entries(nugetTestsEcosystem: "mix"), false },
+            { "semver-patch-days under nuget, which supports it", Entries(nugetTests: "    cooldown:\n      default-days: 7\n      semver-major-days: 14\n      semver-patch-days: 3\n"), true },
+            { "the shipped shape, no tier key on github-actions", Entries(), true },
+        };
+
+    [Theory]
+    [MemberData(nameof(TierKeySupportCases))]
+    public void ATierKeyIsJudgedByWhetherItsEcosystemSupportsIt(string fixture, string yaml, bool expectedClean)
+    {
+        var unsupported = UnsupportedTierKeys(yaml);
+        Assert.True(
+            expectedClean == (unsupported.Count == 0),
+            expectedClean
+                ? $"'{fixture}' must pass the support check, and did not:\n  " + string.Join("\n  ", unsupported)
+                : $"'{fixture}' must not pass the support check, and did");
+    }
+
+    /// <summary>
+    /// The support assertion, kept apart from <see cref="Violations"/> on
+    /// purpose. They answer different questions of the same document and can
+    /// disagree: `semver-patch-days` on nuget is a supported key that carries
+    /// no recorded policy, so it passes here and fails there. Folding them
+    /// together would make the green case above impossible to write.
+    /// </summary>
+    private static IReadOnlyList<string> UnsupportedTierKeys(string yaml)
+    {
+        var config = DependabotConfig.TryParse(yaml, out var error);
+        if (config is null)
+        {
+            return [$"the config could not be read: {error}"];
+        }
+
+        var found = new List<string>();
+        foreach (var entry in config.Updates)
+        {
+            var present = TierKeys.Where(k => entry.Cooldown?.ContainsKey(k) == true).ToArray();
+            if (present.Length == 0)
+            {
+                continue;
+            }
+
+            var keys = string.Join(", ", present);
+            if (TierKeysNotSupported.Contains(entry.Ecosystem, StringComparer.Ordinal))
+            {
+                found.Add(
+                    $"{entry.Ecosystem} {entry.Directory}: `{keys}` - GitHub's SemVer-bump-days table does not list "
+                        + $"{entry.Ecosystem}, so this key is a no-op. Delete it and hold this ecosystem with "
+                        + "`default-days` alone");
+            }
+            else if (!TierKeysSupported.Contains(entry.Ecosystem, StringComparer.Ordinal))
+            {
+                found.Add(
+                    $"{entry.Ecosystem} {entry.Directory}: `{keys}` - this ecosystem is in neither transcribed "
+                        + "half of GitHub's SemVer-bump-days table. Re-read that table and add "
+                        + $"{entry.Ecosystem} to TierKeysSupported or TierKeysNotSupported in this test");
+            }
+        }
 
         return found;
     }
