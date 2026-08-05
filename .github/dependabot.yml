@@ -59,3 +59,29 @@ updates:
         update-types:
           - minor
           - patch
+
+  # The micro-bench is a second manifest and is compiled in the required
+  # `build` job. It carries no PackageReference today and is meant to stay that
+  # way, so this entry finds nothing to do - it is here for the day someone
+  # adds one, because an unwatched dependency arriving is silent in exactly the
+  # way a missing entry is (#198). Do not delete it as dead config: it is the
+  # thing that stops that day being silent. Unlike the harness above, this
+  # project has no lock file and is not restored in locked mode, so the
+  # cooldown below is the only hold on a bump here.
+  - package-ecosystem: nuget
+    directory: "/tests/Swarm.Bench"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    # Same tiers as the harness: majors wait twice as long.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      bench-minor-and-patch:
+        update-types:
+          - minor
+          - patch
