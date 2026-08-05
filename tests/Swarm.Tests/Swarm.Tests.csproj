@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
 </Project>
