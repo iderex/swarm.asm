@@ -708,6 +708,21 @@ disclosed reference machine only).
    interactions, minimum image at exactly 0.5) need an empirical sweep.
    Probe: a property test driving positions and velocities through the 0/1
    and 0.5 boundaries, asserting binning, plot bounds, and oracle agreement.
+   **Resolution (2026-08-05, #121):** the probe ran, in
+   `tests/Swarm.Tests/BoundaryPropertyTests.cs`. It found no engine defect and
+   one hole in the test net, which is closed in the same change. Five scenes
+   across both force paths and both modes hold positions in [0,1), hold the
+   derived bin in [0,g)^2, and hold `swarm_plot` inside a canary-guarded
+   framebuffer. What the sweep does **not** reach is the case the
+   canonicalization exists for: a pre-wrap position in (-2^-24, 0), whose
+   `p - floor(p)` rounds to exactly 1.0. Deleting the two pin instructions from
+   `wrap_body` left all 214 tests then in the suite green, so the pin was
+   carried on trust. The landing was searched for against an unpinned build
+   (1.688e8 particle-steps, four landings) and the cheapest is now pinned as a
+   regression case that reads 1 without the pin and 0 with it. The residual:
+   the export surface has no state-write entry, so no test seeds a boundary
+   value directly - every position asserted here is one the engine produced,
+   and a producer that this parameter space cannot reach stays unswept.
 7. **AVX-512 frequency licensing on older parts.** May make the AVX-512 path
    a net loss pre-Ice-Lake. Probe: M3 measures both paths per machine; the
    auto path default is chosen from measurement, and the bench table reports
