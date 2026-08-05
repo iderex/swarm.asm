@@ -11,6 +11,18 @@ one small `.exe`.**
 >
 > Development here is AI-assisted. Claude (Anthropic) helps with individual process steps - generating and analysing code, running the adversarial security reviews, and translating documentation and comments into English. It never hands over finished, unreviewed work: each step is only a proposal. A human reviews, understands, edits where needed, and signs off on every one - the AI proposes, a person decides, and a human stays responsible for every line that ships, at all times. The review discipline is modelled, as far as is practical for a volunteer project, on the change-control expected of TÜV/BSI-certified software in a critical sector such as healthcare - with no claim to actual certification. In short: nothing lands because a tool suggested it; it lands because a person verified it.
 
+> [!NOTE]
+>
+> ### Maturity: In-Development
+>
+> **In-Development** -> Alpha -> Beta -> Release Candidate -> Full Release.
+> Nothing has been released: there is no tag, no published binary, and the
+> milestone this stage ends with, M1, is not closed. Build it from source or
+> read the code; do not depend on it. The stage advances when a milestone
+> closes, and the mapping is fixed here rather than judged each time: M1 closed
+> makes it Alpha, M2 Beta, M3 Release Candidate, and M4 with `v1.0.0` tagged is
+> Full Release.
+
 ## What
 
 Particle Life is a simple rule set with startlingly lifelike results: N
