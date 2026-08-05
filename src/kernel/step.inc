@@ -285,15 +285,26 @@ build_core:
 ; resolved at init (AH_PATH holds a PATH_* id, never PATH_AUTO). Tail jumps
 ; preserve the seam's 0-mod-32 entry, which the SIMD path relies on for
 ; aligned spills.
+;
+; The vector ids are named and everything else falls to the reference path,
+; rather than the reverse (#202). Deciding by exclusion sent PATH_AUTO, and any
+; word that never came from a resolution at all, into the vector body: the
+; direction that can execute an instruction the CPU may not have. Two
+; invariants kept that safe and neither is stated here - the accept gate in
+; pp_validate_params bounds the field, and cpuid.inc cannot report CPU_AVX512
+; without CPU_AVX2 - so the structure was safe only for as long as code
+; elsewhere stayed that way. Downward is the direction where being wrong costs
+; speed instead of an invalid opcode.
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   clobbers: everything pass_scalar/pass_avx2 do (kernel tier; the seam saved it)
 ; ------------------------------------------------------------------
 pass_core:
         mov     eax, [rcx+AH_PATH]
-        cmp     eax, PATH_SCALAR
-        je      pass_scalar
-        jmp     pass_avx2               ; PATH_AVX2, and PATH_AVX512 until a
-                                        ;   real 512 path exists
+        cmp     eax, PATH_AVX2
+        je      pass_avx2
+        cmp     eax, PATH_AVX512        ; shares the ymm body until #123 builds
+        je      pass_avx2               ;   the zmm instantiation
+        jmp     pass_scalar             ; PATH_SCALAR, PATH_AUTO, anything else
 
 ; ------------------------------------------------------------------
 ; pass_scalar - the reference path: fused force+integrate for i in

@@ -69,6 +69,8 @@ init_core:
         jz      .no_path
         jmp     .path_ok
   .want512:
+        cmp     r10d, PATH_AVX512       ; not a PATH_* id at all: reject rather
+        jne     .no_path                ;   than read it as an AVX-512 request
         test    r9d, CPU_AVX512         ; AVX-512 requested
         jz      .no_path
   .path_ok:
