@@ -28,7 +28,11 @@ the source of truth for _how_.
   regress.
 - **Solo governance, human final say** (see [GOVERNANCE.md](../GOVERNANCE.md)).
   Review is run in-house; no external review, quality, or analysis service is
-  used or trusted with this repository.
+  used or trusted with this repository. The conformance test behind that rule
+  refuses a named list of four root config files and three workflow
+  substrings, not the class, so a service outside the list is caught by the
+  review and by nothing else. [GOVERNANCE.md](../GOVERNANCE.md) names the
+  list.
 
 ## The six-phase loop
 

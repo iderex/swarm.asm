@@ -6,9 +6,20 @@ namespace Swarm.Tests;
 /// Lock-in for the maintainer's external-review-services policy (2026-07-17,
 /// issue #50): all code review and quality gating happens in-house via the
 /// adversarial lens gate (four refute-by-default lenses + simd-reviewer) - the
-/// review of record for this project. No external review/quality-service
-/// config may re-enter the tracked tree. A regression fails loudly, naming
-/// the offending file (and line, for the workflow scan), never silently.
+/// review of record for this project.
+///
+/// What this refuses is the two named lists below and nothing wider: four
+/// config filenames at the repository root, and three substrings in a
+/// workflow file. A service on neither list re-enters the tracked tree with
+/// both tests green - Codecov, Codacy and Snyk steps were added to a workflow
+/// and neither test moved. Widening this to the class means deciding what a
+/// workflow may reach at all rather than which vendors it may name, which is
+/// issue #219's second repair and is not what this file does. GOVERNANCE.md
+/// and docs/DEV-PROCESS.md say the same thing in the same direction, so a
+/// reader is not told the class is held.
+///
+/// A regression on a listed name fails loudly, naming the offending file (and
+/// line, for the workflow scan), never silently.
 /// </summary>
 public sealed class NoExternalReviewServiceConfigTests
 {
