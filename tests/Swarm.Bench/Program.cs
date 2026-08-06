@@ -136,6 +136,50 @@ if (haveAvx2)
     Console.WriteLine("* = physical-core count (auto). Pass is bit-identical to serial for every T.");
 }
 
+// --- Risk 2: the serial counting-sort build at 1M (issue #177) --------------
+// Masterplan open-risk 2 estimates the histogram pass's same-address dependent
+// chain at 8-12 cycles/particle and calls anything materially above ~4.5 ms at
+// 1M an erosion of the frame margin. That estimate decides whether the build
+// stays serial, and it has never been checked at 1M. The contingency it gates
+// is the per-thread per-bucket-cursor parallel scatter.
+//
+// Build only: swarm_build over a frozen arena, min-of-rounds like every other
+// figure here. Both grid dimensions the 1M scenes use are measured, because the
+// build is O(g^2) in its zero-and-prefix half and the two differ four-fold in
+// cell count. n = 1,048,576 is the ABI's maximum n, and the count decision 3's
+// headline scene names.
+//
+// Both input states are measured. Risk 2 states its estimate for NEAR-SORTED
+// input, which is every frame after the first; the unsorted column is the first
+// frame, and the two differ by more than the budget, so reporting one of them
+// as "the build cost" would decide the risk by choosing a column. 500k is
+// carried as the control: its near-sorted figure has to reproduce the build
+// column already in docs/BENCHMARKS.md, and its unsorted figure the M3
+// section's worst-case build, or this instrument is measuring something else.
+{
+    const double RefGhz = 4.9; // as in the #59 section below; recorded per-host
+    Console.WriteLine();
+    Console.WriteLine("Serial grid build (#177): risk 2 estimates 8-12 cycles/particle on near-sorted input, ~4.5 ms at 1M");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{"n",9} {"rmax",8} {"g",5} {"sorted ms",10} {"cyc/part",9} {"unsorted ms",12} {"cyc/part",9}");
+    Console.WriteLine(new string('-', 70));
+    foreach (uint n in new uint[] { 500_000, 1_048_576 })
+    {
+        foreach (float rmax in new[] { 1f / 256f, 1f / 512f })
+        {
+            double sortedMs = TimeGridBuild(n, rmax, nearSorted: true);
+            double coldMs = TimeGridBuild(n, rmax);
+            Console.WriteLine(
+                $"{n,9} {rmax,8:0.00000} {GridDim(rmax),5} {sortedMs,10:0.000} " +
+                $"{sortedMs * 1e6 / n * RefGhz,9:0.0} {coldMs,12:0.000} {coldMs * 1e6 / n * RefGhz,9:0.0}");
+        }
+    }
+    Console.WriteLine();
+    Console.WriteLine($"cyc/particle derived at RefGhz = {RefGhz:0.0}; ms is the clock-free primitive.");
+    Console.WriteLine("sorted = OUT already cell-ordered (every frame after the first); unsorted = the first frame.");
+}
+
 // --- AVX2 force inner loop: cycles/candidate + throughput-vs-latency (#59) ---
 // The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
 // the #38 rsqrt design both rest on: what does one candidate pair cost in the
@@ -343,7 +387,18 @@ static unsafe double TimeGridPass(uint n, float rmax)
 }
 
 // Serial counting-sort build (min-of-rounds over the frozen OUT bank).
-static unsafe double TimeGridBuild(uint n, float rmax)
+//
+// The state of OUT is the whole measurement, so it is a parameter rather than
+// an accident of call order. The build scatters OUT into cell order, and how
+// far OUT already is from that order sets the write locality:
+//
+//   nearSorted: false - OUT is the id-ordered initial frame, so the scatter
+//     writes land all over the IN bank. This is the FIRST frame of a run, and
+//     the worst case.
+//   nearSorted: true - a pass has run over sorted IN, so OUT is written at the
+//     same indices and is already cell-ordered. This is every frame after the
+//     first, and it is the "near-sorted input" masterplan risk 2 estimates.
+static unsafe double TimeGridBuild(uint n, float rmax, bool nearSorted = false)
 {
     SwarmParams p = MakeGridParams(n, rmax);
     ulong bytes = Native.swarm_layout_bytes(in p);
@@ -352,6 +407,11 @@ static unsafe double TimeGridBuild(uint n, float rmax)
     {
         if (Native.swarm_init(arena, bytes, in p) != 0)
             throw new InvalidOperationException($"init failed n={n} rmax={rmax}");
+        if (nearSorted)
+        {
+            Native.swarm_build(arena); // IN becomes cell-ordered ...
+            Native.swarm_pass(arena, 0, n); // ... and the pass carries that order into OUT
+        }
         for (int i = 0; i < 3; i++)
             Native.swarm_build(arena);
         return MinOfRounds(() => Native.swarm_build(arena));
