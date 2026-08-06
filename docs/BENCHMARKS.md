@@ -507,6 +507,88 @@ pass is the larger term and is threaded, and no 1M pass figure is recorded here
 yet. It says the build's own budget line is missed on the input state the risk
 is written about, which is the question this probe was asked.
 
+## Scatter locality under an energetic scene (risk 3's probe; #178)
+
+Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and
+that a hot matrix at the `v_max` clamp degrades write locality. Its probe is
+named in the risk itself: an adversarial preset, all `|a| = 1` and high force,
+against the coherent scene. Its fallback is its own, a two-pass radix over cell
+row then cell, and is not risk 2's parallel scatter above.
+
+**Three scenes, not two.** The scene every other row in this document uses is
+not a calm control: measured below, it already sits with 64% of its velocity
+components at the clamp. A two-scene probe would have compared energetic against
+energetic and reported the difference as an answer.
+
+**All three are stepped before they are timed.** A scene is not energetic at
+frame 0. It is energetic once the matrix has driven velocities to the clamp and
+pulled the population into clumps and voids, so each scene runs 120 steps first.
+Timing frame 0 would compare three identical uniform-random distributions and
+find, correctly and uselessly, no difference.
+
+**Repeats are interleaved, not blocked**, so host drift lands on all three
+scenes rather than on whichever ran last.
+
+| rep | scene       | force_scale | at v_max | build ms | pass ms |
+| --- | ----------- | ----------: | -------: | -------: | ------: |
+| 1   | calm        |         1.0 |     0.1% |    7.196 |  85.375 |
+| 1   | coherent    |        10.0 |    64.0% |    7.162 |  69.818 |
+| 1   | adversarial |       100.0 |    97.8% |    6.230 |  70.692 |
+| 2   | calm        |         1.0 |     0.1% |    5.793 |  65.617 |
+| 2   | coherent    |        10.0 |    64.0% |    6.300 |  68.280 |
+| 2   | adversarial |       100.0 |    97.8% |    6.403 |  70.792 |
+| 3   | calm        |         1.0 |     0.1% |    5.899 |  66.849 |
+| 3   | coherent    |        10.0 |    64.0% |    6.696 |  67.232 |
+| 3   | adversarial |       100.0 |    97.8% |    6.022 |  63.723 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`;
+  `force_path = 1`, single-threaded.
+- **Scenes**: `n = 1,048,576`, `rmax = 1/512` so `g = 512` for all three, 6
+  species, seed `0x5EED`, `FLAG_GRID`, 120 steps before timing. `adversarial`
+  sets every matrix cell to +1 or -1 and `force_scale` to the grammar's ceiling
+  of 100. `calm` and `coherent` keep the harness's varied `sin` matrix and
+  differ from each other only in `force_scale`, 1 against 10.
+- **at v_max** is the share of the 2n velocity components sitting at the
+  per-axis clamp after the settle, read back through `swarm_read_state`. It is
+  identical across reps to the printed precision because the simulation is
+  deterministic.
+- **build** is the near-sorted counting sort, which is the input state risk 3 is
+  written about. Each figure is a min over nine rounds.
+- **Commit**: `15878b3` · **Date**: 2026-08-06.
+
+### Reading the risk 3 numbers
+
+**The premise is real and is measured rather than assumed.** The three scenes
+span 0.1%, 64.0% and 97.8% of velocity components at the clamp, so the hostile
+scene is hostile in exactly the way the risk describes, and the calm control is
+genuinely calm.
+
+**The predicted degradation does not appear.** The worst adversarial build,
+6.403 ms, is below the worst calm build at 7.196 ms and below the worst coherent
+build at 7.162 ms. Within one scene the spread across reps is 1.403 ms for calm,
+0.862 ms for coherent and 0.381 ms for adversarial, so every difference between
+scenes is smaller than the calm scene's own run-to-run spread. Nothing here
+separates the three, and the hostile scene is the steadiest of them.
+
+**So risk 3's fallback is not triggered.** The two-pass radix is not authorised
+by this measurement, and no number here asks for it.
+
+**A hypothesis for the direction, offered as a hypothesis.** Clustering
+concentrates the scatter's writes into fewer distinct cells, which is better
+locality rather than worse, and the risk assumed the opposite. This probe does
+not measure it: nothing here reads the per-cell occupancy distribution, and
+saying so is the honest end of the sentence.
+
+**What this does not cover.** One grid dimension (`g = 512`), one particle count,
+one settle length. A longer settle, a denser `g`, or a scene engineered to
+oscillate rather than to clump could all behave differently and none was run.
+The figures are minima over nine rounds, so they say what the cheapest observed
+build costs, not what a p99 build costs. And the ~1.5-2 ms scatter estimate that
+risk 3 opens with is separately wrong by roughly a factor of three at this
+count - that is risk 2's finding in the section above, and it is not what this
+probe measured.
+
 ## The M1 live frame at 8,192 (`swarm.exe -capture`; #171)
 
 The M1 acceptance measurement, and the only row here taken from the shipped

@@ -729,6 +729,22 @@ disclosed reference machine only).
    degrades write locality. Probe: an adversarial preset (all |a| = 1, high
    force) vs the coherent scene; fallback is a two-pass radix (cell row, then
    cell).
+   **Measured 2026-08-06 (#178, docs/BENCHMARKS.md): the degradation does not
+   appear, and the fallback is NOT triggered.** At n = 1,048,576, g = 512, after
+   120 settling steps, the near-sorted build costs 6.022-6.403 ms with 97.8% of
+   velocity components at the clamp, against 5.793-7.196 ms with 0.1% at it. The
+   hostile scene is the cheapest and the steadiest of the three scenes measured,
+   and every difference between scenes is inside the calm scene's own
+   run-to-run spread, so nothing separates them. The premise is not what
+   failed: the clamp fractions were read back rather than assumed and span the
+   range this line describes. The direction is what failed, and the reason
+   offered is a hypothesis rather than a measurement - clustering concentrates
+   the scatter's writes into fewer distinct cells, which is better locality
+   rather than worse, and nothing in the probe reads the per-cell occupancy
+   distribution that would confirm it. The probe covers one g, one count and one
+   settle length. Separately, the ~1.5-2 ms estimate this line opens with is
+   wrong by roughly a factor of three at this count, which is risk 2's finding
+   above and not this one's.
 4. **p99 under Windows/GDI jitter.** The re-based ~12-13 ms p50 leaves ~4 ms
    for scheduler and GDI noise on the p99 claim, where the pre-#59 projection
    left ~6 ms. Probe: run the 3600-frame histogram early
