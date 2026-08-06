@@ -249,6 +249,70 @@ mxcsr_read_core:
 ; ------------------------------------------------------------------
 seam_wrap swarm_mxcsr, mxcsr_read_core
 
+; ------------------------------------------------------------------
+; swarm_call_under_mxcsr - call an export with a chosen control word installed,
+; and report the word the export left behind.
+;
+; The harness cannot do this itself. Installing a hostile word from managed
+; code would leave every instruction between the install and the call running
+; under it, and a word with the exception masks cleared faults on the first
+; inexact result - which nearly every FP operation produces. Here the hostile
+; word covers the call and nothing else: the instructions on either side of it
+; are integer, and a seam-wrapped target re-pins before its first FP op.
+;
+; What it measures is the seam's restore half. The word this routine hands
+; back is whatever the target left in MXCSR, so a target that restores its
+; caller's word hands back the hostile word unchanged, and one that leaks its
+; own pin hands back that instead.
+;
+;   in:       ecx  = the control word to install across the call
+;             rdx  = the target routine
+;             r8   = u64* receiving the target's return value in rax. For a
+;                    void target that value is undefined and the caller is the
+;                    one who knows which it called
+;             r9   = the target's 1st argument
+;             [rbp+48], [rbp+56], [rbp+64] = its 2nd, 3rd, 4th. Four is every
+;                    current seam export's maximum; a 5th would need the frame
+;                    re-derived, not another mov
+;   out:      eax = MXCSR as the target left it
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI, plus
+;             whatever the target clobbers among them; rbx, rsi and rbp are
+;             saved and restored here and every other nonvolatile is the
+;             target's own responsibility
+;   MXCSR:    installed, read back, and put back to the word this routine was
+;             entered with - so the harness thread never returns holding it
+;   stack:    entry rsp = 8 mod 16; the three pushes and the 48-byte frame land
+;             the call's own push at 8 mod 16 again, which is where a Win64
+;             callee expects to start. [rsp+0..31] is the target's shadow
+;             space, [rsp+32] and [rsp+36] the two control words
+; ------------------------------------------------------------------
+swarm_call_under_mxcsr:
+        push    rbp
+        mov     rbp, rsp
+        push    rbx
+        push    rsi
+        sub     rsp, 48
+        mov     ebx, ecx                ; the word to install
+        mov     rsi, r8                 ; where the return value goes
+        mov     rax, rdx                ; the target
+        mov     rcx, r9                 ; shuffle the target's own arguments
+        mov     rdx, [rbp+48]           ;   down into rcx/rdx/r8/r9
+        mov     r8,  [rbp+56]
+        mov     r9,  [rbp+64]
+        stmxcsr [rsp+32]                ; the word we were entered with
+        mov     [rsp+36], ebx
+        ldmxcsr [rsp+36]
+        call    rax
+        stmxcsr [rsp+36]                ; the word the target left behind
+        ldmxcsr [rsp+32]                ; entry word back, before anything else
+        mov     [rsi], rax
+        mov     eax, [rsp+36]
+        add     rsp, 48
+        pop     rsi
+        pop     rbx
+        pop     rbp
+        ret
+
 section '.edata' export data readable
 
   ; The M3 pool exports (swarm_pool_init / swarm_step_mt / swarm_pass_mt /
@@ -263,6 +327,7 @@ section '.edata' export data readable
          swarm_layout_bytes, 'swarm_layout_bytes',\
          cpu_paths_core,     'swarm_cpu_paths',\
          swarm_mxcsr,        'swarm_mxcsr',\
+         swarm_call_under_mxcsr, 'swarm_call_under_mxcsr',\
          swarm_init,         'swarm_init',\
          swarm_read_state,   'swarm_read_state',\
          build_core,         'swarm_build',\
