@@ -1,0 +1,126 @@
+# OpenSSF Scorecard: the supply-chain and repo-hygiene score, published so the
+# README badge has something to serve.
+#
+# What this grades is the repository, not the engine. Scorecard reads the
+# GitHub metadata and the tracked config - branch protection, the SHA pins in
+# `uses:`, token permissions, whether Dependabot is configured, whether a
+# security policy exists - and none of its checks parse a line of assembly. It
+# is the one quality signal in this tree that is code-agnostic, which is why an
+# asm repository can carry it at all.
+#
+# THIS IS NOT A REVIEW SERVICE. The maintainer decision of 2026-07-17 (#50)
+# keeps all code review and quality gating in-house, and
+# NoExternalReviewServiceConfigTests refuses the named services by name.
+# Scorecard neither reviews a diff nor gates a pull request: it never runs on
+# `pull_request`, it blocks nothing, and its output is a hygiene score about
+# the repository's configuration. Reading it as a way back in for external
+# review would be reading it wrong.
+#
+# WHY publish_results IS ON. The badge in README.md is served by
+# api.scorecard.dev from results this workflow publishes; with publishing off
+# the badge renders "unknown" forever and the row says nothing. That coupling
+# is the reason ScorecardBadgeTests refuses turning it off while the badge is
+# in the README - flipping one without the other is silent, and a stale badge
+# is worse than no badge.
+#
+# The score is public because the repository is. Nothing here uploads source:
+# the published record is the check names, their scores and the reasons, which
+# is what the badge summarises.
+#
+# TWO JOBS, for the reason #193 split the zizmor gate into two. The
+# GITHUB_TOKEN is minted with the permissions of the job it is read in, so a
+# single job would hand a token carrying `security-events: write` to the
+# third-party action it runs. That grant is separable and is separated here.
+# `id-token: write` is not: minting the OIDC token to publish with is the
+# action's own work, and it stays beside it. This comment names the half that
+# could not be removed rather than leaving the split looking complete.
+
+name: Scorecard supply-chain analysis
+
+on:
+  # A weekly refresh so the badge reflects the tree rather than the day it was
+  # added. Off the hour and off Monday: Dependabot already ticks at 05:00 UTC
+  # on Monday and the parser fuzz at 03:17, and a score run has no reason to
+  # queue behind either.
+  schedule:
+    - cron: "41 4 * * 3"
+  # Publishing only happens from the default branch, so the push that merges a
+  # change is the run that refreshes the score for that change.
+  push:
+    branches: [main]
+  # Manual re-run. Note it uploads SARIF but does not publish: the action
+  # publishes on the schedule and the default-branch push, not on dispatch.
+  workflow_dispatch:
+
+# Fail closed: no ambient token scope at the top level; the jobs re-grant the
+# minimum each needs.
+permissions: {}
+
+# One scoring run at a time. A superseded run is safe to cancel - it produces a
+# score, not an artifact anyone is waiting on.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  analysis:
+    name: Score the repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Publish the results to the OpenSSF API. An OIDC token rather than a
+      # repository grant: it cannot write anything here.
+      id-token: write
+      contents: read # checkout the tree to score
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Hand the SARIF to the upload job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 1
+          # Fail closed: no SARIF means the upload job would publish nothing,
+          # which reads exactly like a clean scan.
+          if-no-files-found: error
+
+  upload:
+    name: Upload the Scorecard SARIF
+    needs: analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      security-events: write # upload the SARIF into the code-scanning tab
+      contents: read # upload-sarif reads the checkout to resolve the commit
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the SARIF
+        # continue-on-error on both steps, as on the zizmor upload: a transient
+        # code-scanning failure must not change the verdict of the run that
+        # produced the score.
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scorecard-sarif
+
+      - name: Upload the SARIF
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: results.sarif
+          category: scorecard
