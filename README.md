@@ -135,6 +135,29 @@ first - `dotnet test` loads the freshly built `swarm.kernel.dll`:
 dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
 ```
 
+## Running
+
+```powershell
+.\build\swarm.exe                   # the built-in preset
+.\build\swarm.exe my-scene.txt      # a preset from a file
+```
+
+With no filename the exe runs the preset compiled into it. The first argument
+that does not start with `-` is read as a preset path, so `-smoke` and
+`-capture` can be given alongside one. A path that itself starts with `-` is
+not reachable, which is the trade every argument reader makes.
+
+A preset is the grammar in
+[docs/MASTERPLAN.md](docs/MASTERPLAN.md) decision 10 -
+`tests/fixtures/preset/accepted.txt` is a complete example. The file names the
+scene only; grid mode is the exe's choice and has no key.
+
+Nothing is applied partially. The file is read under an 8192-byte cap and
+handed to the same fail-closed parser the harness tests; if any of that fails,
+the exe says which error code and which line refused the file, and exits 1
+without opening a window. Under `-smoke` and `-capture` the exit code is the
+whole report - a modal box in an unattended run is a hang, not a message.
+
 ## Contributing
 
 Issue-driven: every change starts as an issue and lands as a gated PR - see
