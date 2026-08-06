@@ -19,10 +19,11 @@ FRAME_H      = 1024
 DIB_RGB_COLORS = 0                      ; not in the bundled equates
 SMOKE_FRAMES = 60                       ; frames rendered under -smoke
 WINDOW_STYLE = WS_OVERLAPPED+WS_CAPTION+WS_SYSMENU+WS_MINIMIZEBOX   ; fixed size
-; Live count: the largest that holds a real 60 fps single-threaded at the
-; default preset (measured, docs/BENCHMARKS.md). 8,192 @ 60 fps waits on the
-; M2 grid / M3 threads (brute-force AVX2 is ~53 ms/pass at 8k on one core).
-SIM_N        = 3500
+; Live count: the M1 acceptance count. It is reachable because the preset below
+; sets FLAG_GRID - brute force at 8,192 is ~53 ms/pass on one core, the grid
+; plus the pool is what closes the gap (docs/BENCHMARKS.md). The preset's rmax
+; is part of the same statement: see the note above sim_params.
+SIM_N        = 8192
 TARGET_FPS   = 60
 VK_R         = 'R'                      ; WM_KEYDOWN gives the uppercase VK code
 VK_M         = 'M'
@@ -568,21 +569,29 @@ section '.data' data readable writeable
                                            ;   (one source of truth: seam.inc)
 
   ; Default preset: a SwarmParams (abi.inc SP_*), 304 bytes, Pack=4. A
-  ; four-species world with a varied attraction matrix; rmax/dt/friction
-  ; tuned for visible swarming at the scalar preview count.
+  ; four-species world with a varied attraction matrix; dt/friction tuned for
+  ; visible swarming.
+  ;
+  ; This is the M1 acceptance configuration, and three of its fields carry that
+  ; claim rather than taste. n is the acceptance count. FLAG_GRID is what makes
+  ; the count reachable. rmax = 0.05 is the masterplan's M1 amendment bound: the
+  ; cost is rmax-dependent, and the layout g rule (1/g >= rmax, layout.inc)
+  ; turns 0.05 into g = 16, so the 3x3 neighbourhood spans 9 of 256 cells
+  ; instead of the whole population. ExePresetTests reads these three back out
+  ; of the assembled image, so drifting any of them fails the suite.
   align 16
   sim_params:
         dd 1                            ; version
         dd SIM_N                        ; n
         dd 4                            ; species_n
         dq 0x9E3779B97F4A7C15           ; seed
-        dd 0.08                         ; rmax
+        dd 0.05                         ; rmax
         dd 0.3                          ; beta
         dd 0.02                         ; dt
         dd 0.71                         ; friction
         dd 10.0                         ; force_scale
         dd 0                            ; force_path (auto)
-        dd 0                            ; flags
+        dd FLAG_GRID                    ; flags
         dd  0.5,-0.2, 0.3,-0.5, 0,0,0,0 ; matrix row 0 (8 wide, first 4 used)
         dd -0.3, 0.6,-0.4, 0.2, 0,0,0,0 ; row 1
         dd  0.2, 0.3,-0.6, 0.4, 0,0,0,0 ; row 2
