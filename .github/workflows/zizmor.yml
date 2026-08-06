@@ -31,6 +31,16 @@
 # (aquasecurity/setup-trivy, 1password/load-secrets-action) and setup-uv is not
 # one of them, so that half is refused by PinnedToolInstallTests in the .NET
 # harness rather than by this gate.
+#
+# The audit and the upload are two jobs on purpose (#193). secrets.GITHUB_TOKEN
+# is minted with the permissions of the job it is read in, so while one job held
+# security-events: write for the SARIF upload, the token handed to the steps
+# that fetch and execute a third-party wheel could write code-scanning results.
+# Those are the steps with the widest ingestion surface and the least need for a
+# write grant. The audit job now holds contents: read and passes results.sarif
+# to the upload job as an artifact; the upload job holds the write grant and
+# runs no third-party executable. ZizmorJobPermissionTests refuses putting them
+# back together.
 name: Workflow Security Analysis
 
 on:
@@ -55,7 +65,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      security-events: write # upload the SARIF into the code-scanning tab
+      # No security-events: write here. This job downloads and executes a
+      # third-party wheel, and secrets.GITHUB_TOKEN is minted with the
+      # permissions of the job that reads it (#193).
       contents: read # checkout the workflows to scan
     env:
       ZIZMOR_VERSION: "1.26.1"
@@ -73,7 +85,9 @@ jobs:
           # "Defaults to the version in pyproject.toml or 'latest'", and this
           # repo has no pyproject.toml, uv.toml, uv.lock, .tool-versions or
           # requirements.txt. Without this line uv therefore resolves to latest
-          # on every run, inside the job that holds security-events: write.
+          # on every run, in the job that fetches and executes the audit tool.
+          # That job no longer holds security-events: write (#193), which
+          # narrows what a bad resolve could reach but does not make it fine.
           # Everything else here is pinned: actions by commit SHA, FASM by
           # SHA-256, zizmor and prettier by exact version. Delete this line and
           # that hole reopens.
@@ -97,7 +111,8 @@ jobs:
           # v9 flipped this default to false. Measured on this repo: the saved
           # cache went from 79,677 bytes to 8,631,282 and started retaining the
           # pinned zizmor wheel, on a key the action documents as never
-          # invalidating - restored into a job that holds security-events:write.
+          # invalidating. That cache is restored into the job that then executes
+          # the wheel, which is why it is pinned shut whatever the job's grants.
           # Pinned true so the major bump changes no behaviour here.
           prune-cache: true
 
@@ -122,19 +137,20 @@ jobs:
           # on nothing else in this job. ZizmorTokenTests refuses its removal.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload SARIF
-        # Only upload where the GITHUB_TOKEN can write security events: pushes to main
-        # and same-repo human PRs. Fork and Dependabot pull requests run with a
-        # read-only token, so the upload is skipped there -- the gate step below still
-        # runs and blocks on findings. continue-on-error keeps the security gate
-        # independent of the upload: a transient code-scanning upload failure must not
-        # skip the "Fail on actionable findings" step below.
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+      - name: Hand the SARIF to the upload job
+        # Before the gate step below, not after, so a run that FINDS something
+        # still puts its findings in the code-scanning tab. That was the step
+        # order inside the single job and it is preserved here by ordering plus
+        # the upload job's `!cancelled()`.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          sarif_file: results.sarif
-          category: zizmor
+          name: zizmor-sarif
+          path: results.sarif
+          retention-days: 1
+          # Fail closed: no SARIF means the upload job would silently have
+          # nothing to publish, which is the "quietly stops uploading" outcome
+          # #193 names as worse than the exposure it removes.
+          if-no-files-found: error
 
       - name: Fail on actionable findings
         run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=plain .
@@ -144,3 +160,47 @@ jobs:
           # fails the build, so it is the one where a silently narrowed audit
           # costs the most.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload:
+    name: Upload the zizmor SARIF
+    needs: zizmor
+    # The same condition the upload step carried inside the single job: only
+    # where the GITHUB_TOKEN can write security events, i.e. pushes to main and
+    # same-repo human PRs. Fork and Dependabot pull requests run with a
+    # read-only token, so this job is skipped there and the gate in the audit
+    # job still runs and still blocks on findings.
+    #
+    # !cancelled() rather than the default success(): the audit job FAILS when
+    # it finds something, and that is exactly the run whose findings belong in
+    # the tab.
+    if: |
+      !cancelled() &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login != 'dependabot[bot]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      security-events: write # upload the SARIF into the code-scanning tab
+      contents: read # upload-sarif reads the checkout to resolve the commit
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the SARIF
+        # continue-on-error on both steps here is what the single upload step's
+        # continue-on-error did: a transient code-scanning failure must not
+        # change the verdict the audit job already reached.
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zizmor-sarif
+
+      - name: Upload SARIF
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: results.sarif
+          category: zizmor
