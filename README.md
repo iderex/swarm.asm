@@ -5,6 +5,11 @@ A Particle Life engine written entirely in hand-written x64 assembly.
 **Goal: 1,000,000 interacting particles at 60 fps - no GPU, no dependencies,
 one small `.exe`.**
 
+New here? [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) is the one document that
+covers it end to end: why the kernel is assembly, how the engine is built, what
+the measurements say, and which two popular optimisations were measured and
+dropped.
+
 > [!NOTE]
 >
 > ### 🤝 AI-assisted, human-owned
