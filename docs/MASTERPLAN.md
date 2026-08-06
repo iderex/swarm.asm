@@ -810,13 +810,13 @@ disclosed reference machine only).
 
 ## Milestones
 
-| Milestone        | Acceptance criteria                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| M0 - Foundation  | Masterplan decisions recorded; toolchain + CI green; harness runs a walking-skeleton kernel call end to end                    |
-| M1 - First light | 8,192 particles, brute-force AVX2, single-threaded, live window, interactive matrix, ≥ 60 fps (p99)                            |
-| M2 - Scale       | Uniform grid; 50k particles ≥ 60 fps on one core; brute-vs-grid cross-check green (see the M2 amendment)                       |
-| M3 - One million | Worker threads + AVX-512 path; 500k ≥ 60 fps (met, see the M2 amendment); 1M particles ≥ 60 fps (p99) on the reference machine |
-| M4 - Launch      | Benchmark suite + recorded baselines (headline + dense scene), presets, write-up, v1.0                                         |
+| Milestone        | Acceptance criteria                                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 - Foundation  | Masterplan decisions recorded; toolchain + CI green; harness runs a walking-skeleton kernel call end to end                                        |
+| M1 - First light | 8,192 particles, brute-force AVX2, single-threaded, live window, interactive matrix, ≥ 60 fps (p99) (see the M1 amendment and the M1 closing note) |
+| M2 - Scale       | Uniform grid; 50k particles ≥ 60 fps on one core; brute-vs-grid cross-check green (see the M2 amendment)                                           |
+| M3 - One million | Worker threads + AVX-512 path; 500k ≥ 60 fps (met, see the M2 amendment); 1M particles ≥ 60 fps (p99) on the reference machine                     |
+| M4 - Launch      | Benchmark suite + recorded baselines (headline + dense scene), presets, write-up, v1.0                                                             |
 
 **M1 amendment (recorded 2026-07-16):** M1 was originally "50k brute force
 ≥ 60 fps". That is arithmetically infeasible: 50k² = 2.5e9 candidate pairs
@@ -853,6 +853,17 @@ anticipate: at this count the window is not force-bound at all - `rmax = 0.08`,
 with roughly four times the candidate neighbours, is not meaningfully slower -
 so the `rmax ≤ 0.05` pin is a bound the preset honours rather than the thing
 that buys the margin at 8,192.
+
+With that, M1 is closed and the maturity stage in the README is Alpha. Two
+criteria in the M1 row of the table above are met by something other than what
+they say, and both are worth naming here rather than leaving a reader to
+reconcile them. "Brute-force AVX2, single-threaded" is not what the shipped exe
+runs: the amendment moved the count onto the grid and the worker pool and said
+so, and the brute-force pass stays as the grid's same-binary cross-check rather
+than as the live path. "Interactive matrix" is met by the live reroll on `M`
+and the read-only species HUD on `H`, not by per-cell editing, which is an M4
+issue and is open. Read as a promise of a matrix editor at M1, the row promises
+more than was met.
 
 **M2 amendment (recorded 2026-08-05):** M2 was originally "uniform grid; 50k
 and 500k particles ≥ 60 fps". The grid met the first half on one core and not
