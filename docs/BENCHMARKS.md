@@ -338,6 +338,82 @@ both the AVX2 and scalar paths, exact equality.
 yet. Threads alone may not reach 60 fps at 1M - decision 6 pairs M3 with the
 AVX-512 path for that, and a measured 1M serial baseline is the next step.
 
+## The serial grid build at 1M (risk 2's probe; #177)
+
+Masterplan open-risk 2 estimates the counting sort's histogram chain at **8-12
+cycles/particle on near-sorted input** and calls anything **materially above
+~4.5 ms** at 1M an erosion of the frame margin. That estimate is what decides
+whether the build stays serial, and it had never been checked at 1M. This is
+the check.
+
+Build only, `swarm_build` over a frozen arena, min-of-rounds like every other
+figure here. No kernel change.
+
+| n         | rmax  | g   | sorted ms | cyc/particle | unsorted ms | cyc/particle |
+| --------- | ----- | --- | --------- | ------------ | ----------- | ------------ |
+| 500,000   | 1/256 | 256 | 2.643     | 25.9         | 5.404       | 53.0         |
+| 500,000   | 1/512 | 512 | 2.544     | 24.9         | 7.580       | 74.3         |
+| 1,048,576 | 1/256 | 256 | 6.784     | 31.7         | 25.901      | 121.0        |
+| 1,048,576 | 1/512 | 512 | 7.049     | 32.9         | 26.521      | 123.9        |
+
+- **Two input states, because the difference is larger than the budget.** The
+  build scatters OUT into cell order, so how far OUT already is from that order
+  sets the write locality. **sorted** is OUT already cell-ordered: a pass has
+  run over sorted IN and written OUT at the same indices, which is every frame
+  after the first and is the near-sorted input risk 2 states its estimate for.
+  **unsorted** is the id-ordered initial frame, which is the first frame of a
+  run. Reporting either one alone as "the build cost" would settle the risk by
+  picking a column.
+- **500,000 is the control, not a result.** Its sorted figures have to
+  reproduce the build column of the M2 grid table above, and its unsorted
+  figures the worst-case build the M3 section describes. They do: 2.643 / 2.544
+  against that run's 2.485 / 2.632, and 5.404 / 7.580 against that run's
+  6.546 ms. An instrument that failed this control would be measuring something
+  other than what the other rows measure.
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200, **single-threaded** - the build is serial by design.
+  **Feature path**: AVX2 + FMA (no AVX-512), `force_path = 1`, `FLAG_GRID`.
+  **Seed / preset**: `0x5EED`, 6 species, the bench's varied attraction matrix.
+- **Cycles** are derived at `RefGhz = 4.9` as in the `#59` section below; the
+  ms column is the clock-free primitive and the verdict below does not rest on
+  the derivation.
+- **Commit**: `668d9aa` · **Date**: 2026-08-06. Run on a host that was not
+  quiesced.
+
+### Reading it - risk 2 misses its budget, in both currencies
+
+**Near-sorted, 1M, `g = 512`: 7.049 ms and ~32.9 cycles/particle.** The
+estimate is 8-12 cycles/particle and the line is ~4.5 ms. The measurement is
+**~2.7x the top of the cycle estimate** and **~1.6x the millisecond line**.
+
+**The verdict does not depend on the assumed clock, and it cannot be rescued by
+choosing a different one.** The two halves of the estimate are not consistent
+with each other at this part's clock: 12 cycles/particle at 1,048,576 particles
+is 2.6 ms at 4.9 GHz, not the ~4 ms decision 3 states, so the estimate was
+written against a clock of roughly 2.5 GHz. It misses either way. The 7.049 ms
+is measured and carries no clock at all, so it exceeds the 4.5 ms line whatever
+was assumed; and for 7.049 ms to be 12 cycles/particle the part would have to
+be running at 1.79 GHz, which it is not under any load.
+
+**The growth from 500k to 1M is worse than linear in n**, and that is the part
+that matters for the headline. Near-sorted at `g = 512`, 500k costs 2.544 ms
+and 1M costs 7.049 ms: 2.1x the particles for **2.8x the build**. `g` is
+clamped at 512 for both, so the O(g²) zero-and-prefix half is identical between
+them and cannot be the cause; what grows is the scatter, at ~2 particles per
+cell against ~4. Extrapolating this row to a count above 1M is not supported by
+two points, and none is offered.
+
+**So risk 2's contingency is triggered**, with 7.049 ms as the number that
+triggered it. The masterplan records that against the risk. Note that risk 2's
+contingency is the **per-thread per-bucket-cursor parallel scatter**, which is
+also decision 6's; the two-pass radix is risk **3**'s fallback and is not what
+this measurement authorises.
+
+**What this does not say.** It does not say the 1M frame budget is lost - the
+pass is the larger term and is threaded, and no 1M pass figure is recorded here
+yet. It says the build's own budget line is missed on the input state the risk
+is written about, which is the question this probe was asked.
+
 ## The M1 live frame at 8,192 (`swarm.exe -capture`; #171)
 
 The M1 acceptance measurement, and the only row here taken from the shipped

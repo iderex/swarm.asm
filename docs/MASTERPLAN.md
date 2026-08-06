@@ -711,6 +711,19 @@ disclosed reference machine only).
    chain on near-sorted input is estimated 8-12 cycles/particle; materially
    above ~4.5 ms erodes the frame margin. Probe: per-pass timing at 500k and
    1M (M2). Contingency: the per-thread per-bucket-cursor parallel scatter.
+   **Measured 2026-08-06 (#177, docs/BENCHMARKS.md): 7.049 ms and
+   ~32.9 cycles/particle at n = 1,048,576, g = 512, on near-sorted input** -
+   ~1.6x the millisecond line and ~2.7x the top of the cycle estimate, so
+   **the contingency is triggered**, and the number above is what triggered
+   it. The verdict survives any assumed clock: the 7.049 ms carries none, and
+   12 cycles/particle at that count would need the part to be at 1.79 GHz.
+   The unsorted first frame costs 26.521 ms at the same point, which is the
+   first frame of a run and not what this line estimates. Two figures of this
+   line disagree with each other and both are missed: 8-12 cycles/particle is
+   ~2.6 ms at this part's 4.9 GHz rather than the ~4 ms decision 3 states, so
+   the estimate was written against a clock near 2.5 GHz. Growth from 500k is
+   worse than linear - 2.1x the particles for 2.8x the build at a `g` clamped
+   equal for both, so the O(g²) half is not the cause and the scatter is.
 3. **Scatter locality under energetic scenes.** The ~1.5-2 ms scatter
    estimate assumes temporal coherence; a hot matrix at the v_max clamp
    degrades write locality. Probe: an adversarial preset (all |a| = 1, high
