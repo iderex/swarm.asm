@@ -13,15 +13,17 @@ one small `.exe`.**
 
 > [!NOTE]
 >
-> ### Maturity: In-Development
+> ### Maturity: Alpha
 >
-> **In-Development** -> Alpha -> Beta -> Release Candidate -> Full Release.
-> Nothing has been released: there is no tag, no published binary, and the
-> milestone this stage ends with, M1, is not closed. Build it from source or
-> read the code; do not depend on it. The stage advances when a milestone
-> closes, and the mapping is fixed here rather than judged each time: M1 closed
-> makes it Alpha, M2 Beta, M3 Release Candidate, and M4 with `v1.0.0` tagged is
-> Full Release.
+> In-Development -> **Alpha** -> Beta -> Release Candidate -> Full Release.
+> The stage advances when a milestone closes, and the mapping is fixed here
+> rather than judged each time: M1 closed makes it Alpha, M2 Beta, M3 Release
+> Candidate, and M4 with `v1.0.0` tagged is Full Release. M1 is closed on a
+> measurement ([docs/MASTERPLAN.md](docs/MASTERPLAN.md), "M1 closing note"), so
+> the stage is Alpha. Nothing has been released even so: there is no tag and no
+> published binary, and a per-cell matrix editor, presets loaded from a file and
+> the benchmark suite are all still open. Build it from source or read the code;
+> do not depend on it.
 
 ## What
 
@@ -71,7 +73,7 @@ determinism contract - is recorded with rationale in the masterplan. Progress:
 | Milestone        | Status | Deliverable                                                                      |
 | ---------------- | ------ | -------------------------------------------------------------------------------- |
 | M0 - Foundation  | done   | Design, pinned toolchain, CI, test harness                                       |
-| M1 - First light | active | Brute-force AVX2 kernel + live window; 8,192 live, acceptance measured at 60 fps |
+| M1 - First light | done   | Brute-force AVX2 kernel + live window; 8,192 live, acceptance measured at 60 fps |
 | M2 - Scale       | active | Spatial grid; 50k and 500k particles at 60 fps                                   |
 | M3 - One million | -      | Multithreading + AVX-512 path, 1M particles at 60 fps                            |
 | M4 - Launch      | -      | Benchmark suite vs. existing ports, presets, write-up                            |
