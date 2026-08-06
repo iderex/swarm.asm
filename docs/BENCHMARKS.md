@@ -333,10 +333,103 @@ exports do, pinning `0x9FC0` FTZ/DAZ before any FP op) is what makes that hold
 across threads. `PassParallelMatchesSerial` gates it at `T = 1, 2, 4, 16` on
 both the AVX2 and scalar paths, exact equality.
 
-**1M is still the open target.** At 1M the cells are ~2× denser (`g` clamps at
-512), `k` rises, and the pass grows super-linearly; there is no measured 1M row
-yet. Threads alone may not reach 60 fps at 1M - decision 6 pairs M3 with the
-AVX-512 path for that, and a measured 1M serial baseline is the next step.
+**1M is measured, and it is the section below.** This paragraph used to say
+there was no 1M row and that threads alone might not reach 60 fps there. There
+is one now, at "The 1M baseline", and on the headline scene threads alone do
+reach the budget at the kernel seam. What that does and does not settle is
+stated there rather than here.
+
+## The 1M baseline (serial and threaded; #176)
+
+Every 1M figure above this line was a projection from the 500k rows. This is
+the measurement they stood in for: the grid frame at n = 1,048,576, serial and
+then across the pool, on the two scenes decision 12 names.
+
+**Three whole runs of the harness, not one.** The run-to-run spread at this
+count is wider than several of the differences a reader would otherwise draw
+from a single run, so all three are printed and every reading below is taken on
+the worst of the three rather than the best.
+
+```
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release
+```
+
+### Serial, one core
+
+| run | scene    | rmax     |   g | build ms | pass ms | frame ms |  fps |
+| --- | -------- | -------- | --: | -------: | ------: | -------: | ---: |
+| 1   | headline | 0.001953 | 512 |    6.631 |  65.069 |   71.700 | 13.9 |
+| 2   | headline | 0.001953 | 512 |    7.305 |  73.509 |   80.814 | 12.4 |
+| 3   | headline | 0.001953 | 512 |    7.232 |  73.343 |   80.575 | 12.4 |
+| 1   | dense    | 0.003906 | 256 |    6.597 | 156.778 |  163.375 |  6.1 |
+| 2   | dense    | 0.003906 | 256 |    8.504 | 167.743 |  176.247 |  5.7 |
+| 3   | dense    | 0.003906 | 256 |    8.827 | 172.576 |  181.402 |  5.5 |
+
+### Threaded pass, serial build added back
+
+`T = 16*` is the pool's auto-detected physical-core count.
+
+| run | scene    |    T | pass ms | frame ms |  fps | pass × |
+| --- | -------- | ---: | ------: | -------: | ---: | ------ |
+| 1   | headline |    8 |  13.531 |   20.162 | 49.6 | 4.81×  |
+| 2   | headline |    8 |  13.582 |   20.887 | 47.9 | 5.41×  |
+| 3   | headline |    8 |  14.009 |   21.240 | 47.1 | 5.24×  |
+| 1   | headline | 16\* |   7.184 |   13.815 | 72.4 | 9.06×  |
+| 2   | headline | 16\* |   8.105 |   15.410 | 64.9 | 9.07×  |
+| 3   | headline | 16\* |   8.303 |   15.535 | 64.4 | 8.83×  |
+| 1   | dense    | 16\* |  18.724 |   25.321 | 39.5 | 8.37×  |
+| 2   | dense    | 16\* |  19.869 |   28.373 | 35.2 | 8.44×  |
+| 3   | dense    | 16\* |  21.207 |   30.033 | 33.3 | 8.14×  |
+
+The full `T` sweep (1, 2, 4, 8, auto) is in the harness output; the rows above
+are the two that carry the reading.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2
+  and no AVX-512; `force_path = 1`.
+- **Scenes**: `n = 1,048,576` (the ABI's maximum `n`), 6 species, seed `0x5EED`,
+  `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, `FLAG_GRID`,
+  and the harness's deterministic `sin`-filled matrix. Headline is
+  `rmax = 1/512` so `g` clamps at 512; dense is `rmax = 1/256` so `g` is 256 and
+  each cell holds roughly four times the particles.
+- **build** is the near-sorted counting sort, i.e. every frame after the first.
+  The first frame's build at this count is in the #177 table below and is three
+  to five times this one.
+- **Commit**: `4924c3b` · **Date**: 2026-08-06.
+- **The host was not quiesced**, and the three runs above are what that costs:
+  9.1 ms between the best and worst serial headline frame, on a figure of ~80.
+
+### Reading the 1M numbers
+
+**Does the frame budget close with threads alone at 1M?** On the headline scene,
+at the kernel seam, yes. The worst of the three runs puts the threaded frame at
+**15.535 ms** against the 16.67 ms budget, and the best at 13.815 ms. On the
+dense scene, no, and not close: the worst is **30.033 ms**, about 1.8× over.
+
+**What that answer is not.** These are `swarm_build` plus `swarm_pass` at the
+P/Invoke seam. A frame the user waits for also plots and blits 1M particles, and
+none of that is in the numbers above. The M1 acceptance figure at 8,192 is a
+work window measured inside the shipped exe and includes both; there is no
+equivalent capture at 1M, so nothing here is a frame-rate claim about
+`swarm.exe`. The headline claim is #125's and still needs one.
+
+**And these are minima, not percentiles.** Every figure here is the best of nine
+rounds, which is the right primitive for comparing kernels and the wrong one for
+a 60 fps claim. A budget is met at p99 or it is not met. 15.535 ms of best-case
+work against a 16.67 ms budget leaves 1.1 ms for everything the minimum
+excluded, which is not a margin anyone should spend in advance.
+
+**Scaling stops paying at 8 cores, exactly as 500k said it would.** The pass
+scales 5.24× at `T = 8` and 8.83× at `T = 16` on the worst run, so the second CCD
+returns about a third of what the first eight cores did. That is the taper the
+500k section already recorded and attributed to the working set crossing the
+inter-CCD fabric, and at twice the particles it is not better.
+
+**The build is now a visible share of the threaded frame.** Serial build against
+the `T = 16` frame is 7.232 of 15.535 ms on the worst headline run, about 47%.
+Serial at 500k it was under a third. Risk 2's contingency, the parallel scatter,
+is already triggered on the #177 measurement below; this is what triggering it
+is worth, and it is the single largest remaining item in the threaded frame.
 
 ## The serial grid build at 1M (risk 2's probe; #177)
 

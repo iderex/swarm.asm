@@ -136,6 +136,80 @@ if (haveAvx2)
     Console.WriteLine("* = physical-core count (auto). Pass is bit-identical to serial for every T.");
 }
 
+// --- The 1M baseline: serial frame, then the same frame threaded (issue #176)
+// Every 1M figure in docs/BENCHMARKS.md before this was a projection from the
+// 500k rows. The lever order for 1M - more threads, the AVX-512 path, the
+// parallel-scatter contingency - is meant to be chosen from a measurement, and
+// there was none to choose from.
+//
+// Two scenes, because decision 12 names two and they answer different halves of
+// the question. Headline is rmax = 1/512, where g clamps at 512 and the cells
+// are as sparse as the clamp allows; dense is rmax = 1/256, where g halves to
+// 256, each cell holds ~4x the particles, and k rises with it.
+//
+// The serial rows use the same instrument as the 500k rows above: build and
+// pass timed separately over frozen input, min-of-rounds. The build column is
+// the near-sorted one, i.e. every frame after the first, because TimeGrid runs
+// a pass before it times the build; the first frame's build is the unsorted
+// column of the #177 table below and is several times this one.
+//
+// The threaded rows fan only the pass. The build stays serial in v1, which is
+// what risk 2 and its contingency are about, so it is added back unchanged into
+// every threaded frame. A frame counting only the part that scaled would answer
+// a question nobody asked.
+if (haveAvx2)
+{
+    const uint n1M = 1_048_576; // the ABI's maximum n, and decision 3's headline count
+    (string Name, float RMax)[] scenes = [("headline", 1f / 512f), ("dense", 1f / 256f)];
+
+    Console.WriteLine();
+    Console.WriteLine($"The 1M baseline (#176): serial grid frame at n={n1M}");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{"scene",9} {"rmax",9} {"g",5} {"build ms",10} {"pass ms",10} {"frame ms",10} {"fps",8}");
+    Console.WriteLine(new string('-', 66));
+
+    var serialFrame = new Dictionary<string, (double Build, double Pass)>();
+    foreach (var (name, rmax) in scenes)
+    {
+        var (buildMs, passMs) = TimeGrid(n1M, rmax);
+        serialFrame[name] = (buildMs, passMs);
+        double frameMs = buildMs + passMs;
+        Console.WriteLine(
+            $"{name,9} {rmax,9:0.000000} {GridDim(rmax),5} {buildMs,10:0.000} {passMs,10:0.000} " +
+            $"{frameMs,10:0.000} {1000.0 / frameMs,8:0.0}");
+    }
+    Console.WriteLine();
+    Console.WriteLine("build = near-sorted (every frame after the first); pass = 3x3 neighbourhood over frozen sorted IN.");
+
+    Console.WriteLine();
+    Console.WriteLine($"The 1M baseline (#176): threaded pass at n={n1M}, serial build added back");
+    Console.WriteLine();
+    Console.WriteLine($"{"scene",9} {"T",5} {"pass ms",10} {"frame ms",10} {"fps",8} {"pass x",8}");
+    Console.WriteLine(new string('-', 54));
+    foreach (var (name, rmax) in scenes)
+    {
+        (double buildMs, double serialPassMs) = serialFrame[name];
+        foreach (int t in new[] { 1, 2, 4, 8, 0 })
+        {
+            int actual = Native.swarm_pool_init(t);
+            try
+            {
+                double passMs = TimeGridPassMt(n1M, rmax);
+                double frameMs = buildMs + passMs;
+                string label = t == 0 ? $"{actual}*" : actual.ToString();
+                Console.WriteLine(
+                    $"{name,9} {label,5} {passMs,10:0.000} {frameMs,10:0.000} " +
+                    $"{1000.0 / frameMs,8:0.0} {serialPassMs / passMs,7:0.00}x");
+            }
+            finally { Native.swarm_pool_shutdown(); }
+        }
+    }
+    Console.WriteLine();
+    Console.WriteLine("frame = serial build + threaded pass; pass x = serial pass / threaded pass.");
+    Console.WriteLine("* = physical-core count (auto). 60 fps needs frame <= 16.67 ms.");
+}
+
 // --- Risk 2: the serial counting-sort build at 1M (issue #177) --------------
 // Masterplan open-risk 2 estimates the histogram pass's same-address dependent
 // chain at 8-12 cycles/particle and calls anything materially above ~4.5 ms at
