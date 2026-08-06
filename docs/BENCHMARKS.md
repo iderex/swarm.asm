@@ -18,9 +18,15 @@ and carries none of the bank-swap or copy cost a full `swarm_step` would fold
 in. Two code paths are compared at each particle count: the scalar reference
 (`force_path = 3`) and the AVX2 gather path (`force_path = 1`).
 
-Not yet measured here (tracked on #5, milestone M4): the end-to-end
-`swarm.exe` frame-time capture (mean / p99 fps at a fixed seed and count), the
-1,048,576-particle headline, and regression gating against a stored baseline.
+Also measured, in its own section below: the **live work window** of
+`swarm.exe` at the M1 acceptance count, from the shipped exe's `-capture` mode.
+That is a different measurement from the pass benches above - it is the whole
+of step plus plot plus blit, on the shipped preset, taken from the product
+rather than from a harness.
+
+Not yet measured here (tracked on #5, milestone M4): the full end-to-end
+benchmark mode with its own scene set, the 1,048,576-particle headline, and
+regression gating against a stored baseline.
 
 ## How to run
 
@@ -331,6 +337,106 @@ both the AVX2 and scalar paths, exact equality.
 512), `k` rises, and the pass grows super-linearly; there is no measured 1M row
 yet. Threads alone may not reach 60 fps at 1M - decision 6 pairs M3 with the
 AVX-512 path for that, and a measured 1M serial baseline is the next step.
+
+## The M1 live frame at 8,192 (`swarm.exe -capture`; #171)
+
+The M1 acceptance measurement, and the only row here taken from the shipped
+executable instead of a harness. `swarm.exe -capture` runs the normal paced
+live loop and records the QueryPerformanceCounter delta of the **work window**
+of each frame - step plus plot plus blit, never the pacing wait - then writes
+3600 raw `u64` samples to `swarm-frames.bin` and exits. The wait is outside the
+window on purpose: a paced loop measured wall to wall reports 16.67 ms by
+construction and would say nothing about how much room is left.
+
+The budget is one frame at 60 fps, 16.67 ms, on p99.
+
+### rmax = 0.05, the shipped acceptance preset (g = 16)
+
+| run | mean ms | p50 ms | p99 ms | max ms |
+| --- | ------- | ------ | ------ | ------ |
+| 1   | 3.187   | 2.941  | 6.100  | 9.068  |
+| 2   | 2.149   | 1.690  | 5.066  | 5.980  |
+| 3   | 1.499   | 1.487  | 2.099  | 2.344  |
+
+### rmax = 0.08 (g = 8), a local preset edit, not shipped
+
+| run | mean ms | p50 ms | p99 ms | max ms |
+| --- | ------- | ------ | ------ | ------ |
+| 1   | 2.346   | 2.475  | 2.806  | 7.104  |
+| 2   | 2.322   | 2.453  | 2.778  | 5.124  |
+| 3   | 2.348   | 2.470  | 2.816  | 14.244 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2
+  and no AVX-512; the preset's `force_path = 0` resolves to `PATH_AVX2`. The
+  live loop drives `pool_step`, so the pass runs threaded at the auto-detected
+  16 physical cores while the grid build stays serial.
+- **Scene**: `n = 8192`, `FLAG_GRID`, 4 species, seed `0x9E3779B97F4A7C15`,
+  the preset compiled into the exe. `g` follows from `rmax` by the layout rule
+  (largest power of two with `1/g ≥ rmax`): 16 at `rmax = 0.05`, 8 at 0.08.
+  Every run is 3600 consecutive frames from process start, with no warm-up
+  discarded - the first frames are in the samples.
+- **Commit**: `e2f762b` · **Date**: 2026-08-06.
+- The `rmax = 0.08` rows come from a **locally edited preset**, assembled,
+  measured and reverted. No committed preset carries 0.08; the M1 amendment
+  pins the shipped one at 0.05 or below, and `ExePresetTests` refuses a drift
+  to 0.08 in the image.
+- **The host was not quiesced.** Other work was running on the machine during
+  the capture window, which is the honest reading of the `rmax = 0.05` spread
+  below rather than something to average away.
+
+Each figure above is recomputed from its own dump, so the number and the file
+travel together:
+
+```powershell
+$b = [IO.File]::ReadAllBytes('swarm-frames.bin')
+$freq = [BitConverter]::ToUInt64($b, 8)
+$count = [BitConverter]::ToUInt64($b, 16)
+$ms = @(for ($i = 0; $i -lt $count; $i++) { [BitConverter]::ToUInt64($b, 40 + 8 * $i) * 1000.0 / $freq })
+$s = $ms | Sort-Object
+[string]::Format([Globalization.CultureInfo]::InvariantCulture,
+  "mean={0:F3} ms  p50={1:F3} ms  p99={2:F3} ms  max={3:F3} ms",
+  ($ms | Measure-Object -Average).Average,
+  $s[[int][math]::Floor(0.50 * ($count - 1))],
+  $s[[int][math]::Floor(0.99 * ($count - 1))],
+  $s[$count - 1])
+```
+
+The dump is a 40-byte header - `'SWRMFRM1'`, then `qpc_freq`, `count`, `n`,
+`flags`, `seed` - followed by `count` little-endian `u64` tick deltas. The
+scene the samples belong to is inside the file, so a dump cannot be quoted
+against a run it did not come from.
+
+### Reading the M1 numbers - 8,192 @ 60 fps reached
+
+**The worst p99 of six runs is 6.100 ms against a 16.67 ms budget.** Not the
+best run, not a mean of runs: the worst single reading is 2.7× inside budget,
+and the worst individual frame anywhere in the six runs is 14.244 ms, still
+under one frame period. **M1's acceptance count clears 60 fps**, and it does so
+on the shipped preset with the shipped binary.
+
+**The spread between runs is larger than anything the scene explains.** The
+three `rmax = 0.05` runs report means of 3.187, 2.149 and 1.499 ms - a factor
+of two across identical binaries, identical scene and identical seed. That is
+the host, not the engine, and it is why the claim above is stated on the worst
+reading. A quiesced machine would report a tighter and lower band; nothing here
+needs it to, because the margin survives the noisy one.
+
+**At this count the work window is not force-bound**, which is the more useful
+result. `rmax = 0.08` gives `g = 8` and therefore roughly four times the
+candidate neighbours per particle that `g = 16` does, so a force-dominated
+window would show 0.08 far slower. It does not: the quietest 0.05 run sits at
+1.499 ms mean against 2.346 for 0.08, a gap of ~0.85 ms where a four-fold force
+increase would be much wider. So at least ~1.5 ms of the window is
+`rmax`-independent, and the remaining headroom at 8,192 is not in the force
+pass. The rmax-independent part is **not decomposed here** - the clear, the
+plot and the `BitBlt` are one window in this instrument, and separating them
+needs a finer one than #169 built.
+
+**This does not transfer to a larger count.** The reading says the force pass
+is cheap relative to a fixed 1024×1024 raster cost at 8,192 particles; at 500k
+and 1M the force pass dominates again and the M2 and M3 rows above are the
+relevant ones.
 
 ## The AVX2 force inner loop (cycles/candidate; #59)
 
