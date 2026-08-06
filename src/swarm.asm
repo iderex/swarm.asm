@@ -7,6 +7,15 @@
 ; the DLL uses. `-smoke` on the command line runs a fixed number of real frames
 ; and exits 0 - that flag is what CI runs, because the smoke gate needs a
 ; terminating process.
+;
+; `-capture` is the measurement instrument: the same paced live loop, timing the
+; WORK WINDOW of every frame (step + plot + blit, never the pacing wait) and
+; dumping the raw QPC deltas to swarm-frames.bin before exiting. A paced loop
+; measured wall-to-wall reports the frame period by construction and proves
+; nothing, which is why the wait is outside the window. Raw u64 samples rather
+; than in-exe statistics: no sort, no formatting, no CRT-shaped number printing,
+; and an artifact anyone can recompute from. It takes precedence over `-smoke`
+; when both are given.
 
 format PE64 GUI 6.0
 entry start
@@ -18,6 +27,12 @@ FRAME_W      = 1024                     ; framebuffer and client size, 1:1 blit
 FRAME_H      = 1024
 DIB_RGB_COLORS = 0                      ; not in the bundled equates
 SMOKE_FRAMES = 60                       ; frames rendered under -smoke
+CAPTURE_FRAMES = 3600                   ; work-window samples recorded under -capture
+; swarm-frames.bin header: 'SWRMFRM1' (8) + qpc_freq (8) + count (8) + n (4)
+; + flags (4) + seed (8). Every field is naturally aligned, so a reader can
+; map the struct rather than parse it. The layout is checked below where the
+; fields are laid out, so this constant cannot drift away from them.
+CAP_HEADER_BYTES = 40
 WINDOW_STYLE = WS_OVERLAPPED+WS_CAPTION+WS_SYSMENU+WS_MINIMIZEBOX   ; fixed size
 ; Live count: the M1 acceptance count. It is reachable because the preset below
 ; sets FLAG_GRID - brute force at 8,192 is ~53 ms/pass on one core, the grid
@@ -54,11 +69,30 @@ start:
         invoke  GetModuleHandle, 0
         mov     [wc.hInstance], rax
 
-        ; -smoke on the command line selects the terminating CI mode.
+        ; -smoke selects the terminating CI mode, -capture the measurement run.
         invoke  GetCommandLine
+        mov     [cmd_line], rax
         mov     rcx, rax
-        call    scan_smoke_flag
+        lea     rdx, [smoke_needle]
+        call    scan_arg_flag
         mov     [smoke_mode], eax
+        mov     rcx, [cmd_line]
+        lea     rdx, [capture_needle]
+        call    scan_arg_flag
+        mov     [capture_mode], eax
+
+        ; The sample buffer is committed in capture mode ONLY, so the shipped
+        ; image carries no 28,800-byte block for a mode almost no run uses.
+        ; Fail closed: a capture that cannot record must not reach the loop and
+        ; exit 0, because a green run that produced no measurement would be
+        ; read as a measurement.
+        test    eax, eax
+        jz      .args_done
+        invoke  VirtualAlloc, 0, CAPTURE_FRAMES*8, MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
+        test    rax, rax
+        jz      .fail
+        mov     [capture_buf], rax
+  .args_done:
 
         invoke  LoadCursor, 0, IDC_ARROW
         mov     [wc.hCursor], rax
@@ -180,6 +214,12 @@ start:
         call    ui_reinit               ; fresh positions, same matrix
 
   .step:
+        ; The work window opens here and closes just after BitBlt. Only the
+        ; capture run pays the two QPC reads; a normal live frame is unchanged.
+        cmp     dword [capture_mode], 0
+        je      .work
+        invoke  QueryPerformanceCounter, cap_t0
+  .work:
         cmp     dword [paused], 0
         jne     .plot                   ; paused: skip the step, keep drawing
         mov     rcx, [arena]            ; advance the simulation one step across
@@ -196,6 +236,14 @@ start:
         invoke  BitBlt, [wnd_dc], 0, 0, FRAME_W, FRAME_H, [mem_dc], 0, 0, SRCCOPY
 
         inc     [frame_count]
+        cmp     dword [capture_mode], 0
+        je      .chk_smoke              ; -capture takes precedence over -smoke
+        call    capture_frame           ; closes the work window; returns 1 in
+        test    eax, eax                ;   eax once the dump has been written
+        jz      .pace
+        invoke  DestroyWindow, [hwnd]   ; the same clean shutdown -smoke takes
+        jmp     .pace
+  .chk_smoke:
         cmp     [smoke_mode], 0
         je      .pace
         cmp     [frame_count], SMOKE_FRAMES
@@ -219,18 +267,20 @@ start:
         invoke  ExitProcess, 1          ; fail closed: no window, no half-run
 
 ; ------------------------------------------------------------------
-; scan_smoke_flag - detect "-smoke" as a whole argument token.
+; scan_arg_flag - detect a needle as a whole argument token.
 ;   in:       rcx = zero-terminated ANSI command line in GetCommandLine
 ;             form: the program token comes first, possibly quoted
-;   out:      eax = 1 when a whitespace-delimited argument equals
-;             "-smoke" exactly, else 0
-;   clobbers: rax, rcx, rdx, r8, flags
+;             rdx = zero-terminated ANSI needle, e.g. "-smoke"
+;   out:      eax = 1 when a whitespace-delimited argument equals the
+;             needle exactly, else 0
+;   clobbers: rax, rcx, r8, r9, flags (rdx is read, not written, so the
+;             same needle can be scanned for twice without reloading it)
 ;   MXCSR:    untouched
-;   note:     the program token is skipped so a "-smoke" inside the exe
-;             path never triggers; never reads past the terminator (a
-;             match window can only extend over non-NUL needle bytes)
+;   note:     the program token is skipped so a needle inside the exe path
+;             never triggers; never reads past the terminator (a match
+;             window can only extend over non-NUL needle bytes)
 ; ------------------------------------------------------------------
-scan_smoke_flag:
+scan_arg_flag:
         cmp     byte [rcx], '"'
         jne     .skip_program
   .skip_quoted:                         ; quoted program token: to the
@@ -260,15 +310,15 @@ scan_smoke_flag:
         je      .blank
         cmp     al, 9
         je      .blank
-        xor     edx, edx
+        xor     r9d, r9d
   .compare:
-        movzx   eax, byte [smoke_needle+rdx]
-        movzx   r8d, byte [rcx+rdx]
+        movzx   eax, byte [rdx+r9]
+        movzx   r8d, byte [rcx+r9]
         test    al, al
         jz      .needle_end
         cmp     al, r8b
         jne     .skip_token
-        inc     edx
+        inc     r9d
         jmp     .compare
   .needle_end:                          ; the token must end here too -
         test    r8b, r8b                ; "-smokeless" is not "-smoke"
@@ -522,11 +572,105 @@ frame_pace:
         add     rsp, 8
         ret
 
+; ------------------------------------------------------------------
+; capture_frame - close the frame's work window and record its length.
+;   in:       [cap_t0] = QPC at the top of .step, [capture_buf], [capture_count]
+;   out:      eax = 0 while the run continues; 1 once CAPTURE_FRAMES samples
+;             have been recorded AND swarm-frames.bin has been written
+;   clobbers: caller-saved, flags
+;   MXCSR:    untouched (integer only)
+;   note:     the window closes a handful of instructions after BitBlt returns
+;             (the count check and this call), not at the exact BitBlt return -
+;             nanoseconds against a millisecond-scale frame, and disclosed
+;             rather than rounded away
+; ------------------------------------------------------------------
+capture_frame:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        ; Bounds guard: the sample index can never run past the buffer. The
+        ; pump cannot reach another frame once WM_QUIT is posted, so this
+        ; branch is unreachable by construction and correspondingly unproven -
+        ; it is here because the cost of being wrong about that is a write past
+        ; the end, and the cost of the guard is two instructions.
+        mov     ecx, [capture_count]
+        cmp     ecx, CAPTURE_FRAMES
+        jae     .complete
+        invoke  QueryPerformanceCounter, cap_t1
+        mov     rax, [cap_t1]
+        sub     rax, [cap_t0]           ; work-window ticks, pacing excluded
+        mov     ecx, [capture_count]
+        mov     rdx, [capture_buf]
+        mov     [rdx+rcx*8], rax
+        inc     ecx
+        mov     [capture_count], ecx
+        cmp     ecx, CAPTURE_FRAMES
+        jb      .more
+        call    capture_write           ; never returns unless the dump landed
+  .complete:
+        mov     eax, 1
+        add     rsp, 8
+        ret
+  .more:
+        xor     eax, eax
+        add     rsp, 8
+        ret
+
+; ------------------------------------------------------------------
+; capture_write - dump the header and the raw samples to swarm-frames.bin.
+;   in:       [capture_buf], [capture_count], [qpc_freq], [sim_params]
+;   out:      nothing on success; exits the process with code 1 on any failure
+;   clobbers: caller-saved, flags
+;   MXCSR:    untouched (integer only)
+;   note:     fail-closed on all three write paths - a create that failed, a
+;             WriteFile that failed, and a WriteFile that reported fewer bytes
+;             than asked for. A capture run that exits 0 has a complete file,
+;             so an exit code can be trusted to mean a measurement exists
+; ------------------------------------------------------------------
+capture_write:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        mov     rax, [qpc_freq]         ; the header is the run's disclosure:
+        mov     [cap_freq], rax         ;   the analysis needs the tick rate,
+        mov     eax, [capture_count]    ;   and the scene needs n/flags/seed to
+        mov     [cap_samples], rax      ;   be recomputable from the file alone
+        shl     rax, 3                  ; u64 per sample
+        mov     [cap_bytes], rax
+        mov     eax, [sim_params+SP_N]
+        mov     [cap_n], eax
+        mov     eax, [sim_params+SP_FLAGS]
+        mov     [cap_flags], eax
+        mov     rax, [sim_params+SP_SEED]
+        mov     [cap_seed], rax
+
+        invoke  CreateFileW, cap_path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, \
+                FILE_ATTRIBUTE_NORMAL, 0
+        cmp     rax, INVALID_HANDLE_VALUE
+        je      .fail                   ; e.g. the name is taken by a directory
+        mov     [cap_file], rax
+        invoke  WriteFile, [cap_file], cap_header, CAP_HEADER_BYTES, cap_written, 0
+        test    eax, eax
+        jz      .fail_close
+        cmp     dword [cap_written], CAP_HEADER_BYTES
+        jne     .fail_close             ; a short header is not a header
+        invoke  WriteFile, [cap_file], [capture_buf], [cap_bytes], cap_written, 0
+        test    eax, eax
+        jz      .fail_close
+        mov     eax, [cap_written]
+        cmp     rax, [cap_bytes]
+        jne     .fail_close             ; a short dump is not a measurement
+        invoke  CloseHandle, [cap_file]
+        add     rsp, 8
+        ret
+  .fail_close:
+        invoke  CloseHandle, [cap_file]
+  .fail:
+        invoke  ExitProcess, 1
+
 section '.data' data readable writeable
 
-  _title       TCHAR 'swarm.asm', 0
-  _class       TCHAR 'SWARM', 0
-  smoke_needle db '-smoke', 0
+  _title         TCHAR 'swarm.asm', 0
+  _class         TCHAR 'SWARM', 0
+  smoke_needle   db '-smoke', 0
+  capture_needle db '-capture', 0
+  cap_path       du 'swarm-frames.bin', 0    ; CreateFileW takes UTF-16
 
   wc   WNDCLASSEX sizeof.WNDCLASSEX, CS_OWNDC, WindowProc, 0, 0, NULL, NULL, NULL, NULL, NULL, _class, NULL
   rect RECT 0, 0, FRAME_W, FRAME_H
@@ -549,6 +693,34 @@ section '.data' data readable writeable
   win_h       dd ?
   frame_count dd 0
   smoke_mode  dd 0
+
+  ; -capture state. capture_buf stays 0 outside capture mode - the buffer is
+  ; committed at startup only when the flag is present, so the shipped image
+  ; carries none of it.
+  capture_mode  dd 0
+  capture_count dd 0                    ; samples recorded so far
+  align 8
+  cmd_line    dq ?                      ; GetCommandLine result, scanned twice
+  capture_buf dq 0                      ; CAPTURE_FRAMES u64 work-window ticks
+  cap_t0      dq ?                      ; work window open (top of .step)
+  cap_t1      dq ?                      ; work window close (after BitBlt)
+  cap_file    dq ?                      ; swarm-frames.bin handle
+  cap_bytes   dq ?                      ; sample bytes asked of WriteFile
+  cap_written dd ?                      ; WriteFile's LPDWORD out-parameter
+
+  ; The swarm-frames.bin header, laid out in place so it is written with one
+  ; WriteFile and no marshalling. Field order and widths are the file format;
+  ; the check below refuses a layout that has drifted from CAP_HEADER_BYTES.
+  align 8
+  cap_header  db 'SWRMFRM1'             ; magic, and the format version in it
+  cap_freq    dq ?                      ; QueryPerformanceFrequency, ticks/s
+  cap_samples dq ?                      ; u64 samples following the header
+  cap_n       dd ?                      ; particle count of the captured run
+  cap_flags   dd ?                      ; SwarmParams flags (FLAG_GRID et al.)
+  cap_seed    dq ?                      ; world seed
+  if $ - cap_header <> CAP_HEADER_BYTES
+        err     ; the header fields and CAP_HEADER_BYTES disagree
+  end if
 
   ; Interactive state (written by WindowProc, consumed at the step boundary).
   paused      dd 0
