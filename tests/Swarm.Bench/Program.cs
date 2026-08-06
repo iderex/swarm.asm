@@ -254,6 +254,75 @@ if (haveAvx2)
     Console.WriteLine("sorted = OUT already cell-ordered (every frame after the first); unsorted = the first frame.");
 }
 
+// --- Risk 3: scatter locality under an energetic scene at 1M (issue #178) ----
+// Masterplan open-risk 3 says the scatter estimate assumes temporal coherence,
+// and that a hot matrix at the v_max clamp degrades write locality. Its probe is
+// named there: an adversarial preset, all |a| = 1 and high force, against the
+// coherent scene. Its fallback is its own, a two-pass radix over cell row then
+// cell, and is not risk 2's parallel scatter.
+//
+// The scenes differ in the matrix and force_scale and in nothing else. Same n,
+// same rmax, so the same g and the same cell count: the O(g^2) zero-and-prefix
+// half of the build is identical between them by construction, and a difference
+// that shows up is the scatter half. Choosing a different rmax for the hostile
+// scene would have confounded exactly the thing being measured.
+//
+// Three scenes rather than two, because the scene every other row here uses is
+// NOT a calm control. Measured below, it already sits with most of its velocity
+// components at the clamp, so a two-scene probe would compare energetic against
+// energetic and report the difference as an answer.
+//
+// All three are STEPPED before they are timed, which is the whole point. A scene
+// is not energetic at frame 0; it is energetic after the matrix has had time to
+// drive velocities to the clamp and pull the population into clumps and voids.
+// Timing frame 0 would compare three identical uniform-random distributions and
+// find, correctly and uselessly, no difference.
+//
+// Repeats are interleaved rather than blocked, so host drift lands on all three
+// scenes instead of on whichever ran last. The spread within one scene is what
+// says whether a difference between scenes means anything, and it is printed
+// rather than collapsed into a mean.
+//
+// The build is timed on near-sorted input, which is what risk 3 is about: every
+// frame after the first, where the previous frame's ordering is supposed to make
+// the scatter cheap. The pass is timed alongside it because clumping moves k as
+// well, and a build that held while the pass doubled would be a different
+// finding than a build that collapsed.
+if (haveAvx2)
+{
+    const uint nRisk3 = 1_048_576;
+    const float rmaxRisk3 = 1f / 512f; // g = 512 for every scene
+    const int settleSteps = 120; // 2.4 s of sim at dt = 0.02
+    const int repeats = 3;
+    (string Name, float Scale, bool Hostile)[] risk3 =
+        [("calm", 1f, false), ("coherent", 10f, false), ("adversarial", 100f, true)];
+
+    Console.WriteLine();
+    Console.WriteLine(
+        $"Scatter locality under an energetic scene (#178): n={nRisk3}, g={GridDim(rmaxRisk3)}, {settleSteps} steps before timing");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{"rep",4} {"scene",12} {"force_scale",12} {"at v_max",9} {"build ms",10} {"pass ms",10} {"frame ms",10}");
+    Console.WriteLine(new string('-', 72));
+
+    for (int rep = 1; rep <= repeats; rep++)
+    {
+        foreach (var (name, scale, hostile) in risk3)
+        {
+            var (buildMs, passMs, forceScale, clampedPct) =
+                TimeSettledGrid(nRisk3, rmaxRisk3, scale, hostile, settleSteps);
+            Console.WriteLine(
+                $"{rep,4} {name,12} {forceScale,12:0.0} {clampedPct,8:0.0}% {buildMs,10:0.000} " +
+                $"{passMs,10:0.000} {buildMs + passMs,10:0.000}");
+        }
+    }
+    Console.WriteLine();
+    Console.WriteLine("adversarial = every matrix cell +-1 at the grammar's force_scale ceiling; calm and coherent keep the varied matrix and differ only in force_scale.");
+    Console.WriteLine("at v_max = share of the 2n velocity components at the per-axis clamp after the settle, the premise risk 3 rests on.");
+    Console.WriteLine("build is near-sorted (the frame after the previous frame's ordering), which is what risk 3 estimates.");
+    Console.WriteLine("Read the spread across reps before reading a difference across scenes.");
+}
+
 // --- AVX2 force inner loop: cycles/candidate + throughput-vs-latency (#59) ---
 // The premise the masterplan force-cost analysis (decision 3 / open-risk-1) and
 // the #38 rsqrt design both rest on: what does one candidate pair cost in the
@@ -493,6 +562,88 @@ static unsafe double TimeGridBuild(uint n, float rmax, bool nearSorted = false)
     finally { NativeMemory.AlignedFree(arena); }
 }
 
+// Grid build and pass for a world that has been STEPPED first, so the timed
+// state is the one the scene actually settles into rather than the uniform
+// random draw every other figure here starts from.
+//
+// hostile replaces the matrix with every cell at +-1, which is risk 3's "all
+// |a| = 1"; forceScale is the other half of "high force" and is a parameter so
+// a calm control can exist. Everything else, n and rmax and therefore g and the
+// cell count, is identical across scenes, so the O(g^2) half of the build
+// cannot account for a difference between them.
+static unsafe (double Build, double Pass, float ForceScale, double ClampedPct) TimeSettledGrid(
+    uint n, float rmax, float forceScale, bool hostile, int steps)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    p.ForceScale = forceScale; // (0, 100] per the grammar
+    if (hostile)
+    {
+        for (uint a = 0; a < 6; a++)
+            for (uint b = 0; b < 6; b++)
+                p.Matrix[(int)(a * 8 + b)] = ((a + b) & 1) == 0 ? 1f : -1f;
+    }
+
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException($"layout rejected n={n} rmax={rmax}");
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed n={n} rmax={rmax} hostile={hostile}");
+
+        Native.swarm_step(arena, (uint)steps); // let the scene become what it is
+
+        // "Energetic" is the premise risk 3 rests on, so it is measured rather
+        // than assumed: the share of velocity components sitting at the v_max
+        // clamp after the settle. A hostile scene that turned out to be calm
+        // would make the rest of the row meaningless without saying so.
+        double clampedPct = ClampedFraction(arena, n, rmax / p.Dt) * 100.0;
+
+        Native.swarm_build(arena);
+        for (int i = 0; i < 3; i++)
+            Native.swarm_pass(arena, 0, n);
+        double passMs = MinOfRounds(() => Native.swarm_pass(arena, 0, n));
+
+        for (int i = 0; i < 3; i++)
+            Native.swarm_build(arena);
+        double buildMs = MinOfRounds(() => Native.swarm_build(arena));
+
+        return (buildMs, passMs, p.ForceScale, clampedPct);
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
+// Share of the 2n velocity components at the per-axis v_max clamp. The clamp is
+// a hard saturation, so equality is the right test and no tolerance is needed.
+static unsafe double ClampedFraction(void* arena, uint n, float vmax)
+{
+    float* x = (float*)NativeMemory.Alloc(n, sizeof(float));
+    float* y = (float*)NativeMemory.Alloc(n, sizeof(float));
+    float* vx = (float*)NativeMemory.Alloc(n, sizeof(float));
+    float* vy = (float*)NativeMemory.Alloc(n, sizeof(float));
+    int* s = (int*)NativeMemory.Alloc(n, sizeof(int));
+    try
+    {
+        if (Native.swarm_read_state(arena, x, y, vx, vy, s) != 0)
+            throw new InvalidOperationException("swarm_read_state reported a dropped id; the copy-out is untrustworthy");
+
+        long clamped = 0;
+        for (uint i = 0; i < n; i++)
+        {
+            if (MathF.Abs(vx[i]) >= vmax) clamped++;
+            if (MathF.Abs(vy[i]) >= vmax) clamped++;
+        }
+        return clamped / (2.0 * n);
+    }
+    finally
+    {
+        NativeMemory.Free(x); NativeMemory.Free(y);
+        NativeMemory.Free(vx); NativeMemory.Free(vy); NativeMemory.Free(s);
+    }
+}
+
 // Threaded grid pass (min-of-rounds over the frozen sorted IN bank). The pool
 // must already be initialised by the caller (swarm_pool_init); the pass fans
 // across it and is bit-identical to the serial pass for any T.
@@ -651,6 +802,18 @@ internal static unsafe class Native
 
     [DllImport("swarm.kernel.dll")]
     internal static extern void swarm_pool_shutdown();
+
+    // n_steps x (build + pass + bank swap). Used only to advance a world into
+    // the state a scene actually reaches, before anything about it is timed.
+    [DllImport("swarm.kernel.dll")]
+    internal static extern void swarm_step(void* arena, uint nSteps);
+
+    // Id-ordered copy-out. Used here to check that a scene claimed to be
+    // energetic actually is, rather than to time anything. Returns 1 if any id
+    // fell outside [0, n), in which case the copy is untrustworthy.
+    [DllImport("swarm.kernel.dll")]
+    internal static extern int swarm_read_state(
+        void* arena, float* x, float* y, float* vx, float* vy, int* species);
 }
 
 // 1:1 mirror of the native SwarmParams seam struct (src/kernel/abi.inc):
