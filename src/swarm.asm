@@ -42,6 +42,16 @@ SIM_N        = 8192
 TARGET_FPS   = 60
 VK_R         = 'R'                      ; WM_KEYDOWN gives the uppercase VK code
 VK_M         = 'M'
+VK_H         = 'H'                      ; toggles the read-only matrix HUD
+; Matrix HUD geometry, in client pixels. The grid is species_n x species_n
+; cells of HUD_CELL pitch drawn HUD_GAP short, so the backdrop shows through
+; as the separator and no second fill is needed per cell. At the species cap
+; of 8 the whole panel is 8*24 + 2*6 = 204 px on a 1024 px client.
+HUD_CELL     = 24                       ; cell pitch
+HUD_GAP      = 2                        ; pitch not painted, i.e. the gridline
+HUD_ORG      = 16                       ; top-left of the first cell
+HUD_PAD      = 6                        ; backdrop margin around the grid
+HUD_BACK     = 0x00202020               ; backdrop COLORREF (0x00BBGGRR)
 MEM_COMMIT     = 0x1000                 ; VirtualAlloc flags (kernel64 equates
 MEM_RESERVE    = 0x2000                 ;   omit these; define them locally)
 PAGE_READWRITE = 0x04
@@ -240,15 +250,23 @@ start:
         je      .chk_smoke              ; -capture takes precedence over -smoke
         call    capture_frame           ; closes the work window; returns 1 in
         test    eax, eax                ;   eax once the dump has been written
-        jz      .pace
+        jz      .hud
         invoke  DestroyWindow, [hwnd]   ; the same clean shutdown -smoke takes
         jmp     .pace
   .chk_smoke:
         cmp     [smoke_mode], 0
-        je      .pace
+        je      .hud
         cmp     [frame_count], SMOKE_FRAMES
-        jb      .pace
+        jb      .hud
         invoke  DestroyWindow, [hwnd]   ; -> WM_DESTROY -> PostQuitMessage(0)
+        jmp     .pace
+
+  .hud:
+        ; Deliberately AFTER capture_frame closed the work window: the HUD is
+        ; an overlay on the already-blitted frame, so a capture run measures
+        ; step + plot + blit whether the HUD is up or not. The two shutdown
+        ; paths above skip it because their window is already destroyed.
+        call    hud_draw                ; no-op unless the HUD is toggled on
 
   .pace:
         call    frame_pace              ; wait out the frame to the 60 fps deadline
@@ -376,6 +394,8 @@ proc WindowProc wnd, wmsg, wp, lp
         je      .k_reseed
         cmp     r8d, VK_M
         je      .k_reroll
+        cmp     r8d, VK_H
+        je      .k_hud
         jmp     .defwndproc
   .k_quit:
         invoke  DestroyWindow, rcx
@@ -391,6 +411,10 @@ proc WindowProc wnd, wmsg, wp, lp
         jmp     .finish
   .k_reroll:
         mov     dword [reroll_req], 1
+        xor     eax, eax
+        jmp     .finish
+  .k_hud:                               ; not a step-boundary edit: the HUD only
+        xor     dword [hud_on], 1       ; reads, so it touches no simulation bit
         xor     eax, eax
         jmp     .finish
   .destroy:
@@ -536,6 +560,114 @@ ui_reinit:
         mov     rdx, [arena_bytes]
         lea     r8, [sim_params]
         call    sim_init
+        ret
+
+; ------------------------------------------------------------------
+; hud_draw - paint the species matrix over the blitted frame (read-only).
+;   in:       nothing; reads [hud_on], [wnd_dc] and the matrix block in
+;             [sim_params] (SP_SPECIES_N, SP_MATRIX)
+;   out:      nothing; the window DC is painted when [hud_on] is non-zero,
+;             and the routine returns without touching a register or the
+;             device when it is zero
+;   clobbers: caller-saved, flags, xmm0; rbx/rsi/rdi/r12 are saved and
+;             restored (the loop indices have to survive the GDI calls)
+;   MXCSR:    read, not written - the arithmetic here is one multiply and a
+;             truncating convert, so the pinned rounding mode does not
+;             reach it and no denormal can arise from a [-1, 1] input
+;   note:     creates no GDI object. SetBkColor plus an empty ExtTextOut with
+;             ETO_OPAQUE fills the rectangle with the background colour, so
+;             there is no brush to select, restore or leak - a handle leak in
+;             a per-frame overlay is the failure this shape removes rather
+;             than guards against. It also explains the absence of any
+;             DeleteObject below, which would otherwise read as a bug.
+;   note:     nothing here reads or writes the arena, so the HUD is outside
+;             the determinism surface: the same seed produces the same state
+;             whether it is up or not
+; ------------------------------------------------------------------
+hud_draw:
+        cmp     dword [hud_on], 0
+        jz      .off
+        push    rbx
+        push    rsi
+        push    rdi
+        push    r12
+        sub     rsp, 8                  ; entry rsp = 8 mod 16, +4 pushes = 8
+        mov     r12d, [sim_params+SP_SPECIES_N]   ; -> 0 mod 16 for invoke
+
+        ; Backdrop first: one fill behind the grid, HUD_PAD wider on every
+        ; side, so the unpainted HUD_GAP of each cell reads as a gridline and
+        ; the panel stays legible over any particle colour.
+        mov     eax, r12d
+        imul    eax, HUD_CELL
+        sub     eax, HUD_GAP
+        add     eax, HUD_PAD*2          ; panel side in pixels
+        mov     ecx, HUD_ORG-HUD_PAD
+        mov     [hud_rect.left], ecx
+        mov     [hud_rect.top], ecx
+        add     eax, ecx
+        mov     [hud_rect.right], eax
+        mov     [hud_rect.bottom], eax
+        invoke  SetBkColor, [wnd_dc], HUD_BACK
+        invoke  ExtTextOutA, [wnd_dc], 0, 0, ETO_OPAQUE, hud_rect, 0, 0, 0
+
+        lea     rdi, [sim_params+SP_MATRIX]
+        xor     ebx, ebx                ; i = row = the species being acted on
+  .row:
+        cmp     ebx, r12d
+        jae     .rows_done
+        xor     esi, esi                ; j = column = the species acting
+  .col:
+        cmp     esi, r12d
+        jae     .row_next
+        mov     eax, esi                ; cell rectangle, HUD_GAP short of the
+        imul    eax, HUD_CELL           ;   pitch on the right and the bottom
+        add     eax, HUD_ORG
+        mov     [hud_rect.left], eax
+        add     eax, HUD_CELL-HUD_GAP
+        mov     [hud_rect.right], eax
+        mov     eax, ebx
+        imul    eax, HUD_CELL
+        add     eax, HUD_ORG
+        mov     [hud_rect.top], eax
+        add     eax, HUD_CELL-HUD_GAP
+        mov     [hud_rect.bottom], eax
+
+        ; Colour = the coefficient: green for attraction, red for repulsion,
+        ; intensity for magnitude. The sign is read off the stored bit pattern
+        ; rather than a compare, so -0.0 takes the repulsion branch at zero
+        ; intensity and paints black either way.
+        mov     eax, ebx
+        shl     eax, 3                  ; the matrix stride is 8 f32 (i*8 + j)
+        add     eax, esi
+        mov     ecx, [rdi+rax*4]        ; the f32 bit pattern of a
+        mov     edx, ecx
+        and     edx, 0x7FFFFFFF         ; |a|, by clearing the sign bit
+        movd    xmm0, edx
+        minss   xmm0, [f_one]           ; init_core validates every coefficient
+                                        ;   into [-1, 1]; this holds the byte
+                                        ;   range even if that ever stops being
+                                        ;   true, because 256 is not a colour
+        mulss   xmm0, [hud_255]
+        cvttss2si eax, xmm0             ; v in [0, 255], truncating
+        test    ecx, ecx
+        js      .repulsion
+        shl     eax, 8                  ; attraction -> the green byte
+  .repulsion:                           ; repulsion -> the red byte, already in
+        mov     [hud_color], eax        ;   place (COLORREF is 0x00BBGGRR)
+        invoke  SetBkColor, [wnd_dc], [hud_color]
+        invoke  ExtTextOutA, [wnd_dc], 0, 0, ETO_OPAQUE, hud_rect, 0, 0, 0
+        inc     esi
+        jmp     .col
+  .row_next:
+        inc     ebx
+        jmp     .row
+  .rows_done:
+        add     rsp, 8
+        pop     r12
+        pop     rdi
+        pop     rsi
+        pop     rbx
+  .off:
         ret
 
 ; ------------------------------------------------------------------
@@ -726,6 +858,14 @@ section '.data' data readable writeable
   paused      dd 0
   reseed_req  dd 0
   reroll_req  dd 0
+  ; The HUD toggle is the exception: it is not a step-boundary edit, because
+  ; the HUD reads the matrix and writes nothing the simulation can see. Off by
+  ; default, so an unattended run - the smoke gate, a capture - never draws it.
+  hud_on      dd 0
+
+  hud_rect    RECT ?                    ; rebuilt per fill; ExtTextOut reads it
+  hud_color   dd ?                      ; the cell COLORREF, staged for invoke
+  hud_255     dd 255.0
 
   align 8
   ui_rng          dq 0x243F6A8885A308D3   ; UI RNG state (distinct from the sim seed)

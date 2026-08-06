@@ -54,7 +54,9 @@ the larger SIMD win waits on the M2 cell-sorted layout that shrinks the
 candidate set from n² to the in-range neighbours.
 
 **It's interactive.** The window is keyboard-driven - **Space** pauses,
-**R** reseeds the world, **M** rerolls the attraction matrix, **Esc** quits -
+**R** reseeds the world, **M** rerolls the attraction matrix, **H** shows or
+hides the species matrix as a grid of coloured cells over the frame (green for
+attraction, red for repulsion, brightness for strength), **Esc** quits -
 with edits applied at step boundaries and the frame paced to a real 60 fps by a
 high-resolution timer. The live count is the M1 acceptance count, 8,192, on the
 cell-sorted grid across the worker pool; **8,192 @ 60 fps is measured, not
