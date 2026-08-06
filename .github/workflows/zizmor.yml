@@ -152,6 +152,11 @@ jobs:
           # #193 names as worse than the exposure it removes.
           if-no-files-found: error
 
+      - name: Verification run at -v (probe branch only)
+        run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low -v --format=plain . || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Fail on actionable findings
         run: uvx --no-build "zizmor@${ZIZMOR_VERSION}" --strict-collection --min-severity=low --format=plain .
         env:

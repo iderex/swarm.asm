@@ -1,0 +1,11 @@
+# Probe branch only: an unpinned `uses:` so the zizmor gate has an actionable
+# finding to fail on. Never merged.
+name: probe finding
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
