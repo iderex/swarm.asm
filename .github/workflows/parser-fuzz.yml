@@ -1,0 +1,99 @@
+# The parser fuzz at a budget no pull request could pay for.
+#
+# The pull-request gate runs the same entry at 4,000 iterations, small enough
+# that nobody notices it. This runs the same entry at 5,000,000, which is the
+# budget the harness entry itself names for a scheduled job. Nothing here is a
+# second implementation of the fuzz: the entry, the generator and the invariants
+# are the harness's, and this workflow only supplies a budget and a seed.
+#
+# Internal only. There is no external fuzzing service in this repository and a
+# conformance test refuses one.
+#
+# WHY THE TEST BINARY AND NOT `dotnet test`. A fuzz failure is worth exactly the
+# seed it prints, and `dotnet test` does not print it: it reports the failure
+# count and points at a TestResults log file, leaving the reproducing seed out
+# of the run log entirely. Measured on this harness - a deliberately failed
+# iteration under `dotnet test` produces no seed anywhere in stdout, and the
+# same iteration run through the built test executable produces
+# "Replay this exact input with SWARM_FUZZ_SEED=0x... and SWARM_FUZZ_BUDGET=1"
+# in the log. So the run is the executable, and the reader of a red run gets
+# the one line that makes it actionable.
+
+name: Parser fuzz (long run)
+
+on:
+  schedule:
+    # Weekly, Monday 03:17 UTC. Off the hour on purpose: scheduled jobs at
+    # round times queue behind everyone else's.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: "Iterations (default 5000000)"
+        required: false
+        type: string
+      seed:
+        description: "Root seed, e.g. 0x1CAAEF4F12A2E7E1 (default: the harness root)"
+        required: false
+        type: string
+
+# Fail closed: no ambient token scope at the top level; the job re-grants the
+# minimum it needs.
+permissions: {}
+
+# One run at a time, and a new one never kills a run in flight - a long fuzz
+# that is cancelled at 90% has told nobody anything.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: parser fuzz
+    runs-on: windows-latest
+    # The 5,000,000-iteration run is minutes, not tens of minutes; this bound
+    # is the runaway catch, not the expected duration.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # The native kernel must actually load here - a fuzz run that silently
+      # skipped the parser would be the emptiest green in the repository.
+      SWARM_REQUIRE_NATIVE: "1"
+      # Dispatch inputs reach the step through the environment, never through
+      # an expression inside the script.
+      FUZZ_BUDGET: ${{ inputs.budget }}
+      FUZZ_SEED: ${{ inputs.seed }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Bootstrap the pinned assembler (SHA-256-verified)
+        run: ./tools/get-fasm.ps1
+
+      - name: Assemble
+        run: ./build.ps1
+
+      - name: Build the harness
+        # Locked-mode restore: a dependency drifting from the committed lock
+        # file fails here instead of floating silently.
+        run: dotnet build tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+
+      - name: Fuzz the preset parser
+        run: |
+          $budget = if ($env:FUZZ_BUDGET) { $env:FUZZ_BUDGET } else { '5000000' }
+          $env:SWARM_FUZZ_BUDGET = $budget
+          if ($env:FUZZ_SEED) { $env:SWARM_FUZZ_SEED = $env:FUZZ_SEED }
+          $root = if ($env:SWARM_FUZZ_SEED) { $env:SWARM_FUZZ_SEED } else { 'the harness default root' }
+          Write-Host "parser fuzz: $budget iterations from $root"
+          & .\tests\Swarm.Tests\bin\Release\net9.0\Swarm.Tests.exe --filter-method "*LongRunParserFuzz"
+          if ($LASTEXITCODE -ne 0) {
+            throw "parser fuzz failed - the failing iteration's SWARM_FUZZ_SEED is printed above; re-run this workflow with that seed and a budget of 1"
+          }
