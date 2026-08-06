@@ -169,6 +169,47 @@ the regime the grid wins in.
   pass on this machine was 5.923 / 5.986 / 84.075 / 62.351 ms for the four rows;
   brute is unaffected (the tail is negligible there).
 
+### Grid pass after resolving the run set once per cell (#87)
+
+The grid pass used to call `neighbour_runs` once per particle. IN is
+cell-sorted and the pass walks `i` ascending, so consecutive particles share a
+cell and the answer is the same for all of them; a three-dword cache in the
+pass frame skips the call on a repeat.
+
+Three alternating runs per build, all listed rather than a chosen one, because
+the run-to-run spread here is the same size as part of the effect. Each figure
+is already a min over the bench's 9 rounds. Pass ms only: the build column is
+not touched by this change and moved by up to 0.5 ms between runs of the same
+build, which is the scale of the noise on this machine.
+
+| n       | rmax  | g   | pass ms, per-particle    | pass ms, per-cell        |
+| ------- | ----- | --- | ------------------------ | ------------------------ |
+| 50,000  | 1/256 | 256 | 2.278 / 2.238            | 2.166 / 2.137            |
+| 50,000  | 1/512 | 512 | 2.111 / 2.142            | 2.188 / 2.089            |
+| 500,000 | 1/256 | 256 | 45.560 / 46.982 / 46.998 | 48.065 / 41.422 / 44.198 |
+| 500,000 | 1/512 | 512 | 28.009 / 25.864 / 26.804 | 23.947 / 23.429 / 23.458 |
+
+- **500,000 at g = 512 is the clean result**: every cached run is faster than
+  every uncached one, medians 23.46 against 26.80, about **12% off the pass**.
+  Mean particles per cell is `n/g² ≈ 1.9`, so roughly half the calls are
+  skipped.
+- **500,000 at g = 256 is a smaller and noisier win**: medians 44.20 against
+  46.98, about **6%**, but the slowest cached run (48.065) is above every
+  uncached one, so two of three runs separate and one does not. `k ≈ 7.6` here
+  and about 87% of calls are skipped, yet the relative win is smaller: the
+  denser cells make the force groups dominate, so the same absolute saving of
+  roughly 3 ms is a smaller share of a longer pass.
+- **50,000 is inside the noise in both directions** and no win is claimed
+  there. `k` is below 1, so most particles are alone in their cell and the two
+  added compares are the whole of it.
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11,
+  **single-threaded**, AVX2 + FMA, `FLAG_GRID`, seed `0x5EED`, 6 species, the
+  initial uniform-random frame. Same bench binary and DLL slot throughout;
+  only the kernel DLL was swapped, alternating between the two builds.
+- **Date**: 2026-08-06. Output is bit-identical across the change: whole-arena
+  hashes match for 216 configurations, including split passes, recorded on the
+  pull request that closed #87.
+
 ### Grid build after the pad-only copy (#77)
 
 `build_core` used to copy the whole OUT bank into IN in grid mode as well, and
