@@ -262,13 +262,25 @@ mechanism: `pool_pass` is a `seam_wrap` over `pass_core`, the same macro the
 exports use, so a worker runs the core under the same pinned word or the
 whole seam is broken for everyone.
 
-What does not exist. No test scrambles MXCSR before calling in, and none
-asserts that the caller's control word comes back untouched: the harness
-cannot read the word the cores run under, which is issue #154, and the
-hostile-caller case is issue #156. The debug-build assertion at the seam and
-at worker entry is issue #155 and is not built. Until those land, a core
-reached without a seam would run under whatever the caller left, and nothing
-here would notice.
+What holds it against a hostile caller, which the paragraph above cannot.
+`swarm_mxcsr` reports the control word from inside the pinned region and
+`swarm_call_under_mxcsr` installs a chosen one around an export, so the
+harness sees both sides of the seam instead of inferring them (issue #154).
+`SeamMxcsrIsolationTests` uses them to assert four separate things: that a
+scrambled word reaches the call and not the core, that the caller's word
+comes back byte for byte from every export, that engine output is identical
+whether the caller was scrambled or clean, and that a worker thread pins its
+own (issue #156). A debug build refuses the case outright:
+`seam_assert_pinned` re-reads the live word between the pin and the core and
+executes `ud2` on anything but `SEAM_MXCSR` (issue #155).
+
+What that still does not cover, stated because the sentence above reads like
+a closed set and is not one. The debug assertion is assembled only when
+`SWARM_DEBUG` is defined, which is deliberate - the shipped instruction
+stream is the one that was measured - so a release build carries no runtime
+check and a core reached without a seam would still run under whatever the
+caller left. Nothing outside a debug build would notice. The reference's own
+FP mode is the other half and is the paragraph below.
 
 The oracle does not model FTZ/DAZ, so in the subnormal range the C#
 comparison is epsilon-bounded rather than bit-exact. Whether to model it or
