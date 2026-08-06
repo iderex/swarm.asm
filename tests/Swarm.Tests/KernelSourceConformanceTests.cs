@@ -284,7 +284,7 @@ public sealed class KernelSourceConformanceTests
     /// on EXPORT, so the collapsed FP-seam export wrappers stay under the
     /// <see cref="ShellRoutineContractHeaderPresent"/> contract-header gate (they
     /// carry no bare `name:` label and are not `proc` definitions). Guards the
-    /// gate's reach: without this recognition the ten wrappers would go unchecked
+    /// gate's reach: without this recognition every wrapper would go unchecked
     /// and a deleted contract banner would pass silently. Also confirms the scan
     /// actually reaches every wrapper name in the live shell sources.
     /// </summary>
@@ -302,7 +302,8 @@ public sealed class KernelSourceConformanceTests
         Assert.DoesNotMatch(ProcRegex, "seam_wrap sim_layout, layout_bytes_core");
 
         // The scan reaches every seam_wrap export in the live shell sources - the
-        // ten FP-seam wrappers must all be recognised, not silently skipped.
+        // FP-seam wrappers must all be recognised, not silently skipped. The
+        // census below is the whole set, so an added wrapper lands here too.
         var recognised = new List<string>();
         foreach (var path in ShellAsmFiles())
         {
@@ -320,7 +321,7 @@ public sealed class KernelSourceConformanceTests
         [
             "sim_layout", "sim_init", "sim_step", "sim_plot",           // swarm.asm
             "swarm_plot", "swarm_pass", "swarm_step", "swarm_init",     // swarm_dll.asm
-            "swarm_parse_preset", "swarm_layout_bytes",
+            "swarm_parse_preset", "swarm_layout_bytes", "swarm_mxcsr",
         ];
         Assert.Equal(expected.OrderBy(x => x), recognised.OrderBy(x => x));
     }
