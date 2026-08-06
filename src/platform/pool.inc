@@ -56,6 +56,11 @@ SI_NPROC   = 0x20                      ; SYSTEM_INFO.dwNumberOfProcessors offset
 ;   clobbers: Win64 volatiles only; the seam saves/restores every nonvolatile
 ;             and MXCSR (identical contract to the swarm_pass export)
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return
+;   debug:    every worker's core entry is checked here, and only here. This is
+;             a seam_wrap, so it carries seam_assert_pinned like every export;
+;             pool_worker_thread reaches pass_core through no other route, so a
+;             second check at the thread entry would read the parked thread's
+;             own word before the pin and prove nothing
 ; ------------------------------------------------------------------
 seam_wrap pool_pass, pass_core
 

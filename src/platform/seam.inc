@@ -27,6 +27,32 @@
 
 SEAM_MXCSR = 0x9FC0                     ; FTZ+DAZ, all masked, round-nearest
 
+; seam_assert_pinned - debug builds only: refuse to enter a kernel core under
+; any control word but SEAM_MXCSR.
+;   in:       nothing, but it must sit INSIDE a seam frame, after the pin and
+;             before the core call - it reads back the live control word into
+;             the frame's own padding at [rsp+168] (see the frame arithmetic
+;             above; the xmm saves end at [rsp+167])
+;   out:      nothing on a correct word; #UD, and the process, on any other
+;   clobbers: flags, and [rsp+168..171] of the seam frame
+;   MXCSR:    read, never written
+; Assembled only when SWARM_DEBUG is defined (build.ps1 -Debug). A release
+; build emits not one byte of it, which is the property that makes the check
+; safe to carry: the shipped instruction stream is the one that was measured.
+; `ud2` rather than a message: the seam is reached from a DLL export and from a
+; worker thread with no console, no CRT and no import surface to spend, and a
+; guard that could itself fail to report is worse than one that stops the
+; process where it stands.
+macro seam_assert_pinned {
+  if defined SWARM_DEBUG
+        stmxcsr [rsp+168]
+        cmp     dword [rsp+168], SEAM_MXCSR
+        je      @f
+        ud2
+       @@:
+  end if
+}
+
 macro seam_enter {
         push    rbp
         mov     rbp, rsp
@@ -97,9 +123,13 @@ macro seam_leave {
 ;             xmm6-xmm15, seam_leave restores both sets. MXCSR is saved, pinned
 ;             to SEAM_MXCSR across the core, and restored, and vzeroupper runs
 ;             before the return
+;   debug:    a debug build re-reads the control word between the pin and the
+;             core and kills the process if it is not SEAM_MXCSR. Release emits
+;             nothing, so this contract is the same in both builds
 macro seam_wrap export, core {
   export:
         seam_enter
+        seam_assert_pinned              ; debug builds only; nothing in release
         call    core
         seam_leave
 }
