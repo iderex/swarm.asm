@@ -209,6 +209,46 @@ seam_wrap swarm_parse_preset, parse_preset_core
 ; ------------------------------------------------------------------
 seam_wrap swarm_layout_bytes, layout_bytes_core
 
+; ------------------------------------------------------------------
+; mxcsr_read_core - report the control word in force where it runs.
+;
+; Platform tier on purpose. The kernel cannot report its own control word:
+; stmxcsr is on the forbidden-mnemonic list for src/kernel/ (decision 2 puts
+; every MXCSR transition at the seam), and this routine closes that
+; observability hole without touching the ban. It carries no seam of its own -
+; it is the thing a seam is wrapped around.
+;
+;   in:       nothing
+;   out:      eax = MXCSR as it stands on entry, zero-extended into rax
+;   clobbers: rax; no nonvolatile, no FP state, no memory outside its own frame
+;   MXCSR:    read, never written. The 8 bytes are a private scratch slot:
+;             Win64 has no red zone, so the store needs allocated stack
+; ------------------------------------------------------------------
+mxcsr_read_core:
+        sub     rsp, 8
+        stmxcsr [rsp]
+        mov     eax, [rsp]
+        add     rsp, 8
+        ret
+
+; ------------------------------------------------------------------
+; swarm_mxcsr - seam wrapper over mxcsr_read_core: the control word an FP core
+; actually runs under, read from inside the pinned region.
+;
+; Diagnostic, and only sound because it wears the same frame the FP exports
+; wear. A bare export would report the CALLER's control word and read as if it
+; had measured the engine's.
+;
+;   in:       nothing
+;   out:      eax = the control word in force inside the seam (SEAM_MXCSR)
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam) -
+;             so a hostile caller word is neither seen by the read nor lost
+; ------------------------------------------------------------------
+seam_wrap swarm_mxcsr, mxcsr_read_core
+
 section '.edata' export data readable
 
   ; The M3 pool exports (swarm_pool_init / swarm_step_mt / swarm_pass_mt /
@@ -222,6 +262,7 @@ section '.edata' export data readable
          swarm_parse_preset, 'swarm_parse_preset',\
          swarm_layout_bytes, 'swarm_layout_bytes',\
          cpu_paths_core,     'swarm_cpu_paths',\
+         swarm_mxcsr,        'swarm_mxcsr',\
          swarm_init,         'swarm_init',\
          swarm_read_state,   'swarm_read_state',\
          build_core,         'swarm_build',\
