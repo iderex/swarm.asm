@@ -824,6 +824,23 @@ the first shipping milestone. The brute kernel is not throwaway - it is the
 degenerate one-run case of the same loop and stays forever as the grid's
 same-binary cross-check oracle.
 
+**M1 closing note (recorded 2026-08-06):** the amendment above named the grid
+and the worker pool as the levers that would close 8,192 at 60 fps, and left
+the claim open pending a measurement. It is measured and it closes. The shipped
+exe at `n = 8192`, `FLAG_GRID`, `rmax = 0.05`, seed `0x9E3779B97F4A7C15`, on
+the reference machine, records a worst p99 work window of **6.100 ms across six
+3600-frame captures** against the 16.67 ms budget, with the worst single frame
+anywhere in those runs at 14.244 ms (docs/BENCHMARKS.md, "The M1 live frame at
+8,192"). The reading is stated on the worst run rather than the best, because
+the run-to-run spread on an unquiesced host was wider than the effect being
+measured. The amendment's projection of ~52.8 ms brute-force pass and ~19 fps
+stands as written and is what the grid plus the pool replaced; nothing here
+revises it. One thing the measurement adds that the amendment did not
+anticipate: at this count the window is not force-bound at all - `rmax = 0.08`,
+with roughly four times the candidate neighbours, is not meaningfully slower -
+so the `rmax ≤ 0.05` pin is a bound the preset honours rather than the thing
+that buys the margin at 8,192.
+
 **M2 amendment (recorded 2026-08-05):** M2 was originally "uniform grid; 50k
 and 500k particles ≥ 60 fps". The grid met the first half on one core and not
 the second. Measured on the reference machine (docs/BENCHMARKS.md): 50k runs at
