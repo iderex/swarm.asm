@@ -262,17 +262,27 @@ mechanism: `pool_pass` is a `seam_wrap` over `pass_core`, the same macro the
 exports use, so a worker runs the core under the same pinned word or the
 whole seam is broken for everyone.
 
-What does not exist. No test scrambles MXCSR before calling in, and none
-asserts that the caller's control word comes back untouched: the harness
-cannot read the word the cores run under, which is issue #154, and the
-hostile-caller case is issue #156. The debug-build assertion at the seam and
-at worker entry is issue #155 and is not built. Until those land, a core
-reached without a seam would run under whatever the caller left, and nothing
-here would notice.
+What holds it, by name. `swarm_mxcsr` reports the control word from inside
+the pinned region and `MxcsrTests.CoresRunUnderThePinnedControlWord` asserts
+it is `0x9FC0`. `SeamMxcsrIsolationTests` enters the engine from a scrambled
+caller word and asserts both directions of the isolation:
+`CallerMxcsrIsRestoredExactly` over every seam export,
+`ScrambledCallerMxcsrDoesNotChangeResults` on the serial path and
+`WorkerThreadsPinTheirOwnMxcsr` on the pooled one.
 
-The oracle does not model FTZ/DAZ, so in the subnormal range the C#
-comparison is epsilon-bounded rather than bit-exact. Whether to model it or
-to decline it with a stated divergence bound is issue #160 and is open.
+What does not exist. The debug-build assertion at the seam and at worker
+entry is issue #155 and is not built. So an export that forgets its seam
+would still reach a core under whatever the caller left behind, and the tests
+above would not notice: they ask the exports that exist today, one at a time.
+
+The oracle models FTZ and DAZ (issue #160). `TestOracle.World` flushes every
+arithmetic result and every state read, so subnormal-range parity on the
+scalar path is asserted BIT-EXACT by
+`SubnormalOracleParityTests.ScalarPathMatchesTheOracleBitExactlyInTheSubnormalRange`
+rather than hidden inside the 1e-4 velocity epsilon, which is thirty-four
+orders of magnitude wider than the whole subnormal range. The model is a
+no-op outside that range - zero, normal, infinite and NaN come back
+unchanged - which is what leaves the normal-range scalar parity exact.
 
 **Rejected:** f64 accumulation (2× throughput cost, zero determinism
 benefit); rsqrt+Newton **as an auto-default or as a replacement for the exact

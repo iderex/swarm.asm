@@ -40,6 +40,33 @@ public static class TestOracle
     /// (masterplan force-model section), implemented verbatim in scalar f32 so
     /// it defines what the kernel's `swarm_pass`/`swarm_step` must reproduce
     /// (bit-exact for the scalar path, within epsilon for the SIMD path).
+    ///
+    /// IT ALSO MODELS THE ENGINE'S FP MODE (#160). The seam pins MXCSR to
+    /// 0x9FC0, which sets FTZ and DAZ: a subnormal result is flushed to a zero
+    /// of the result's sign, and a subnormal source operand is read as zero.
+    /// Neither is IEEE behaviour and .NET does neither, so without this the
+    /// two implementations legitimately disagree in exactly the range friction
+    /// decay drives every velocity into, and the disagreement hides inside the
+    /// parity epsilon instead of being asserted either way.
+    ///
+    /// <see cref="Ftz"/> is applied to every arithmetic RESULT below and to
+    /// every value READ out of the state arrays. DAZ then needs no separate
+    /// modelling: every operand reaching an operation is either a freshly
+    /// flushed result, a flushed array read, or a parameter, and a subnormal
+    /// operand cannot survive to reach one.
+    ///
+    /// WHERE IT IS DELIBERATELY NOT APPLIED, because the hardware does not:
+    /// the rounding instructions behind <see cref="RoundHalfEven"/> and
+    /// MathF.Floor return integer-valued floats, which are never subnormal,
+    /// and MathF.Abs is a bit operation rather than an arithmetic one. Their
+    /// operands are already flushed, so nothing subnormal reaches them either.
+    ///
+    /// The model costs nothing outside the subnormal range: a value that is
+    /// zero, normal, infinite or NaN comes back unchanged, bit for bit. That
+    /// is the property that lets the existing normal-range parity stay exact,
+    /// and it is checked rather than assumed - see
+    /// <see cref="OracleDivergenceSweep"/>, whose scalar arm measures zero
+    /// drift at every count and horizon.
     /// </summary>
     public sealed class World
     {
@@ -69,9 +96,27 @@ public static class TestOracle
         // round to nearest even integer (SSE roundss mode 0 semantics)
         private static float RoundHalfEven(float v) => MathF.Round(v, MidpointRounding.ToEven);
 
+        /// <summary>Smallest positive normal f32. Strictly below it, and above
+        /// zero, is the subnormal range FTZ and DAZ are about.</summary>
+        private const float MinNormal = 1.17549435e-38f;
+
+        /// <summary>
+        /// One arithmetic result under the engine's pinned FTZ. A subnormal
+        /// becomes a zero carrying the result's sign; everything else - zero,
+        /// normal, infinite, NaN - is returned unchanged.
+        /// </summary>
+        internal static float Ftz(float v)
+        {
+            if (v != 0f && MathF.Abs(v) < MinNormal)
+            {
+                return v < 0f ? -0f : 0f;
+            }
+            return v;
+        }
+
         private static float Wrap(float p)
         {
-            p -= MathF.Floor(p);
+            p = Ftz(p - MathF.Floor(p));
             return p >= 1.0f ? 0.0f : p; // 1.0 reachable in f32; pinned to 0
         }
 
@@ -79,11 +124,11 @@ public static class TestOracle
         /// mutating the arrays in place (forces read the pre-step snapshot).</summary>
         public void Step()
         {
-            float rmax2 = _rmax * _rmax;
-            float vmax = _rmax / _dt;
-            float invRmax = 1.0f / _rmax;
-            float invBeta = 1.0f / _beta;
-            float inv1mb = 1.0f / (1.0f - _beta);
+            float rmax2 = Ftz(_rmax * _rmax);
+            float vmax = Ftz(_rmax / _dt);
+            float invRmax = Ftz(1.0f / _rmax);
+            float invBeta = Ftz(1.0f / _beta);
+            float inv1mb = Ftz(1.0f / Ftz(1.0f - _beta));
 
             var nx = new float[N];
             var ny = new float[N];
@@ -91,34 +136,35 @@ public static class TestOracle
             var nvy = new float[N];
             for (int i = 0; i < N; i++)
             {
-                float xi = X[i], yi = Y[i];
+                float xi = Ftz(X[i]), yi = Ftz(Y[i]);
                 float fx = 0, fy = 0;
                 for (int j = 0; j < N; j++)
                 {
-                    float dx = X[j] - xi; dx -= RoundHalfEven(dx);
-                    float dy = Y[j] - yi; dy -= RoundHalfEven(dy);
-                    float r2 = dx * dx + dy * dy;
+                    float dx = Ftz(Ftz(X[j]) - xi); dx = Ftz(dx - RoundHalfEven(dx));
+                    float dy = Ftz(Ftz(Y[j]) - yi); dy = Ftz(dy - RoundHalfEven(dy));
+                    float r2 = Ftz(Ftz(dx * dx) + Ftz(dy * dy));
                     if (r2 <= 0f || r2 >= rmax2) continue;
-                    float r = MathF.Sqrt(r2);
-                    float xn = r * invRmax;
+                    float r = Ftz(MathF.Sqrt(r2));
+                    float xn = Ftz(r * invRmax);
                     float f;
                     if (xn < _beta)
                     {
-                        f = xn * invBeta - 1.0f;
+                        f = Ftz(Ftz(xn * invBeta) - 1.0f);
                     }
                     else
                     {
                         float a = _matrix[S[i] * 8 + S[j]];
-                        f = a * (1.0f - MathF.Abs(2.0f * xn - 1.0f - _beta) * inv1mb);
+                        float t = Ftz(Ftz(Ftz(2.0f * xn) - 1.0f) - _beta);
+                        f = Ftz(a * Ftz(1.0f - Ftz(MathF.Abs(t) * inv1mb)));
                     }
-                    float q = _forceScale * f / r;
-                    fx += q * dx; fy += q * dy;
+                    float q = Ftz(Ftz(_forceScale * f) / r);
+                    fx = Ftz(fx + Ftz(q * dx)); fy = Ftz(fy + Ftz(q * dy));
                 }
-                float vx = Clamp(Vx[i] * _friction + fx * _dt, -vmax, vmax);
-                float vy = Clamp(Vy[i] * _friction + fy * _dt, -vmax, vmax);
+                float vx = Clamp(Ftz(Ftz(Ftz(Vx[i]) * _friction) + Ftz(fx * _dt)), -vmax, vmax);
+                float vy = Clamp(Ftz(Ftz(Ftz(Vy[i]) * _friction) + Ftz(fy * _dt)), -vmax, vmax);
                 nvx[i] = vx; nvy[i] = vy;
-                nx[i] = Wrap(xi + vx * _dt);
-                ny[i] = Wrap(yi + vy * _dt);
+                nx[i] = Wrap(Ftz(xi + Ftz(vx * _dt)));
+                ny[i] = Wrap(Ftz(yi + Ftz(vy * _dt)));
             }
             Array.Copy(nx, X, N); Array.Copy(ny, Y, N);
             Array.Copy(nvx, Vx, N); Array.Copy(nvy, Vy, N);
