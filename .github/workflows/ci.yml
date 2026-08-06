@@ -57,7 +57,12 @@ jobs:
         run: ./tools/get-fasm.ps1
 
       - name: Assemble
-        run: ./build.ps1
+        # -Debug adds build/debug/, assembled with SWARM_DEBUG so the platform
+        # layer's debug-only assertions are in the stream. It changes nothing
+        # about the release artifacts every step below uses. Assembling it here
+        # is what stops that path from rotting unnoticed: a debug-only guard
+        # nothing ever builds is a guard that has stopped existing.
+        run: ./build.ps1 -Debug
 
       - name: Report the size budget
         # The conformance test enforces the same bound; this step makes the
@@ -75,6 +80,15 @@ jobs:
         run: |
           $p = Start-Process -FilePath .\build\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "swarm.exe -smoke exited with $($p.ExitCode)" }
+
+      - name: Smoke-run the debug build
+        # The non-vacuity control for the debug-only seam assertion. A guard
+        # that fires on a correct build is worse than none, and the only way to
+        # know it does not is to run a build that carries it. This exits 0
+        # exactly when every kernel core was entered under SEAM_MXCSR.
+        run: |
+          $p = Start-Process -FilePath .\build\debug\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "debug swarm.exe -smoke exited with $($p.ExitCode)" }
 
       - name: Test (conformance harness)
         # Locked-mode restore: a dependency drifting from the committed lock
