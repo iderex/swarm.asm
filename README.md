@@ -65,12 +65,16 @@ candidate set from n² to the in-range neighbours.
 hides the species matrix as a grid of coloured cells over the frame (green for
 attraction, red for repulsion, brightness for strength), **Esc** quits -
 with edits applied at step boundaries and the frame paced to a real 60 fps by a
-high-resolution timer. The live count is the M1 acceptance count, 8,192, on the
+high-resolution timer. With the matrix up, the **mouse wheel** over a cell
+raises or lowers that one coefficient, and **dragging** a cell up or down does
+the same continuously; the value is clamped to the [-1, 1] the parameters
+allow, so you can steer one species pair while the rest of the ecosystem keeps
+running. The live count is the M1 acceptance count, 8,192, on the
 cell-sorted grid across the worker pool; **8,192 @ 60 fps is measured, not
 projected** - the worst p99 work window across six 3600-frame captures is
 6.100 ms against the 16.67 ms budget
 ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)), where one core on brute force was
-~19 fps at the same count. A full per-cell matrix editor is a later increment.
+~19 fps at the same count.
 
 The full architecture - force model, memory layout, SIMD strategy,
 determinism contract - is recorded with rationale in the masterplan. Progress:
