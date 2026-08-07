@@ -52,6 +52,15 @@ HUD_GAP      = 2                        ; pitch not painted, i.e. the gridline
 HUD_ORG      = 16                       ; top-left of the first cell
 HUD_PAD      = 6                        ; backdrop margin around the grid
 HUD_BACK     = 0x00202020               ; backdrop COLORREF (0x00BBGGRR)
+; Per-cell matrix editing. A wheel notch, or EDIT_DRAG_PX of vertical drag,
+; is one step of edit_step on the cell under the pointer; the sum is clamped
+; back into the [-1, 1] the params contract declares for a matrix entry. The
+; notches are counted as integers by WindowProc and turned into a float once,
+; at the step boundary - so the message handler touches no simulation bit and
+; no floating-point state at all.
+EDIT_DRAG_PX = 8                        ; client pixels of drag per step
+WHEEL_DELTA  = 120                      ; one wheel notch (not in the bundle)
+MATRIX_CELLS = 64                       ; the 8x8 matrix block, stride 8
 MEM_COMMIT     = 0x1000                 ; VirtualAlloc flags (kernel64 equates
 MEM_RESERVE    = 0x2000                 ;   omit these; define them locally)
 PAGE_READWRITE = 0x04
@@ -208,8 +217,17 @@ start:
         jmp     .pump
 
   .render:
-        ; Apply pending keyboard edits at the step boundary (decision 11:
-        ; edits commit between steps). WindowProc only sets these flags.
+        ; Apply pending keyboard and mouse edits at the step boundary
+        ; (decision 11: edits commit between steps). WindowProc only sets
+        ; these flags. The per-cell matrix edits go first, so a cell the
+        ; pointer was over is changed against the matrix that was on screen
+        ; when the wheel turned, never against one a reroll replaced in the
+        ; same frame.
+        cmp     dword [edit_req], 0
+        je      .chk_reroll
+        mov     dword [edit_req], 0
+        call    ui_apply_matrix_edits
+  .chk_reroll:
         cmp     dword [reroll_req], 0
         je      .chk_reseed
         mov     dword [reroll_req], 0
@@ -380,6 +398,14 @@ proc WindowProc wnd, wmsg, wp, lp
         je      .destroy
         cmp     edx, WM_KEYDOWN
         je      .key
+        cmp     edx, WM_MOUSEWHEEL
+        je      .wheel
+        cmp     edx, WM_LBUTTONDOWN
+        je      .lbdown
+        cmp     edx, WM_MOUSEMOVE
+        je      .lbmove
+        cmp     edx, WM_LBUTTONUP
+        je      .lbup
   .defwndproc:
         invoke  DefWindowProc, rcx, rdx, r8, r9
         jmp     .finish
@@ -415,6 +441,83 @@ proc WindowProc wnd, wmsg, wp, lp
         jmp     .finish
   .k_hud:                               ; not a step-boundary edit: the HUD only
         xor     dword [hud_on], 1       ; reads, so it touches no simulation bit
+        xor     eax, eax
+        jmp     .finish
+
+        ; --- per-cell matrix editing (decision 9) --------------------------
+        ; Every arm below counts whole steps into edit_notch and raises
+        ; edit_req. None of them writes a matrix byte, reads the arena or
+        ; executes a floating-point instruction: the edit becomes a number
+        ; in the matrix at the step boundary, in the render loop, and only
+        ; there. That is the whole determinism argument, and it is one
+        ; sentence because the handler is one side of it.
+  .wheel:                               ; wheel: lParam is in SCREEN pixels
+        cmp     dword [hud_on], 0
+        je      .defwndproc             ; no grid drawn, nothing to point at
+        mov     eax, r9d
+        movsx   eax, ax                 ; LOWORD, signed: screen x
+        mov     [edit_pt], eax
+        mov     eax, r9d
+        sar     eax, 16                 ; HIWORD, signed: screen y
+        mov     [edit_pt+4], eax
+        mov     eax, r8d
+        sar     eax, 16                 ; HIWORD(wParam): the wheel delta
+        cdq
+        mov     r10d, WHEEL_DELTA
+        idiv    r10d                    ; whole notches; a partial one is
+        test    eax, eax                ;   dropped rather than accumulated
+        jz      .mouse_done
+        mov     [edit_steps], eax       ; staged: the invoke clobbers eax
+        invoke  ScreenToClient, [hwnd], edit_pt
+        test    eax, eax
+        jz      .mouse_done             ; conversion failed: no edit, no guess
+        mov     ecx, [edit_pt]
+        mov     edx, [edit_pt+4]
+        call    hud_hit_test
+        test    eax, eax
+        js      .mouse_done
+        mov     ecx, [edit_steps]
+        call    ui_queue_cell_steps
+        jmp     .mouse_done
+  .lbdown:                              ; drag: lParam is already client-relative
+        cmp     dword [hud_on], 0
+        je      .defwndproc
+        mov     eax, r9d
+        movsx   ecx, ax                 ; client x
+        mov     eax, r9d
+        sar     eax, 16                 ; client y
+        mov     edx, eax
+        mov     r11d, eax               ; kept for the anchor across the call
+        call    hud_hit_test
+        test    eax, eax
+        js      .mouse_done             ; a press outside the grid starts nothing
+        mov     [edit_cell], eax
+        mov     [edit_anchor], r11d
+        jmp     .mouse_done
+  .lbmove:
+        cmp     dword [edit_cell], 0
+        jl      .defwndproc             ; no drag in flight: two instructions
+        test    r8d, MK_LBUTTON         ; released off-window, so the button-up
+        jz      .lbup                   ;   never arrived: end the drag here
+        mov     eax, r9d
+        sar     eax, 16                 ; client y
+        mov     r10d, [edit_anchor]
+        sub     r10d, eax               ; upward (smaller y) is a positive step
+        mov     eax, r10d
+        cdq
+        mov     r10d, EDIT_DRAG_PX
+        idiv    r10d                    ; whole steps only
+        test    eax, eax
+        jz      .mouse_done
+        imul    r10d, eax               ; consume just the pixels that became
+        sub     [edit_anchor], r10d     ;   steps, so the remainder is not lost
+        mov     ecx, eax
+        mov     eax, [edit_cell]
+        call    ui_queue_cell_steps
+        jmp     .mouse_done
+  .lbup:
+        mov     dword [edit_cell], -1
+  .mouse_done:
         xor     eax, eax
         jmp     .finish
   .destroy:
@@ -544,6 +647,109 @@ ui_reroll_matrix:
         jmp     .row
   .done:
         mov     [ui_rng], r10
+        ret
+
+; ------------------------------------------------------------------
+; hud_hit_test - the matrix cell under a client-area point.
+;   in:       ecx = client x, edx = client y (signed; either may be negative)
+;   out:      eax = i*8 + j, the cell's index in the 8-wide matrix block, or
+;             -1 when the point misses: outside the grid, past species_n in
+;             either axis, or inside the HUD_GAP the cell is drawn short of
+;   clobbers: rax, rcx, rdx, r8, r9, r10, flags
+;   MXCSR:    untouched (integer only)
+;   note:     the arithmetic is hud_draw's geometry read backwards, so a hit
+;             is a hit on a cell that is actually painted. Whether the HUD is
+;             up at all is the caller's check, not this one's
+; ------------------------------------------------------------------
+hud_hit_test:
+        mov     r8d, [sim_params+SP_SPECIES_N]
+        sub     ecx, HUD_ORG            ; client -> grid-relative
+        js      .miss                   ; left of the first cell
+        sub     edx, HUD_ORG
+        js      .miss                   ; above the first row
+        mov     r9d, edx                ; y, parked: div needs edx
+        mov     eax, ecx
+        xor     edx, edx
+        mov     r10d, HUD_CELL
+        div     r10d                    ; eax = column, edx = pixel within it
+        cmp     eax, r8d
+        jae     .miss                   ; past the last species column
+        cmp     edx, HUD_CELL-HUD_GAP
+        jae     .miss                   ; the unpainted gap, i.e. a gridline
+        mov     ecx, eax                ; column
+        mov     eax, r9d
+        xor     edx, edx
+        div     r10d                    ; eax = row, edx = pixel within it
+        cmp     eax, r8d
+        jae     .miss
+        cmp     edx, HUD_CELL-HUD_GAP
+        jae     .miss
+        shl     eax, 3                  ; the matrix stride is 8 f32 (i*8 + j)
+        add     eax, ecx
+        ret
+  .miss:
+        mov     eax, -1
+        ret
+
+; ------------------------------------------------------------------
+; ui_queue_cell_steps - record whole steps against one matrix cell.
+;   in:       eax = cell index in [0, MATRIX_CELLS), ecx = signed step count
+;   out:      the count is added to that cell's pending total and edit_req
+;             is raised; no matrix byte is written here
+;   clobbers: r9, flags
+;   MXCSR:    untouched (integer only)
+;   note:     the counts accumulate rather than replace, so several notches
+;             inside one frame all land, and they land together
+; ------------------------------------------------------------------
+ui_queue_cell_steps:
+        lea     r9, [edit_notch]
+        add     [r9+rax*4], ecx
+        mov     dword [edit_req], 1
+        ret
+
+; ------------------------------------------------------------------
+; ui_apply_matrix_edits - fold the pending steps into the matrix.
+;   in:       [edit_notch], [arena]; called only from the render loop's
+;             step-boundary chain
+;   out:      every non-zero count becomes count * edit_step added to its
+;             cell, clamped into the [-1, 1] the params contract declares,
+;             and the count is reset to 0
+;   clobbers: rax, rcx, r9, r10, r11, xmm0, flags
+;   MXCSR:    pinned 0x9FC0 (set at start); every input is a normal in
+;             [-1, 1] and the step is a normal, so no denormal arises
+;   note:     BOTH copies of the matrix are written - the params block, which
+;             the HUD paints and a reinit re-seeds from, and the validated
+;             copy inside the arena header (abi.inc AH_PARAMS), which is what
+;             the force pass actually reads. Writing one and not the other
+;             would either show an edit that never reached the simulation or
+;             run one that never appeared on screen
+;   note:     the arena copy is written between steps, never during one. That
+;             is what makes an edited session a replay of its edit log: the
+;             state after any frame is a function of the seed and of which
+;             steps the edits landed between, and of nothing else
+; ------------------------------------------------------------------
+ui_apply_matrix_edits:
+        lea     r9, [edit_notch]
+        lea     r10, [sim_params+SP_MATRIX]
+        mov     r11, [arena]
+        add     r11, AH_PARAMS+SP_MATRIX
+        xor     ecx, ecx
+  .cell:
+        mov     eax, [r9+rcx*4]
+        test    eax, eax
+        jz      .next
+        mov     dword [r9+rcx*4], 0
+        cvtsi2ss xmm0, eax
+        mulss   xmm0, [edit_step]
+        addss   xmm0, [r10+rcx*4]
+        maxss   xmm0, [edit_neg_one]    ; clamp before either store, so the
+        minss   xmm0, [f_one]           ;   two copies cannot disagree
+        movss   [r10+rcx*4], xmm0
+        movss   [r11+rcx*4], xmm0
+  .next:
+        inc     ecx
+        cmp     ecx, MATRIX_CELLS
+        jb      .cell
         ret
 
 ; ------------------------------------------------------------------
@@ -863,9 +1069,21 @@ section '.data' data readable writeable
   ; default, so an unattended run - the smoke gate, a capture - never draws it.
   hud_on      dd 0
 
+  ; Per-cell matrix editing. WindowProc writes only these, in whole steps;
+  ; ui_apply_matrix_edits at the step boundary is the only thing that turns
+  ; them into a matrix value.
+  edit_req    dd 0                      ; steps are pending
+  edit_cell   dd -1                     ; cell under an in-flight drag, else -1
+  edit_anchor dd 0                      ; client y the drag has counted up to
+  edit_steps  dd 0                      ; wheel steps, staged across an invoke
+  edit_pt     dd ?, ?                   ; POINT, for ScreenToClient
+  edit_notch  dd MATRIX_CELLS dup (0)   ; pending steps, one per matrix cell
+
   hud_rect    RECT ?                    ; rebuilt per fill; ExtTextOut reads it
   hud_color   dd ?                      ; the cell COLORREF, staged for invoke
   hud_255     dd 255.0
+  edit_step   dd 0.02                   ; matrix units per wheel notch / drag step
+  edit_neg_one dd -1.0                  ; the lower clamp; f_one is the upper
 
   align 8
   ui_rng          dq 0x243F6A8885A308D3   ; UI RNG state (distinct from the sim seed)
