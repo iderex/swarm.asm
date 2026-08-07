@@ -790,3 +790,119 @@ in-process, kernel-read-only microbench. So the **>90% divider premise is
 unconfirmed and points optimistic**; treat the rsqrt speedup as unproven until
 #61 (whose IEEE-exact result exposes the non-divide headroom directly) or a
 port-level probe reports.
+
+## The grid dimension at 1M across the rmax ceiling (#148)
+
+Whether the `g <= 512` ceiling in `src/kernel/layout.inc` costs the headline
+count anything, and if it does, which dimension the ceiling should be. The two
+halves of the frame move against each other. The force pass gets cheaper as
+cells get finer, because fewer particles fall inside the 3x3 neighbourhood it
+walks. The build gets dearer, because it zeroes and prefixes `g*g + 1` cell
+ends every frame: 1 MB and 262k entries at `g = 512`, 4 MB and 1M at 1024,
+16 MB and 4M at 2048. Only the total says which wins, so the total is what is
+timed here.
+
+`g` is not an input. It follows from `rmax` by the layout rule, the largest
+power of two with `1/g >= rmax`, and then meets the ceiling, so a point above
+512 needs a different kernel rather than a different argument. Three builds
+were assembled, differing in one instruction operand, the `cmp edx, 512` in
+`arena_dims_core`, set to 512, 1024 and 2048. Nothing was merged with a raised
+ceiling and the tree carries 512: these are local builds, assembled, measured
+and reverted, the same way the `rmax = 0.08` rows in the M1 section were taken.
+The dimension each row reports is read out of the arena header (`AH_G`) after
+`swarm_init`, never recomputed by the harness, so a row cannot disagree with
+the build that produced it.
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" tests\Swarm.Bench\bin\Release\net9.0\Swarm.Bench.dll --gsweep
+```
+
+### The sweep
+
+| rmax   | ceiling | g    | cand/pt | build ms | pass ms | frame ms | worst frame ms | fps  |
+| ------ | ------- | ---- | ------- | -------- | ------- | -------- | -------------- | ---- |
+| 0.0020 | 512     | 256  | 145.00  | 6.389    | 134.497 | 140.885  | 162.576        | 7.1  |
+| 0.0020 | 1024    | 256  | 145.00  | 6.504    | 133.331 | 139.836  | 143.792        | 7.2  |
+| 0.0020 | 2048    | 256  | 145.00  | 6.269    | 134.565 | 140.834  | 144.375        | 7.1  |
+| 0.0010 | 512     | 512  | 37.01   | 6.183    | 54.077  | 60.261   | 64.673         | 16.6 |
+| 0.0010 | 1024    | 512  | 37.01   | 5.909    | 56.824  | 62.733   | 69.951         | 15.9 |
+| 0.0010 | 2048    | 512  | 37.01   | 5.899    | 55.346  | 61.245   | 69.196         | 16.3 |
+| 0.0007 | 512     | 512  | 37.01   | 5.827    | 54.046  | 59.873   | 61.610         | 16.7 |
+| 0.0007 | 1024    | 1024 | 10.01   | 6.839    | 39.327  | 46.166   | 48.772         | 21.7 |
+| 0.0007 | 2048    | 1024 | 10.01   | 7.340    | 39.526  | 46.866   | 50.060         | 21.3 |
+| 0.0004 | 512     | 512  | 37.01   | 6.936    | 53.582  | 60.518   | 63.649         | 16.5 |
+| 0.0004 | 1024    | 1024 | 10.01   | 7.359    | 39.426  | 46.785   | 49.061         | 21.4 |
+| 0.0004 | 2048    | 2048 | 3.25    | 10.922   | 38.138  | 49.060   | 50.417         | 20.4 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2 and no
+  AVX-512, and `force_path = 1` selects the AVX2 path explicitly.
+- **Scene**: `n = 1,048,576`, `FLAG_GRID`, 6 species, seed `0x5EED`,
+  `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, the
+  harness's `MakeGridParams` matrix. Positions are the **initial
+  uniform-random frame**, as in the M2 and M3 tables above.
+- **Commit**: `481f986`, plus the one-operand ceiling change for the 1024 and
+  2048 rows. **Date**: 2026-08-07.
+- **build** and **pass** are each min-of-rounds over frozen input, as everywhere
+  else here. **frame** is their sum from the fastest of **three repeats** of
+  the whole sweep; **worst frame ms** is the slowest of the same three, so the
+  run-to-run spread is in the table rather than hidden by the minimum.
+- **cand/pt** is the mean number of particles in the 3x3 wrapped neighbourhood
+  a particle's force loop walks, counted from the copied-out positions with the
+  kernel's own cell rule and its own wrap. On the uniform frame every row lands
+  within 0.01 of `9n/g² + 1`, which is what a correct count of a uniform field
+  should be and is the check that the column means what it says.
+- **The host was not quiesced.** Other work was running during the sweep, which
+  is what the worst-frame column is for.
+
+### Reading the sweep
+
+**The ceiling does throttle the headline count, by about 23%.** At
+`rmax = 0.0007` the frame goes from 59.873 ms at `g = 512` to 46.166 ms at
+1024, and at `rmax = 0.0004` from 60.518 ms to 46.785 ms. Both gaps are
+13.7 ms, more than four times the worst-to-best spread of either row they span,
+so neither is the host.
+Below `1/1024` the shipped ceiling is leaving roughly a quarter of the frame on
+the floor.
+
+**It binds strictly below `1/1024`, not at it.** At `rmax = 0.001` all three
+builds resolve to `g = 512` and report the same frame within 4%, because the
+layout rule only doubles while the **next** dimension's edge still covers
+`rmax`, and `1/1024 = 0.000977` does not cover `0.001`. So `rmax = 0.001` is
+not a capped point, and the same holds for the `rmax = 0.002` row at `g = 256`.
+Those two rmax values are the control in this sweep rather than the subject:
+three builds that differ only in a ceiling none of them reaches agree to within
+0.8% at `g = 256` and 4% at `g = 512`, which is what says the ceiling operand
+changes nothing except which dimensions are reachable.
+
+**The minimising dimension at 1M is `g = 1024`, and 2048 is past the
+crossover.** At `rmax = 0.0004`, 1024 gives 46.785 ms and 2048 gives 49.060 ms.
+That 2.3 ms difference on the totals is the size of the spread within those
+rows, so the totals alone would not settle it. The decomposition does, and each
+half is well outside the noise: going from 1024 to 2048 the build rises from
+6.7-7.4 ms to 10.9-11.5 ms across the repeats, a little over 4 ms, while the
+pass falls only from 39.4 ms to 38.1 ms, about 1.3 ms. The `O(g²)` term is
+buying less than a third of what it costs by that point, and the crossover
+therefore sits between 1024 and 2048 rather than being asserted from the shape
+of the curve.
+
+**Why the pass stops paying.** `cand/pt` falls 145 to 37 to 10 to 3.25 as the
+dimension doubles, a factor of about 3.6 each time, and the pass falls 134 to
+54 to 39 to 38 ms. The first doubling converts almost all of it; the last
+converts almost none. At `g = 2048` there are 3.25 candidates in a
+neighbourhood, so the per-particle cost of enumerating the nine cells and their
+runs is most of what is left. The `ns/cand` the harness derives from the pass
+time says the same thing, rising from roughly 0.9 at `g = 256` to 1.4, 3.8 and
+11.2 as the dimension doubles. There is no further pass saving to buy at this
+count, at any dimension.
+
+**What this does not settle.** The pass here is **serial**, which is what the
+method asked for and what keeps the sweep off all sixteen cores, but the 1M
+headline runs the pass threaded and the build serial. Threading shrinks the
+only term that a finer grid improves and leaves untouched the term it makes
+worse, so the balance moves toward the coarser dimension, and by how much is
+not measured here. Concretely, an 11 ms serial build at `g = 2048` is already
+two thirds of a 60 fps frame on its own, against about 7 ms at 1024. Nothing in
+this sweep says where the optimum sits once the pass is threaded, and the
+figure above should not be quoted as if it did. One count, one seed, one
+uniform-random frame, one machine.

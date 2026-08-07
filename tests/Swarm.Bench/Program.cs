@@ -36,6 +36,19 @@ Console.WriteLine($"  cpu paths (bits)   : 0x{paths:X}  (AVX2={haveAvx2}, AVX-51
 Console.WriteLine($"  build              : {dll}");
 Console.WriteLine();
 
+// The grid-dimension sweep (#148) is behind an argument and returns instead of
+// falling through, for two reasons. It answers one question that none of the
+// sections below ask, and it is the only measurement here that has to be
+// repeated against more than one kernel build - the cell-dimension ceiling is
+// a constant in src/kernel/layout.inc, so a point above the shipped 512 comes
+// from a locally raised build rather than from a switch. Running the default
+// report first would put minutes of unrelated work in front of every repeat.
+if (args.Contains("--gsweep"))
+{
+    GridSweep();
+    return 0;
+}
+
 int[] ns = [1024, 2048, 4096, 8192, 16384];
 const uint Scalar = 3, Avx2 = 1;
 
@@ -770,6 +783,157 @@ static string EnsureBuilt()
         throw new InvalidOperationException($"build.ps1 failed (exit {proc.ExitCode}):\n{err}");
 
     return Path.Combine(root, "build", "swarm.kernel.dll");
+}
+
+// --- the grid-dimension sweep (#148) ---------------------------------------
+
+// Total frame time at the headline count as a function of the cell dimension,
+// across the rmax values where the ceiling in src/kernel/layout.inc starts to
+// bind. The force pass gets cheaper as cells get finer and fewer candidates
+// fall inside the 3x3 neighbourhood; the build pays for the cells themselves,
+// zeroing and prefixing g*g+1 entries every frame. Both halves are timed here
+// and added, because the crossover is only visible in the total.
+//
+// The dimension is not an input. It follows from rmax by the layout rule and
+// then meets the ceiling, so raising the ceiling means assembling a different
+// kernel. What the run prints as g is read out of the arena header (AH_G in
+// src/kernel/abi.inc), never recomputed here, so the table cannot disagree
+// with the build that produced it.
+static unsafe void GridSweep()
+{
+    const uint N = 1_048_576;
+    float[] rmaxes = [0.002f, 0.001f, 0.0007f, 0.0004f];
+
+    Console.WriteLine($"Grid dimension sweep at n={N} across the rmax ceiling (#148)");
+    Console.WriteLine($"  ceiling in this build : g = {BuiltGridCeiling()}");
+    Console.WriteLine($"  seed                  : 0x{MakeGridParams(N, rmaxes[0]).Seed:X}, 6 species, force_path=1, FLAG_GRID");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{"rmax",9} {"g",6} {"cand/pt",9} {"build ms",10} {"pass ms",10} {"frame ms",10} {"fps",7} {"ns/cand",9}");
+    Console.WriteLine(new string('-', 80));
+
+    foreach (float rmax in rmaxes)
+    {
+        var (buildMs, passMs, g, candidates) = TimeGridWithCandidates(N, rmax);
+        double frameMs = buildMs + passMs;
+        double nsPerCandidate = candidates > 0 ? passMs * 1e6 / (N * candidates) : 0;
+        Console.WriteLine(
+            $"{rmax,9:0.000000} {g,6} {candidates,9:0.00} {buildMs,10:0.000} {passMs,10:0.000} " +
+            $"{frameMs,10:0.000} {1000.0 / frameMs,7:0.0} {nsPerCandidate,9:0.000}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("frame = serial near-sorted build + serial pass, each min-of-rounds over frozen input.");
+    Console.WriteLine("cand/pt = mean particles in the 3x3 wrapped neighbourhood of a particle's own cell.");
+}
+
+// The dimension the assembled kernel will not go past, asked of the kernel
+// rather than assumed: an rmax far below any cell edge the ceiling permits
+// resolves to the ceiling itself.
+static unsafe int BuiltGridCeiling()
+{
+    SwarmParams p = MakeGridParams(4096, 1e-6f);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException("layout rejected the ceiling probe");
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException("init rejected the ceiling probe");
+        return (int)*(uint*)((byte*)arena + 36); // AH_G (abi.inc)
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
+// TimeGrid's two figures, plus the dimension the kernel actually chose and the
+// candidate count that explains the pass time.
+static unsafe (double Build, double Pass, int G, double Candidates) TimeGridWithCandidates(uint n, float rmax)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException($"layout rejected n={n} rmax={rmax}");
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed at n={n} rmax={rmax}");
+
+        int g = (int)*(uint*)((byte*)arena + 36); // AH_G (abi.inc)
+
+        Native.swarm_build(arena);
+        double candidates = MeanCandidatesPerParticle(arena, n, g);
+
+        for (int i = 0; i < 3; i++)
+            Native.swarm_pass(arena, 0, n);
+        double passMs = MinOfRounds(() => Native.swarm_pass(arena, 0, n));
+
+        for (int i = 0; i < 3; i++)
+            Native.swarm_build(arena);
+        double buildMs = MinOfRounds(() => Native.swarm_build(arena));
+
+        return (buildMs, passMs, g, candidates);
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
+// Mean population of the 3x3 neighbourhood a particle's force loop walks.
+//
+// Counted from the copied-out positions with the kernel's own cell rule,
+// cx = int(x*g) & (g-1) (grid.inc), and its own wrap: the neighbourhood is a
+// torus, so no cell is short of neighbours at an edge and none is counted
+// twice while g >= 4. The figure includes the particle itself, because the
+// pass walks its own cell whole.
+static unsafe double MeanCandidatesPerParticle(void* arena, uint n, int g)
+{
+    float* x = (float*)NativeMemory.Alloc(n, sizeof(float));
+    float* y = (float*)NativeMemory.Alloc(n, sizeof(float));
+    float* vx = (float*)NativeMemory.Alloc(n, sizeof(float));
+    float* vy = (float*)NativeMemory.Alloc(n, sizeof(float));
+    int* s = (int*)NativeMemory.Alloc(n, sizeof(int));
+    var count = new int[(long)g * g];
+    try
+    {
+        if (Native.swarm_read_state(arena, x, y, vx, vy, s) != 0)
+            throw new InvalidOperationException("swarm_read_state reported a dropped id");
+
+        int mask = g - 1;
+        for (uint i = 0; i < n; i++)
+        {
+            int cx = (int)(x[i] * g) & mask;
+            int cy = (int)(y[i] * g) & mask;
+            count[(long)cy * g + cx]++;
+        }
+
+        double weighted = 0;
+        for (int cy = 0; cy < g; cy++)
+        {
+            for (int cx = 0; cx < g; cx++)
+            {
+                int here = count[(long)cy * g + cx];
+                if (here == 0)
+                    continue;
+
+                int neighbourhood = 0;
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    long row = (long)((cy + dy) & mask) * g;
+                    for (int dx = -1; dx <= 1; dx++)
+                        neighbourhood += count[row + ((cx + dx) & mask)];
+                }
+                weighted += (double)here * neighbourhood;
+            }
+        }
+        return weighted / n;
+    }
+    finally
+    {
+        NativeMemory.Free(x); NativeMemory.Free(y);
+        NativeMemory.Free(vx); NativeMemory.Free(vy); NativeMemory.Free(s);
+    }
 }
 
 // --- native surface + the ABI-mirrored params struct -----------------------
