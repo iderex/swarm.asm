@@ -1,5 +1,7 @@
 # swarm.asm
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/iderex/swarm.asm/badge)](https://scorecard.dev/viewer/?uri=github.com/iderex/swarm.asm)
+
 A Particle Life engine written entirely in hand-written x64 assembly.
 
 **Goal: 1,000,000 interacting particles at 60 fps - no GPU, no dependencies,
