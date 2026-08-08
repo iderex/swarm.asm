@@ -282,9 +282,14 @@ check and a core reached without a seam would still run under whatever the
 caller left. Nothing outside a debug build would notice. The reference's own
 FP mode is the other half and is the paragraph below.
 
-The oracle does not model FTZ/DAZ, so in the subnormal range the C#
-comparison is epsilon-bounded rather than bit-exact. Whether to model it or
-to decline it with a stated divergence bound is issue #160 and is open.
+The oracle models FTZ and DAZ (issue #160). `TestOracle.World` flushes every
+arithmetic result and every state read, so subnormal-range parity on the
+scalar path is asserted BIT-EXACT by
+`SubnormalOracleParityTests.ScalarPathMatchesTheOracleBitExactlyInTheSubnormalRange`
+rather than hidden inside the 1e-4 velocity epsilon, which is thirty-four
+orders of magnitude wider than the whole subnormal range. The model is a
+no-op outside that range - zero, normal, infinite and NaN come back
+unchanged - which is what leaves the normal-range scalar parity exact.
 
 **Rejected:** f64 accumulation (2× throughput cost, zero determinism
 benefit); rsqrt+Newton **as an auto-default or as a replacement for the exact

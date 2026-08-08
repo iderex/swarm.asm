@@ -17,8 +17,11 @@ namespace Swarm.Tests;
 /// subnormal range is smaller than 1.2e-38, so an epsilon comparison cannot
 /// tell a flushed velocity from a preserved one. That is why the assertions
 /// here are exact rather than epsilon-bounded, and why they are asm-against-
-/// itself rather than asm-against-oracle: the oracle does not model FTZ/DAZ,
-/// which is issue #160.
+/// itself rather than asm-against-oracle: this file predates the oracle's
+/// FTZ/DAZ model. That model landed with #160, and the asm-against-oracle
+/// half now lives in SubnormalOracleParityTests; what stays here is the
+/// asm-against-itself half, which asks a different question and would still
+/// be worth asking if the oracle vanished.
 ///
 /// Two of the four theories here fail when the pin is reverted, and two do not.
 /// Verified by setting SEAM_MXCSR to 0x1F80, the x64 default with neither bit
