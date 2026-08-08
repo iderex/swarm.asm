@@ -16,6 +16,16 @@
 ; than in-exe statistics: no sort, no formatting, no CRT-shaped number printing,
 ; and an artifact anyone can recompute from. It takes precedence over `-smoke`
 ; when both are given.
+;
+; `swarm.exe <preset.txt>` is the platform half of decision 10. The grammar and
+; its two-phase commit are kernel code (parse.inc); reading a file is not, so
+; the read lives here: the first command-line token that is not a flag is opened
+; with CreateFileA, read under a byte cap, and handed to the parser. Every
+; failure on that path ends the process with code 1 before a window exists -
+; there is no partial apply and no fallback to the built-in preset, because a
+; run that silently ignored the file it was given is worse than one that stops.
+; FLAG_GRID is applied by the exe afterwards: grid mode is a platform choice,
+; and the grammar deliberately has no key for it.
 
 format PE64 GUI 6.0
 entry start
@@ -33,6 +43,17 @@ CAPTURE_FRAMES = 3600                   ; work-window samples recorded under -ca
 ; map the struct rather than parse it. The layout is checked below where the
 ; fields are laid out, so this constant cannot drift away from them.
 CAP_HEADER_BYTES = 40
+; Preset file limits. The grammar's worst case is one version line, eight key
+; lines and an 8x8 matrix, which is under a kilobyte even with every number
+; written at full width, so 8 KiB is room to spare rather than a guess at the
+; format. It is a cap and not a buffer size: the read asks for one byte more,
+; so a file at exactly the cap is accepted and the first byte past it is what
+; rejects the file - a truncated preset must never be parsed as a whole one.
+; PRESET_PATH_MAX is MAX_PATH including the terminator; a longer argument is
+; rejected rather than truncated into a different file's name.
+PRESET_MAX_BYTES = 8192
+PRESET_PATH_MAX  = 260
+PRESET_MSG_MAX   = 512                  ; formatted failure text, terminator incl.
 WINDOW_STYLE = WS_OVERLAPPED+WS_CAPTION+WS_SYSMENU+WS_MINIMIZEBOX   ; fixed size
 ; Live count: the M1 acceptance count. It is reachable because the preset below
 ; sets FLAG_GRID - brute force at 8,192 is ~53 ms/pass on one core, the grid
@@ -112,6 +133,18 @@ start:
         jz      .fail
         mov     [capture_buf], rax
   .args_done:
+
+        ; A preset named on the command line replaces the built-in one before
+        ; anything is sized from it. Deliberately ahead of the window and the
+        ; arena: a rejected preset must not leave a window on screen, and the
+        ; layout is computed from the params this may replace.
+        mov     rcx, [cmd_line]
+        call    scan_arg_path
+        test    rax, rax
+        jz      .preset_done
+        mov     rcx, rax
+        call    preset_apply            ; returns only on a clean parse
+  .preset_done:
 
         invoke  LoadCursor, 0, IDC_ARROW
         mov     [wc.hCursor], rax
@@ -384,6 +417,256 @@ scan_arg_flag:
         ret
 
 ; ------------------------------------------------------------------
+; scan_arg_path - find the first argument that is not a flag: the preset path.
+;   in:       rcx = zero-terminated ANSI command line in GetCommandLine
+;             form: the program token comes first, possibly quoted
+;   out:      rax = first byte of the token and edx = its length in bytes,
+;             or rax = 0 and edx = 0 when there is no such argument
+;   clobbers: rax, rcx, rdx, r8, flags
+;   MXCSR:    untouched
+;   note:     a token starting with '-' is a flag and is skipped, so -smoke
+;             and -capture never read as a filename and a future flag needs
+;             no change here. The cost is that a path beginning with '-' is
+;             unreachable, which is the same trade every argv taker makes and
+;             is written into the README rather than worked around.
+;   note:     a quoted token yields the bytes between the quotes, so a path
+;             with spaces arrives whole. An unterminated quote yields the rest
+;             of the line, which then fails to open - fail-closed, and one
+;             branch rather than a second error path
+; ------------------------------------------------------------------
+scan_arg_path:
+        cmp     byte [rcx], '"'
+        jne     .skip_program
+  .skip_quoted:                         ; quoted program token: to the
+        inc     rcx                     ; closing quote
+        movzx   eax, byte [rcx]
+        test    al, al
+        jz      .absent
+        cmp     al, '"'
+        jne     .skip_quoted
+        inc     rcx
+        jmp     .next_arg
+  .skip_program:                        ; bare program token: to the
+        movzx   eax, byte [rcx]         ; first blank
+        test    al, al
+        jz      .absent
+        cmp     al, ' '
+        je      .next_arg
+        cmp     al, 9
+        je      .next_arg
+        inc     rcx
+        jmp     .skip_program
+  .next_arg:
+        movzx   eax, byte [rcx]
+        test    al, al
+        jz      .absent
+        cmp     al, ' '
+        je      .blank
+        cmp     al, 9
+        je      .blank
+        cmp     al, '-'
+        je      .skip_token             ; a flag, never a filename
+        cmp     al, '"'
+        je      .quoted
+        mov     r8, rcx                 ; bare token: runs to the next blank
+  .bare:
+        movzx   eax, byte [rcx]
+        test    al, al
+        jz      .found
+        cmp     al, ' '
+        je      .found
+        cmp     al, 9
+        je      .found
+        inc     rcx
+        jmp     .bare
+  .quoted:
+        inc     rcx                     ; past the opening quote
+        mov     r8, rcx
+  .in_quote:
+        movzx   eax, byte [rcx]
+        test    al, al
+        jz      .found
+        cmp     al, '"'
+        je      .found
+        inc     rcx
+        jmp     .in_quote
+  .found:
+        sub     rcx, r8
+        mov     edx, ecx                ; a command line is far under 4 GiB
+        mov     rax, r8
+        ret
+  .skip_token:
+        movzx   eax, byte [rcx]
+        test    al, al
+        jz      .absent
+        cmp     al, ' '
+        je      .next_arg
+        cmp     al, 9
+        je      .next_arg
+        inc     rcx
+        jmp     .skip_token
+  .blank:
+        inc     rcx
+        jmp     .next_arg
+  .absent:
+        xor     eax, eax
+        xor     edx, edx
+        ret
+
+; ------------------------------------------------------------------
+; preset_apply - read the named preset file and adopt it, or exit 1.
+;   in:       rcx = first byte of the path token (not zero-terminated),
+;             edx = its length in bytes; rsp = 8 mod 16 (call from start)
+;   out:      returns only when the file parsed clean, with [sim_params]
+;             replaced by the parsed preset and FLAG_GRID set on it. Every
+;             failure reports through preset_fail and ends the process with
+;             code 1, so no caller needs an error branch
+;   clobbers: caller-saved, flags (sim_parse is seam-wrapped and preserves
+;             every nonvolatile)
+;   MXCSR:    pinned 0x9FC0 by start; sim_parse re-pins across the core
+;   note:     [sim_params] is the parser's own output buffer, which is safe
+;             because parse_preset_core is a two-phase commit: it writes the
+;             output at exactly one place and only after the whole file has
+;             validated. A rejected preset therefore leaves the built-in one
+;             byte-untouched, and the exe exits rather than running it
+; ------------------------------------------------------------------
+preset_apply:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+
+        ; Copy the token out of the command line so it is zero-terminated for
+        ; CreateFileA. Over-long is truncated INTO THE MESSAGE ONLY: the length
+        ; is judged below, on the original, so no truncated name is ever opened.
+        mov     r11, rcx                ; the token bytes, inside the command line
+        mov     r8d, edx                ; length as given, judged after the copy
+        mov     r9d, edx                ; length actually copied
+        cmp     r9d, PRESET_PATH_MAX-1
+        jbe     .copy_len
+        mov     r9d, PRESET_PATH_MAX-1
+  .copy_len:
+        lea     r10, [preset_path]
+        xor     ecx, ecx
+  .copy:
+        cmp     ecx, r9d
+        jae     .copied
+        movzx   eax, byte [r11+rcx]
+        mov     [r10+rcx], al
+        inc     ecx
+        jmp     .copy
+  .copied:
+        mov     byte [r10+rcx], 0
+        cmp     r8d, PRESET_PATH_MAX-1
+        jbe     .open
+        invoke  wsprintfA, why_detail, fmt_path_long, PRESET_PATH_MAX-1
+        lea     rcx, [why_detail]
+        call    preset_fail
+
+  .open:
+        invoke  CreateFileA, preset_path, GENERIC_READ, FILE_SHARE_READ, 0, \
+                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0
+        cmp     rax, INVALID_HANDLE_VALUE
+        jne     .opened
+        lea     rcx, [why_open]
+        call    preset_fail
+  .opened:
+        mov     [preset_file], rax
+
+        ; One byte more than the cap is asked for, so an oversized file is
+        ; detected by what came back rather than by a separate size query that
+        ; could disagree with the read.
+        invoke  VirtualAlloc, 0, PRESET_MAX_BYTES+1, MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
+        test    rax, rax
+        jnz     .alloced
+        lea     rcx, [why_alloc]
+        call    preset_fail
+  .alloced:
+        mov     [preset_buf], rax
+        mov     dword [preset_len], 0
+  .read:
+        mov     eax, PRESET_MAX_BYTES+1
+        sub     eax, [preset_len]
+        jz      .read_done              ; the buffer is full: over the cap
+        mov     [preset_want], eax
+        mov     rax, [preset_buf]
+        mov     ecx, [preset_len]
+        add     rax, rcx
+        mov     [preset_at], rax
+        invoke  ReadFile, [preset_file], [preset_at], [preset_want], preset_read, 0
+        test    eax, eax
+        jnz     .read_ok
+        invoke  CloseHandle, [preset_file]
+        lea     rcx, [why_read]
+        call    preset_fail
+  .read_ok:
+        mov     eax, [preset_read]
+        test    eax, eax
+        jz      .read_done              ; end of file
+        add     [preset_len], eax
+        jmp     .read
+  .read_done:
+        invoke  CloseHandle, [preset_file]
+        cmp     dword [preset_len], PRESET_MAX_BYTES
+        jbe     .parse
+        invoke  wsprintfA, why_detail, fmt_too_big, PRESET_MAX_BYTES
+        lea     rcx, [why_detail]
+        call    preset_fail
+
+  .parse:
+        mov     rcx, [preset_buf]
+        mov     edx, [preset_len]
+        lea     r8, [sim_params]
+        call    sim_parse
+        test    eax, eax
+        jz      .parsed
+        ; Packed error: bit 31 set, PERR_* in bits 20..30, 1-based line in the
+        ; low 20. Both halves are reported, plus the raw return, so a reader can
+        ; check the split rather than trust it.
+        mov     r10d, eax
+        mov     ecx, eax
+        and     ecx, 0xFFFFF
+        mov     [preset_err_line], ecx
+        mov     ecx, r10d
+        shr     ecx, 20
+        and     ecx, 0x7FF
+        mov     [preset_err_code], ecx
+        mov     [preset_err_raw], r10d
+        invoke  wsprintfA, why_detail, fmt_parse, [preset_err_code], \
+                [preset_err_line], [preset_err_raw]
+        lea     rcx, [why_detail]
+        call    preset_fail
+  .parsed:
+        ; Grid mode is the exe's decision, not the file's: decision 10 gives the
+        ; grammar no flags key, and the parser leaves the field zero.
+        or      dword [sim_params+SP_FLAGS], FLAG_GRID
+        invoke  VirtualFree, [preset_buf], 0, MEM_RELEASE
+        add     rsp, 8
+        ret
+
+; ------------------------------------------------------------------
+; preset_fail - say why the preset was refused, then exit 1. Never returns.
+;   in:       rcx = zero-terminated ANSI reason; [preset_path] holds the name
+;             as it was given; rsp = 8 mod 16 (reached by call)
+;   out:      does not return; process exit code 1
+;   clobbers: n/a (process ends here)
+;   MXCSR:    untouched (integer and imports only)
+;   note:     the modal box is skipped under -smoke and -capture. Both are
+;             unattended modes by definition, and a dialog nobody can dismiss
+;             turns a fail-closed exit into a hang, which is the worse failure.
+;             The exit code carries the same information to a machine either
+;             way, so nothing is lost that a script was reading
+; ------------------------------------------------------------------
+preset_fail:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        mov     [preset_reason], rcx
+        invoke  wsprintfA, msg_buf, fmt_reason, preset_path, [preset_reason]
+        cmp     dword [smoke_mode], 0
+        jne     .quiet
+        cmp     dword [capture_mode], 0
+        jne     .quiet
+        invoke  MessageBoxA, 0, msg_buf, _title, MB_ICONERROR+MB_SETFOREGROUND
+  .quiet:
+        invoke  ExitProcess, 1
+
+; ------------------------------------------------------------------
 ; WindowProc - window procedure (Win64 ABI callee, callback seam).
 ;   in:       rcx hwnd, edx message, r8 wparam, r9 lparam
 ;   out:      rax = message result
@@ -596,6 +879,17 @@ seam_wrap sim_step, step_core
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
 ; ------------------------------------------------------------------
 seam_wrap sim_plot, plot_core
+; ------------------------------------------------------------------
+; sim_parse - seam wrapper over parse_preset_core.
+;   in:       rcx text, edx len, r8 SwarmParams* out
+;   out:      eax = 0 and *out written, else the packed negative parse error
+;             with *out byte-untouched
+;   clobbers: volatile (caller-saved) registers per the Win64 ABI (rax, rcx,
+;             rdx, r8-r11, xmm0-xmm5); the seam saves and restores every
+;             nonvolatile, which the core needs here because it drives rsi/rdi
+;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return (seam)
+; ------------------------------------------------------------------
+seam_wrap sim_parse, parse_preset_core
 
 ; ------------------------------------------------------------------
 ; ui_reseed - draw a fresh world seed from the UI RNG stream.
@@ -1010,6 +1304,21 @@ section '.data' data readable writeable
   capture_needle db '-capture', 0
   cap_path       du 'swarm-frames.bin', 0    ; CreateFileW takes UTF-16
 
+  ; Preset failure text. Every cap that appears in a message is formatted from
+  ; the constant that enforces it, so the sentence a reader sees cannot drift
+  ; away from the check that produced it.
+  fmt_reason    db 'swarm.asm could not use the preset "%s".', 13, 10, 13, 10, \
+                   '%s', 13, 10, 13, 10, \
+                   'Nothing was applied and nothing was drawn.', 0
+  fmt_parse     db 'The preset grammar rejected the file: error %u on line %u ', \
+                   '(the parser returned %d).', 0
+  fmt_too_big   db 'The file is larger than the %u-byte cap this reader accepts.', 0
+  fmt_path_long db 'The path is longer than the %u bytes this reader accepts, ', \
+                   'so no file was opened.', 0
+  why_open      db 'The file could not be opened for reading.', 0
+  why_alloc     db 'The read buffer could not be committed.', 0
+  why_read      db 'The file could not be read to its end.', 0
+
   wc   WNDCLASSEX sizeof.WNDCLASSEX, CS_OWNDC, WindowProc, 0, 0, NULL, NULL, NULL, NULL, NULL, _class, NULL
   rect RECT 0, 0, FRAME_W, FRAME_H
 
@@ -1059,6 +1368,20 @@ section '.data' data readable writeable
   if $ - cap_header <> CAP_HEADER_BYTES
         err     ; the header fields and CAP_HEADER_BYTES disagree
   end if
+
+  ; -preset state. All of it is startup-only: nothing here is read once the
+  ; render loop begins, and preset_buf is released as soon as the parse commits.
+  align 8
+  preset_file   dq ?                    ; the open preset handle
+  preset_buf    dq 0                    ; PRESET_MAX_BYTES+1 read buffer
+  preset_at     dq ?                    ; ReadFile destination, staged for invoke
+  preset_reason dq ?                    ; the failure text preset_fail formats in
+  preset_len    dd 0                    ; bytes read so far
+  preset_want   dd ?                    ; bytes asked of the current ReadFile
+  preset_read   dd ?                    ; ReadFile's LPDWORD out-parameter
+  preset_err_code dd ?                  ; PERR_* out of the packed parse error
+  preset_err_line dd ?                  ; 1-based line out of the same word
+  preset_err_raw  dd ?                  ; the return itself, so the split is checkable
 
   ; Interactive state (written by WindowProc, consumed at the step boundary).
   paused      dd 0
@@ -1130,6 +1453,13 @@ section '.data' data readable writeable
         dd 0,0,0,0,0,0,0,0
         dd 0,0,0,0,0,0,0,0
         dd 0,0,0,0,0,0,0,0
+
+  ; Startup-only buffers, last in the section because they are the only bulk
+  ; here: the path as given, the formatted detail sentence, and the message the
+  ; box shows. None of them is touched after the render loop starts.
+  preset_path   rb PRESET_PATH_MAX
+  why_detail    rb PRESET_MSG_MAX
+  msg_buf       rb PRESET_MSG_MAX
 
   ; The M3 worker pool's mutable platform state (handles, ranges, publish slot).
   pool_storage

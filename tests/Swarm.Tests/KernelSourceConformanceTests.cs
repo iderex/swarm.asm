@@ -319,7 +319,7 @@ public sealed class KernelSourceConformanceTests
 
         string[] expected =
         [
-            "sim_layout", "sim_init", "sim_step", "sim_plot",           // swarm.asm
+            "sim_layout", "sim_init", "sim_step", "sim_plot", "sim_parse",  // swarm.asm
             "swarm_plot", "swarm_pass", "swarm_step", "swarm_init",     // swarm_dll.asm
             "swarm_parse_preset", "swarm_layout_bytes", "swarm_mxcsr",
         ];
