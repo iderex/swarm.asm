@@ -18,9 +18,15 @@ and carries none of the bank-swap or copy cost a full `swarm_step` would fold
 in. Two code paths are compared at each particle count: the scalar reference
 (`force_path = 3`) and the AVX2 gather path (`force_path = 1`).
 
-Not yet measured here (tracked on #5, milestone M4): the end-to-end
-`swarm.exe` frame-time capture (mean / p99 fps at a fixed seed and count), the
-1,048,576-particle headline, and regression gating against a stored baseline.
+Also measured, in its own section below: the **live work window** of
+`swarm.exe` at the M1 acceptance count, from the shipped exe's `-capture` mode.
+That is a different measurement from the pass benches above - it is the whole
+of step plus plot plus blit, on the shipped preset, taken from the product
+rather than from a harness.
+
+Not yet measured here (tracked on #5, milestone M4): the full end-to-end
+benchmark mode with its own scene set, the 1,048,576-particle headline, and
+regression gating against a stored baseline.
 
 ## How to run
 
@@ -327,10 +333,361 @@ exports do, pinning `0x9FC0` FTZ/DAZ before any FP op) is what makes that hold
 across threads. `PassParallelMatchesSerial` gates it at `T = 1, 2, 4, 16` on
 both the AVX2 and scalar paths, exact equality.
 
-**1M is still the open target.** At 1M the cells are ~2× denser (`g` clamps at
-512), `k` rises, and the pass grows super-linearly; there is no measured 1M row
-yet. Threads alone may not reach 60 fps at 1M - decision 6 pairs M3 with the
-AVX-512 path for that, and a measured 1M serial baseline is the next step.
+**1M is measured, and it is the section below.** This paragraph used to say
+there was no 1M row and that threads alone might not reach 60 fps there. There
+is one now, at "The 1M baseline", and on the headline scene threads alone do
+reach the budget at the kernel seam. What that does and does not settle is
+stated there rather than here.
+
+## The 1M baseline (serial and threaded; #176)
+
+Every 1M figure above this line was a projection from the 500k rows. This is
+the measurement they stood in for: the grid frame at n = 1,048,576, serial and
+then across the pool, on the two scenes decision 12 names.
+
+**Three whole runs of the harness, not one.** The run-to-run spread at this
+count is wider than several of the differences a reader would otherwise draw
+from a single run, so all three are printed and every reading below is taken on
+the worst of the three rather than the best.
+
+```
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release
+```
+
+### Serial, one core
+
+| run | scene    | rmax     |   g | build ms | pass ms | frame ms |  fps |
+| --- | -------- | -------- | --: | -------: | ------: | -------: | ---: |
+| 1   | headline | 0.001953 | 512 |    6.631 |  65.069 |   71.700 | 13.9 |
+| 2   | headline | 0.001953 | 512 |    7.305 |  73.509 |   80.814 | 12.4 |
+| 3   | headline | 0.001953 | 512 |    7.232 |  73.343 |   80.575 | 12.4 |
+| 1   | dense    | 0.003906 | 256 |    6.597 | 156.778 |  163.375 |  6.1 |
+| 2   | dense    | 0.003906 | 256 |    8.504 | 167.743 |  176.247 |  5.7 |
+| 3   | dense    | 0.003906 | 256 |    8.827 | 172.576 |  181.402 |  5.5 |
+
+### Threaded pass, serial build added back
+
+`T = 16*` is the pool's auto-detected physical-core count.
+
+| run | scene    |    T | pass ms | frame ms |  fps | pass × |
+| --- | -------- | ---: | ------: | -------: | ---: | ------ |
+| 1   | headline |    8 |  13.531 |   20.162 | 49.6 | 4.81×  |
+| 2   | headline |    8 |  13.582 |   20.887 | 47.9 | 5.41×  |
+| 3   | headline |    8 |  14.009 |   21.240 | 47.1 | 5.24×  |
+| 1   | headline | 16\* |   7.184 |   13.815 | 72.4 | 9.06×  |
+| 2   | headline | 16\* |   8.105 |   15.410 | 64.9 | 9.07×  |
+| 3   | headline | 16\* |   8.303 |   15.535 | 64.4 | 8.83×  |
+| 1   | dense    | 16\* |  18.724 |   25.321 | 39.5 | 8.37×  |
+| 2   | dense    | 16\* |  19.869 |   28.373 | 35.2 | 8.44×  |
+| 3   | dense    | 16\* |  21.207 |   30.033 | 33.3 | 8.14×  |
+
+The full `T` sweep (1, 2, 4, 8, auto) is in the harness output; the rows above
+are the two that carry the reading.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2
+  and no AVX-512; `force_path = 1`.
+- **Scenes**: `n = 1,048,576` (the ABI's maximum `n`), 6 species, seed `0x5EED`,
+  `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, `FLAG_GRID`,
+  and the harness's deterministic `sin`-filled matrix. Headline is
+  `rmax = 1/512` so `g` clamps at 512; dense is `rmax = 1/256` so `g` is 256 and
+  each cell holds roughly four times the particles.
+- **build** is the near-sorted counting sort, i.e. every frame after the first.
+  The first frame's build at this count is in the #177 table below and is three
+  to five times this one.
+- **Commit**: `4924c3b` · **Date**: 2026-08-06.
+- **The host was not quiesced**, and the three runs above are what that costs:
+  9.1 ms between the best and worst serial headline frame, on a figure of ~80.
+
+### Reading the 1M numbers
+
+**Does the frame budget close with threads alone at 1M?** On the headline scene,
+at the kernel seam, yes. The worst of the three runs puts the threaded frame at
+**15.535 ms** against the 16.67 ms budget, and the best at 13.815 ms. On the
+dense scene, no, and not close: the worst is **30.033 ms**, about 1.8× over.
+
+**What that answer is not.** These are `swarm_build` plus `swarm_pass` at the
+P/Invoke seam. A frame the user waits for also plots and blits 1M particles, and
+none of that is in the numbers above. The M1 acceptance figure at 8,192 is a
+work window measured inside the shipped exe and includes both; there is no
+equivalent capture at 1M, so nothing here is a frame-rate claim about
+`swarm.exe`. The headline claim is #125's and still needs one.
+
+**And these are minima, not percentiles.** Every figure here is the best of nine
+rounds, which is the right primitive for comparing kernels and the wrong one for
+a 60 fps claim. A budget is met at p99 or it is not met. 15.535 ms of best-case
+work against a 16.67 ms budget leaves 1.1 ms for everything the minimum
+excluded, which is not a margin anyone should spend in advance.
+
+**Scaling stops paying at 8 cores, exactly as 500k said it would.** The pass
+scales 5.24× at `T = 8` and 8.83× at `T = 16` on the worst run, so the second CCD
+returns about a third of what the first eight cores did. That is the taper the
+500k section already recorded and attributed to the working set crossing the
+inter-CCD fabric, and at twice the particles it is not better.
+
+**The build is now a visible share of the threaded frame.** Serial build against
+the `T = 16` frame is 7.232 of 15.535 ms on the worst headline run, about 47%.
+Serial at 500k it was under a third. Risk 2's contingency, the parallel scatter,
+is already triggered on the #177 measurement below; this is what triggering it
+is worth, and it is the single largest remaining item in the threaded frame.
+
+## The serial grid build at 1M (risk 2's probe; #177)
+
+Masterplan open-risk 2 estimates the counting sort's histogram chain at **8-12
+cycles/particle on near-sorted input** and calls anything **materially above
+~4.5 ms** at 1M an erosion of the frame margin. That estimate is what decides
+whether the build stays serial, and it had never been checked at 1M. This is
+the check.
+
+Build only, `swarm_build` over a frozen arena, min-of-rounds like every other
+figure here. No kernel change.
+
+| n         | rmax  | g   | sorted ms | cyc/particle | unsorted ms | cyc/particle |
+| --------- | ----- | --- | --------- | ------------ | ----------- | ------------ |
+| 500,000   | 1/256 | 256 | 2.643     | 25.9         | 5.404       | 53.0         |
+| 500,000   | 1/512 | 512 | 2.544     | 24.9         | 7.580       | 74.3         |
+| 1,048,576 | 1/256 | 256 | 6.784     | 31.7         | 25.901      | 121.0        |
+| 1,048,576 | 1/512 | 512 | 7.049     | 32.9         | 26.521      | 123.9        |
+
+- **Two input states, because the difference is larger than the budget.** The
+  build scatters OUT into cell order, so how far OUT already is from that order
+  sets the write locality. **sorted** is OUT already cell-ordered: a pass has
+  run over sorted IN and written OUT at the same indices, which is every frame
+  after the first and is the near-sorted input risk 2 states its estimate for.
+  **unsorted** is the id-ordered initial frame, which is the first frame of a
+  run. Reporting either one alone as "the build cost" would settle the risk by
+  picking a column.
+- **500,000 is the control, not a result.** Its sorted figures have to
+  reproduce the build column of the M2 grid table above, and its unsorted
+  figures the worst-case build the M3 section describes. They do: 2.643 / 2.544
+  against that run's 2.485 / 2.632, and 5.404 / 7.580 against that run's
+  6.546 ms. An instrument that failed this control would be measuring something
+  other than what the other rows measure.
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200, **single-threaded** - the build is serial by design.
+  **Feature path**: AVX2 + FMA (no AVX-512), `force_path = 1`, `FLAG_GRID`.
+  **Seed / preset**: `0x5EED`, 6 species, the bench's varied attraction matrix.
+- **Cycles** are derived at `RefGhz = 4.9` as in the `#59` section below; the
+  ms column is the clock-free primitive and the verdict below does not rest on
+  the derivation.
+- **Commit**: `668d9aa` · **Date**: 2026-08-06. Run on a host that was not
+  quiesced.
+
+### Reading it - risk 2 misses its budget, in both currencies
+
+**Near-sorted, 1M, `g = 512`: 7.049 ms and ~32.9 cycles/particle.** The
+estimate is 8-12 cycles/particle and the line is ~4.5 ms. The measurement is
+**~2.7x the top of the cycle estimate** and **~1.6x the millisecond line**.
+
+**The verdict does not depend on the assumed clock, and it cannot be rescued by
+choosing a different one.** The two halves of the estimate are not consistent
+with each other at this part's clock: 12 cycles/particle at 1,048,576 particles
+is 2.6 ms at 4.9 GHz, not the ~4 ms decision 3 states, so the estimate was
+written against a clock of roughly 2.5 GHz. It misses either way. The 7.049 ms
+is measured and carries no clock at all, so it exceeds the 4.5 ms line whatever
+was assumed; and for 7.049 ms to be 12 cycles/particle the part would have to
+be running at 1.79 GHz, which it is not under any load.
+
+**The growth from 500k to 1M is worse than linear in n**, and that is the part
+that matters for the headline. Near-sorted at `g = 512`, 500k costs 2.544 ms
+and 1M costs 7.049 ms: 2.1x the particles for **2.8x the build**. `g` is
+clamped at 512 for both, so the O(g²) zero-and-prefix half is identical between
+them and cannot be the cause; what grows is the scatter, at ~2 particles per
+cell against ~4. Extrapolating this row to a count above 1M is not supported by
+two points, and none is offered.
+
+**So risk 2's contingency is triggered**, with 7.049 ms as the number that
+triggered it. The masterplan records that against the risk. Note that risk 2's
+contingency is the **per-thread per-bucket-cursor parallel scatter**, which is
+also decision 6's; the two-pass radix is risk **3**'s fallback and is not what
+this measurement authorises.
+
+**What this does not say.** It does not say the 1M frame budget is lost - the
+pass is the larger term and is threaded, and no 1M pass figure is recorded here
+yet. It says the build's own budget line is missed on the input state the risk
+is written about, which is the question this probe was asked.
+
+## Scatter locality under an energetic scene (risk 3's probe; #178)
+
+Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and
+that a hot matrix at the `v_max` clamp degrades write locality. Its probe is
+named in the risk itself: an adversarial preset, all `|a| = 1` and high force,
+against the coherent scene. Its fallback is its own, a two-pass radix over cell
+row then cell, and is not risk 2's parallel scatter above.
+
+**Three scenes, not two.** The scene every other row in this document uses is
+not a calm control: measured below, it already sits with 64% of its velocity
+components at the clamp. A two-scene probe would have compared energetic against
+energetic and reported the difference as an answer.
+
+**All three are stepped before they are timed.** A scene is not energetic at
+frame 0. It is energetic once the matrix has driven velocities to the clamp and
+pulled the population into clumps and voids, so each scene runs 120 steps first.
+Timing frame 0 would compare three identical uniform-random distributions and
+find, correctly and uselessly, no difference.
+
+**Repeats are interleaved, not blocked**, so host drift lands on all three
+scenes rather than on whichever ran last.
+
+| rep | scene       | force_scale | at v_max | build ms | pass ms |
+| --- | ----------- | ----------: | -------: | -------: | ------: |
+| 1   | calm        |         1.0 |     0.1% |    7.196 |  85.375 |
+| 1   | coherent    |        10.0 |    64.0% |    7.162 |  69.818 |
+| 1   | adversarial |       100.0 |    97.8% |    6.230 |  70.692 |
+| 2   | calm        |         1.0 |     0.1% |    5.793 |  65.617 |
+| 2   | coherent    |        10.0 |    64.0% |    6.300 |  68.280 |
+| 2   | adversarial |       100.0 |    97.8% |    6.403 |  70.792 |
+| 3   | calm        |         1.0 |     0.1% |    5.899 |  66.849 |
+| 3   | coherent    |        10.0 |    64.0% |    6.696 |  67.232 |
+| 3   | adversarial |       100.0 |    97.8% |    6.022 |  63.723 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`;
+  `force_path = 1`, single-threaded.
+- **Scenes**: `n = 1,048,576`, `rmax = 1/512` so `g = 512` for all three, 6
+  species, seed `0x5EED`, `FLAG_GRID`, 120 steps before timing. `adversarial`
+  sets every matrix cell to +1 or -1 and `force_scale` to the grammar's ceiling
+  of 100. `calm` and `coherent` keep the harness's varied `sin` matrix and
+  differ from each other only in `force_scale`, 1 against 10.
+- **at v_max** is the share of the 2n velocity components sitting at the
+  per-axis clamp after the settle, read back through `swarm_read_state`. It is
+  identical across reps to the printed precision because the simulation is
+  deterministic.
+- **build** is the near-sorted counting sort, which is the input state risk 3 is
+  written about. Each figure is a min over nine rounds.
+- **Commit**: `15878b3` · **Date**: 2026-08-06.
+
+### Reading the risk 3 numbers
+
+**The premise is real and is measured rather than assumed.** The three scenes
+span 0.1%, 64.0% and 97.8% of velocity components at the clamp, so the hostile
+scene is hostile in exactly the way the risk describes, and the calm control is
+genuinely calm.
+
+**The predicted degradation does not appear.** The worst adversarial build,
+6.403 ms, is below the worst calm build at 7.196 ms and below the worst coherent
+build at 7.162 ms. Within one scene the spread across reps is 1.403 ms for calm,
+0.862 ms for coherent and 0.381 ms for adversarial, so every difference between
+scenes is smaller than the calm scene's own run-to-run spread. Nothing here
+separates the three, and the hostile scene is the steadiest of them.
+
+**So risk 3's fallback is not triggered.** The two-pass radix is not authorised
+by this measurement, and no number here asks for it.
+
+**A hypothesis for the direction, offered as a hypothesis.** Clustering
+concentrates the scatter's writes into fewer distinct cells, which is better
+locality rather than worse, and the risk assumed the opposite. This probe does
+not measure it: nothing here reads the per-cell occupancy distribution, and
+saying so is the honest end of the sentence.
+
+**What this does not cover.** One grid dimension (`g = 512`), one particle count,
+one settle length. A longer settle, a denser `g`, or a scene engineered to
+oscillate rather than to clump could all behave differently and none was run.
+The figures are minima over nine rounds, so they say what the cheapest observed
+build costs, not what a p99 build costs. And the ~1.5-2 ms scatter estimate that
+risk 3 opens with is separately wrong by roughly a factor of three at this
+count - that is risk 2's finding in the section above, and it is not what this
+probe measured.
+
+## The M1 live frame at 8,192 (`swarm.exe -capture`; #171)
+
+The M1 acceptance measurement, and the only row here taken from the shipped
+executable instead of a harness. `swarm.exe -capture` runs the normal paced
+live loop and records the QueryPerformanceCounter delta of the **work window**
+of each frame - step plus plot plus blit, never the pacing wait - then writes
+3600 raw `u64` samples to `swarm-frames.bin` and exits. The wait is outside the
+window on purpose: a paced loop measured wall to wall reports 16.67 ms by
+construction and would say nothing about how much room is left.
+
+The budget is one frame at 60 fps, 16.67 ms, on p99.
+
+### rmax = 0.05, the shipped acceptance preset (g = 16)
+
+| run | mean ms | p50 ms | p99 ms | max ms |
+| --- | ------- | ------ | ------ | ------ |
+| 1   | 3.187   | 2.941  | 6.100  | 9.068  |
+| 2   | 2.149   | 1.690  | 5.066  | 5.980  |
+| 3   | 1.499   | 1.487  | 2.099  | 2.344  |
+
+### rmax = 0.08 (g = 8), a local preset edit, not shipped
+
+| run | mean ms | p50 ms | p99 ms | max ms |
+| --- | ------- | ------ | ------ | ------ |
+| 1   | 2.346   | 2.475  | 2.806  | 7.104  |
+| 2   | 2.322   | 2.453  | 2.778  | 5.124  |
+| 3   | 2.348   | 2.470  | 2.816  | 14.244 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2
+  and no AVX-512; the preset's `force_path = 0` resolves to `PATH_AVX2`. The
+  live loop drives `pool_step`, so the pass runs threaded at the auto-detected
+  16 physical cores while the grid build stays serial.
+- **Scene**: `n = 8192`, `FLAG_GRID`, 4 species, seed `0x9E3779B97F4A7C15`,
+  the preset compiled into the exe. `g` follows from `rmax` by the layout rule
+  (largest power of two with `1/g ≥ rmax`): 16 at `rmax = 0.05`, 8 at 0.08.
+  Every run is 3600 consecutive frames from process start, with no warm-up
+  discarded - the first frames are in the samples.
+- **Commit**: `e2f762b` · **Date**: 2026-08-06.
+- The `rmax = 0.08` rows come from a **locally edited preset**, assembled,
+  measured and reverted. No committed preset carries 0.08; the M1 amendment
+  pins the shipped one at 0.05 or below, and `ExePresetTests` refuses a drift
+  to 0.08 in the image.
+- **The host was not quiesced.** Other work was running on the machine during
+  the capture window, which is the honest reading of the `rmax = 0.05` spread
+  below rather than something to average away.
+
+Each figure above is recomputed from its own dump, so the number and the file
+travel together:
+
+```powershell
+$b = [IO.File]::ReadAllBytes('swarm-frames.bin')
+$freq = [BitConverter]::ToUInt64($b, 8)
+$count = [BitConverter]::ToUInt64($b, 16)
+$ms = @(for ($i = 0; $i -lt $count; $i++) { [BitConverter]::ToUInt64($b, 40 + 8 * $i) * 1000.0 / $freq })
+$s = $ms | Sort-Object
+[string]::Format([Globalization.CultureInfo]::InvariantCulture,
+  "mean={0:F3} ms  p50={1:F3} ms  p99={2:F3} ms  max={3:F3} ms",
+  ($ms | Measure-Object -Average).Average,
+  $s[[int][math]::Floor(0.50 * ($count - 1))],
+  $s[[int][math]::Floor(0.99 * ($count - 1))],
+  $s[$count - 1])
+```
+
+The dump is a 40-byte header - `'SWRMFRM1'`, then `qpc_freq`, `count`, `n`,
+`flags`, `seed` - followed by `count` little-endian `u64` tick deltas. The
+scene the samples belong to is inside the file, so a dump cannot be quoted
+against a run it did not come from.
+
+### Reading the M1 numbers - 8,192 @ 60 fps reached
+
+**The worst p99 of six runs is 6.100 ms against a 16.67 ms budget.** Not the
+best run, not a mean of runs: the worst single reading is 2.7× inside budget,
+and the worst individual frame anywhere in the six runs is 14.244 ms, still
+under one frame period. **M1's acceptance count clears 60 fps**, and it does so
+on the shipped preset with the shipped binary.
+
+**The spread between runs is larger than anything the scene explains.** The
+three `rmax = 0.05` runs report means of 3.187, 2.149 and 1.499 ms - a factor
+of two across identical binaries, identical scene and identical seed. That is
+the host, not the engine, and it is why the claim above is stated on the worst
+reading. A quiesced machine would report a tighter and lower band; nothing here
+needs it to, because the margin survives the noisy one.
+
+**At this count the work window is not force-bound**, which is the more useful
+result. `rmax = 0.08` gives `g = 8` and therefore roughly four times the
+candidate neighbours per particle that `g = 16` does, so a force-dominated
+window would show 0.08 far slower. It does not: the quietest 0.05 run sits at
+1.499 ms mean against 2.346 for 0.08, a gap of ~0.85 ms where a four-fold force
+increase would be much wider. So at least ~1.5 ms of the window is
+`rmax`-independent, and the remaining headroom at 8,192 is not in the force
+pass. The rmax-independent part is **not decomposed here** - the clear, the
+plot and the `BitBlt` are one window in this instrument, and separating them
+needs a finer one than #169 built.
+
+**This does not transfer to a larger count.** The reading says the force pass
+is cheap relative to a fixed 1024×1024 raster cost at 8,192 particles; at 500k
+and 1M the force pass dominates again and the M2 and M3 rows above are the
+relevant ones.
 
 ## The AVX2 force inner loop (cycles/candidate; #59)
 
@@ -433,3 +790,119 @@ in-process, kernel-read-only microbench. So the **>90% divider premise is
 unconfirmed and points optimistic**; treat the rsqrt speedup as unproven until
 #61 (whose IEEE-exact result exposes the non-divide headroom directly) or a
 port-level probe reports.
+
+## The grid dimension at 1M across the rmax ceiling (#148)
+
+Whether the `g <= 512` ceiling in `src/kernel/layout.inc` costs the headline
+count anything, and if it does, which dimension the ceiling should be. The two
+halves of the frame move against each other. The force pass gets cheaper as
+cells get finer, because fewer particles fall inside the 3x3 neighbourhood it
+walks. The build gets dearer, because it zeroes and prefixes `g*g + 1` cell
+ends every frame: 1 MB and 262k entries at `g = 512`, 4 MB and 1M at 1024,
+16 MB and 4M at 2048. Only the total says which wins, so the total is what is
+timed here.
+
+`g` is not an input. It follows from `rmax` by the layout rule, the largest
+power of two with `1/g >= rmax`, and then meets the ceiling, so a point above
+512 needs a different kernel rather than a different argument. Three builds
+were assembled, differing in one instruction operand, the `cmp edx, 512` in
+`arena_dims_core`, set to 512, 1024 and 2048. Nothing was merged with a raised
+ceiling and the tree carries 512: these are local builds, assembled, measured
+and reverted, the same way the `rmax = 0.08` rows in the M1 section were taken.
+The dimension each row reports is read out of the arena header (`AH_G`) after
+`swarm_init`, never recomputed by the harness, so a row cannot disagree with
+the build that produced it.
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" tests\Swarm.Bench\bin\Release\net9.0\Swarm.Bench.dll --gsweep
+```
+
+### The sweep
+
+| rmax   | ceiling | g    | cand/pt | build ms | pass ms | frame ms | worst frame ms | fps  |
+| ------ | ------- | ---- | ------- | -------- | ------- | -------- | -------------- | ---- |
+| 0.0020 | 512     | 256  | 145.00  | 6.389    | 134.497 | 140.885  | 162.576        | 7.1  |
+| 0.0020 | 1024    | 256  | 145.00  | 6.504    | 133.331 | 139.836  | 143.792        | 7.2  |
+| 0.0020 | 2048    | 256  | 145.00  | 6.269    | 134.565 | 140.834  | 144.375        | 7.1  |
+| 0.0010 | 512     | 512  | 37.01   | 6.183    | 54.077  | 60.261   | 64.673         | 16.6 |
+| 0.0010 | 1024    | 512  | 37.01   | 5.909    | 56.824  | 62.733   | 69.951         | 15.9 |
+| 0.0010 | 2048    | 512  | 37.01   | 5.899    | 55.346  | 61.245   | 69.196         | 16.3 |
+| 0.0007 | 512     | 512  | 37.01   | 5.827    | 54.046  | 59.873   | 61.610         | 16.7 |
+| 0.0007 | 1024    | 1024 | 10.01   | 6.839    | 39.327  | 46.166   | 48.772         | 21.7 |
+| 0.0007 | 2048    | 1024 | 10.01   | 7.340    | 39.526  | 46.866   | 50.060         | 21.3 |
+| 0.0004 | 512     | 512  | 37.01   | 6.936    | 53.582  | 60.518   | 63.649         | 16.5 |
+| 0.0004 | 1024    | 1024 | 10.01   | 7.359    | 39.426  | 46.785   | 49.061         | 21.4 |
+| 0.0004 | 2048    | 2048 | 3.25    | 10.922   | 38.138  | 49.060   | 50.417         | 20.4 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2 and no
+  AVX-512, and `force_path = 1` selects the AVX2 path explicitly.
+- **Scene**: `n = 1,048,576`, `FLAG_GRID`, 6 species, seed `0x5EED`,
+  `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, the
+  harness's `MakeGridParams` matrix. Positions are the **initial
+  uniform-random frame**, as in the M2 and M3 tables above.
+- **Commit**: `481f986`, plus the one-operand ceiling change for the 1024 and
+  2048 rows. **Date**: 2026-08-07.
+- **build** and **pass** are each min-of-rounds over frozen input, as everywhere
+  else here. **frame** is their sum from the fastest of **three repeats** of
+  the whole sweep; **worst frame ms** is the slowest of the same three, so the
+  run-to-run spread is in the table rather than hidden by the minimum.
+- **cand/pt** is the mean number of particles in the 3x3 wrapped neighbourhood
+  a particle's force loop walks, counted from the copied-out positions with the
+  kernel's own cell rule and its own wrap. On the uniform frame every row lands
+  within 0.01 of `9n/g² + 1`, which is what a correct count of a uniform field
+  should be and is the check that the column means what it says.
+- **The host was not quiesced.** Other work was running during the sweep, which
+  is what the worst-frame column is for.
+
+### Reading the sweep
+
+**The ceiling does throttle the headline count, by about 23%.** At
+`rmax = 0.0007` the frame goes from 59.873 ms at `g = 512` to 46.166 ms at
+1024, and at `rmax = 0.0004` from 60.518 ms to 46.785 ms. Both gaps are
+13.7 ms, more than four times the worst-to-best spread of either row they span,
+so neither is the host.
+Below `1/1024` the shipped ceiling is leaving roughly a quarter of the frame on
+the floor.
+
+**It binds strictly below `1/1024`, not at it.** At `rmax = 0.001` all three
+builds resolve to `g = 512` and report the same frame within 4%, because the
+layout rule only doubles while the **next** dimension's edge still covers
+`rmax`, and `1/1024 = 0.000977` does not cover `0.001`. So `rmax = 0.001` is
+not a capped point, and the same holds for the `rmax = 0.002` row at `g = 256`.
+Those two rmax values are the control in this sweep rather than the subject:
+three builds that differ only in a ceiling none of them reaches agree to within
+0.8% at `g = 256` and 4% at `g = 512`, which is what says the ceiling operand
+changes nothing except which dimensions are reachable.
+
+**The minimising dimension at 1M is `g = 1024`, and 2048 is past the
+crossover.** At `rmax = 0.0004`, 1024 gives 46.785 ms and 2048 gives 49.060 ms.
+That 2.3 ms difference on the totals is the size of the spread within those
+rows, so the totals alone would not settle it. The decomposition does, and each
+half is well outside the noise: going from 1024 to 2048 the build rises from
+6.7-7.4 ms to 10.9-11.5 ms across the repeats, a little over 4 ms, while the
+pass falls only from 39.4 ms to 38.1 ms, about 1.3 ms. The `O(g²)` term is
+buying less than a third of what it costs by that point, and the crossover
+therefore sits between 1024 and 2048 rather than being asserted from the shape
+of the curve.
+
+**Why the pass stops paying.** `cand/pt` falls 145 to 37 to 10 to 3.25 as the
+dimension doubles, a factor of about 3.6 each time, and the pass falls 134 to
+54 to 39 to 38 ms. The first doubling converts almost all of it; the last
+converts almost none. At `g = 2048` there are 3.25 candidates in a
+neighbourhood, so the per-particle cost of enumerating the nine cells and their
+runs is most of what is left. The `ns/cand` the harness derives from the pass
+time says the same thing, rising from roughly 0.9 at `g = 256` to 1.4, 3.8 and
+11.2 as the dimension doubles. There is no further pass saving to buy at this
+count, at any dimension.
+
+**What this does not settle.** The pass here is **serial**, which is what the
+method asked for and what keeps the sweep off all sixteen cores, but the 1M
+headline runs the pass threaded and the build serial. Threading shrinks the
+only term that a finer grid improves and leaves untouched the term it makes
+worse, so the balance moves toward the coarser dimension, and by how much is
+not measured here. Concretely, an 11 ms serial build at `g = 2048` is already
+two thirds of a 60 fps frame on its own, against about 7 ms at 1024. Nothing in
+this sweep says where the optimum sits once the pass is threaded, and the
+figure above should not be quoted as if it did. One count, one seed, one
+uniform-random frame, one machine.

@@ -1,9 +1,16 @@
 # swarm.asm
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/iderex/swarm.asm/badge)](https://scorecard.dev/viewer/?uri=github.com/iderex/swarm.asm)
+
 A Particle Life engine written entirely in hand-written x64 assembly.
 
 **Goal: 1,000,000 interacting particles at 60 fps - no GPU, no dependencies,
 one small `.exe`.**
+
+New here? [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) is the one document that
+covers it end to end: why the kernel is assembly, how the engine is built, what
+the measurements say, and which two popular optimisations were measured and
+dropped.
 
 > [!NOTE]
 >
@@ -13,15 +20,17 @@ one small `.exe`.**
 
 > [!NOTE]
 >
-> ### Maturity: In-Development
+> ### Maturity: Alpha
 >
-> **In-Development** -> Alpha -> Beta -> Release Candidate -> Full Release.
-> Nothing has been released: there is no tag, no published binary, and the
-> milestone this stage ends with, M1, is not closed. Build it from source or
-> read the code; do not depend on it. The stage advances when a milestone
-> closes, and the mapping is fixed here rather than judged each time: M1 closed
-> makes it Alpha, M2 Beta, M3 Release Candidate, and M4 with `v1.0.0` tagged is
-> Full Release.
+> In-Development -> **Alpha** -> Beta -> Release Candidate -> Full Release.
+> The stage advances when a milestone closes, and the mapping is fixed here
+> rather than judged each time: M1 closed makes it Alpha, M2 Beta, M3 Release
+> Candidate, and M4 with `v1.0.0` tagged is Full Release. M1 is closed on a
+> measurement ([docs/MASTERPLAN.md](docs/MASTERPLAN.md), "M1 closing note"), so
+> the stage is Alpha. Nothing has been released even so: there is no tag and no
+> published binary, and a per-cell matrix editor, presets loaded from a file and
+> the benchmark suite are all still open. Build it from source or read the code;
+> do not depend on it.
 
 ## What
 
@@ -54,23 +63,31 @@ the larger SIMD win waits on the M2 cell-sorted layout that shrinks the
 candidate set from n² to the in-range neighbours.
 
 **It's interactive.** The window is keyboard-driven - **Space** pauses,
-**R** reseeds the world, **M** rerolls the attraction matrix, **Esc** quits -
+**R** reseeds the world, **M** rerolls the attraction matrix, **H** shows or
+hides the species matrix as a grid of coloured cells over the frame (green for
+attraction, red for repulsion, brightness for strength), **Esc** quits -
 with edits applied at step boundaries and the frame paced to a real 60 fps by a
-high-resolution timer. The live count is set to what one core holds at 60 fps
-(brute-force AVX2); **8,192 @ 60 fps waits on the M2 grid / M3 threads** (one
-core is ~19 fps at 8k, [docs/BENCHMARKS.md](docs/BENCHMARKS.md)). A full
-per-cell matrix editor is a later increment.
+high-resolution timer. With the matrix up, the **mouse wheel** over a cell
+raises or lowers that one coefficient, and **dragging** a cell up or down does
+the same continuously; the value is clamped to the [-1, 1] the parameters
+allow, so you can steer one species pair while the rest of the ecosystem keeps
+running. The live count is the M1 acceptance count, 8,192, on the
+cell-sorted grid across the worker pool; **8,192 @ 60 fps is measured, not
+projected** - the worst p99 work window across six 3600-frame captures is
+6.100 ms against the 16.67 ms budget
+([docs/BENCHMARKS.md](docs/BENCHMARKS.md)), where one core on brute force was
+~19 fps at the same count.
 
 The full architecture - force model, memory layout, SIMD strategy,
 determinism contract - is recorded with rationale in the masterplan. Progress:
 
-| Milestone        | Status | Deliverable                                                                        |
-| ---------------- | ------ | ---------------------------------------------------------------------------------- |
-| M0 - Foundation  | done   | Design, pinned toolchain, CI, test harness                                         |
-| M1 - First light | active | Brute-force AVX2 kernel + live window; ~3,500 live, 8,192 is the acceptance target |
-| M2 - Scale       | active | Spatial grid; 50k and 500k particles at 60 fps                                     |
-| M3 - One million | -      | Multithreading + AVX-512 path, 1M particles at 60 fps                              |
-| M4 - Launch      | -      | Benchmark suite vs. existing ports, presets, write-up                              |
+| Milestone        | Status | Deliverable                                                                      |
+| ---------------- | ------ | -------------------------------------------------------------------------------- |
+| M0 - Foundation  | done   | Design, pinned toolchain, CI, test harness                                       |
+| M1 - First light | done   | Brute-force AVX2 kernel + live window; 8,192 live, acceptance measured at 60 fps |
+| M2 - Scale       | active | Spatial grid; 50k and 500k particles at 60 fps                                   |
+| M3 - One million | -      | Multithreading + AVX-512 path, 1M particles at 60 fps                            |
+| M4 - Launch      | -      | Benchmark suite vs. existing ports, presets, write-up                            |
 
 What works today: the deterministic RNG, a fail-closed preset grammar, CPU
 feature detection, arena allocation and seeded init, the scalar and AVX2
@@ -80,10 +97,11 @@ interactive window - each landing behind a green CI gate with oracle-checked
 tests. The M2 spatial grid (cell binning, stable counting sort, and the 3×3
 neighbourhood force that cuts the per-step work from n² to the in-range
 neighbours) is in the kernel, cross-checked against brute force, and measured at
-50k / 500k ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)); wiring it into the live
-window is the open M2 step. What is left before the 8,192 @ 60 fps headline is
-throughput - the M2 grid's live mode and the M3 worker threads - plus a per-cell
-live matrix editor.
+50k / 500k ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)); the live window runs on
+it, across the M3 worker pool, at the M1 acceptance count. `swarm.exe -capture`
+is the instrument that measured that: it dumps the raw per-frame samples the
+recorded figure is recomputed from. A per-cell live matrix editor is still
+open.
 
 (M1 was originally 50k; brute force at 50k is arithmetically impossible at
 60 fps - the reasoning lives in [docs/MASTERPLAN.md](docs/MASTERPLAN.md),
@@ -122,6 +140,29 @@ first - `dotnet test` loads the freshly built `swarm.kernel.dll`:
 ```powershell
 dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
 ```
+
+## Running
+
+```powershell
+.\build\swarm.exe                   # the built-in preset
+.\build\swarm.exe my-scene.txt      # a preset from a file
+```
+
+With no filename the exe runs the preset compiled into it. The first argument
+that does not start with `-` is read as a preset path, so `-smoke` and
+`-capture` can be given alongside one. A path that itself starts with `-` is
+not reachable, which is the trade every argument reader makes.
+
+A preset is the grammar in
+[docs/MASTERPLAN.md](docs/MASTERPLAN.md) decision 10 -
+`tests/fixtures/preset/accepted.txt` is a complete example. The file names the
+scene only; grid mode is the exe's choice and has no key.
+
+Nothing is applied partially. The file is read under an 8192-byte cap and
+handed to the same fail-closed parser the harness tests; if any of that fails,
+the exe says which error code and which line refused the file, and exits 1
+without opening a window. Under `-smoke` and `-capture` the exit code is the
+whole report - a modal box in an unattended run is a hang, not a message.
 
 ## Contributing
 

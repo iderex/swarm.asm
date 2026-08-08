@@ -262,18 +262,25 @@ mechanism: `pool_pass` is a `seam_wrap` over `pass_core`, the same macro the
 exports use, so a worker runs the core under the same pinned word or the
 whole seam is broken for everyone.
 
-What holds it, by name. `swarm_mxcsr` reports the control word from inside
-the pinned region and `MxcsrTests.CoresRunUnderThePinnedControlWord` asserts
-it is `0x9FC0`. `SeamMxcsrIsolationTests` enters the engine from a scrambled
-caller word and asserts both directions of the isolation:
-`CallerMxcsrIsRestoredExactly` over every seam export,
-`ScrambledCallerMxcsrDoesNotChangeResults` on the serial path and
-`WorkerThreadsPinTheirOwnMxcsr` on the pooled one.
+What holds it against a hostile caller, which the paragraph above cannot.
+`swarm_mxcsr` reports the control word from inside the pinned region and
+`swarm_call_under_mxcsr` installs a chosen one around an export, so the
+harness sees both sides of the seam instead of inferring them (issue #154).
+`SeamMxcsrIsolationTests` uses them to assert four separate things: that a
+scrambled word reaches the call and not the core, that the caller's word
+comes back byte for byte from every export, that engine output is identical
+whether the caller was scrambled or clean, and that a worker thread pins its
+own (issue #156). A debug build refuses the case outright:
+`seam_assert_pinned` re-reads the live word between the pin and the core and
+executes `ud2` on anything but `SEAM_MXCSR` (issue #155).
 
-What does not exist. The debug-build assertion at the seam and at worker
-entry is issue #155 and is not built. So an export that forgets its seam
-would still reach a core under whatever the caller left behind, and the tests
-above would not notice: they ask the exports that exist today, one at a time.
+What that still does not cover, stated because the sentence above reads like
+a closed set and is not one. The debug assertion is assembled only when
+`SWARM_DEBUG` is defined, which is deliberate - the shipped instruction
+stream is the one that was measured - so a release build carries no runtime
+check and a core reached without a seam would still run under whatever the
+caller left. Nothing outside a debug build would notice. The reference's own
+FP mode is the other half and is the paragraph below.
 
 The oracle models FTZ and DAZ (issue #160). `TestOracle.World` flushes every
 arithmetic result and every state read, so subnormal-range parity on the
@@ -721,11 +728,40 @@ disclosed reference machine only).
    chain on near-sorted input is estimated 8-12 cycles/particle; materially
    above ~4.5 ms erodes the frame margin. Probe: per-pass timing at 500k and
    1M (M2). Contingency: the per-thread per-bucket-cursor parallel scatter.
+   **Measured 2026-08-06 (#177, docs/BENCHMARKS.md): 7.049 ms and
+   ~32.9 cycles/particle at n = 1,048,576, g = 512, on near-sorted input** -
+   ~1.6x the millisecond line and ~2.7x the top of the cycle estimate, so
+   **the contingency is triggered**, and the number above is what triggered
+   it. The verdict survives any assumed clock: the 7.049 ms carries none, and
+   12 cycles/particle at that count would need the part to be at 1.79 GHz.
+   The unsorted first frame costs 26.521 ms at the same point, which is the
+   first frame of a run and not what this line estimates. Two figures of this
+   line disagree with each other and both are missed: 8-12 cycles/particle is
+   ~2.6 ms at this part's 4.9 GHz rather than the ~4 ms decision 3 states, so
+   the estimate was written against a clock near 2.5 GHz. Growth from 500k is
+   worse than linear - 2.1x the particles for 2.8x the build at a `g` clamped
+   equal for both, so the O(g²) half is not the cause and the scatter is.
 3. **Scatter locality under energetic scenes.** The ~1.5-2 ms scatter
    estimate assumes temporal coherence; a hot matrix at the v_max clamp
    degrades write locality. Probe: an adversarial preset (all |a| = 1, high
    force) vs the coherent scene; fallback is a two-pass radix (cell row, then
    cell).
+   **Measured 2026-08-06 (#178, docs/BENCHMARKS.md): the degradation does not
+   appear, and the fallback is NOT triggered.** At n = 1,048,576, g = 512, after
+   120 settling steps, the near-sorted build costs 6.022-6.403 ms with 97.8% of
+   velocity components at the clamp, against 5.793-7.196 ms with 0.1% at it. The
+   hostile scene is the cheapest and the steadiest of the three scenes measured,
+   and every difference between scenes is inside the calm scene's own
+   run-to-run spread, so nothing separates them. The premise is not what
+   failed: the clamp fractions were read back rather than assumed and span the
+   range this line describes. The direction is what failed, and the reason
+   offered is a hypothesis rather than a measurement - clustering concentrates
+   the scatter's writes into fewer distinct cells, which is better locality
+   rather than worse, and nothing in the probe reads the per-cell occupancy
+   distribution that would confirm it. The probe covers one g, one count and one
+   settle length. Separately, the ~1.5-2 ms estimate this line opens with is
+   wrong by roughly a factor of three at this count, which is risk 2's finding
+   above and not this one's.
 4. **p99 under Windows/GDI jitter.** The re-based ~12-13 ms p50 leaves ~4 ms
    for scheduler and GDI noise on the p99 claim, where the pre-#59 projection
    left ~6 ms. Probe: run the 3600-frame histogram early
@@ -807,13 +843,13 @@ disclosed reference machine only).
 
 ## Milestones
 
-| Milestone        | Acceptance criteria                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| M0 - Foundation  | Masterplan decisions recorded; toolchain + CI green; harness runs a walking-skeleton kernel call end to end                    |
-| M1 - First light | 8,192 particles, brute-force AVX2, single-threaded, live window, interactive matrix, ≥ 60 fps (p99)                            |
-| M2 - Scale       | Uniform grid; 50k particles ≥ 60 fps on one core; brute-vs-grid cross-check green (see the M2 amendment)                       |
-| M3 - One million | Worker threads + AVX-512 path; 500k ≥ 60 fps (met, see the M2 amendment); 1M particles ≥ 60 fps (p99) on the reference machine |
-| M4 - Launch      | Benchmark suite + recorded baselines (headline + dense scene), presets, write-up, v1.0                                         |
+| Milestone        | Acceptance criteria                                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0 - Foundation  | Masterplan decisions recorded; toolchain + CI green; harness runs a walking-skeleton kernel call end to end                                        |
+| M1 - First light | 8,192 particles, brute-force AVX2, single-threaded, live window, interactive matrix, ≥ 60 fps (p99) (see the M1 amendment and the M1 closing note) |
+| M2 - Scale       | Uniform grid; 50k particles ≥ 60 fps on one core; brute-vs-grid cross-check green (see the M2 amendment)                                           |
+| M3 - One million | Worker threads + AVX-512 path; 500k ≥ 60 fps (met, see the M2 amendment); 1M particles ≥ 60 fps (p99) on the reference machine                     |
+| M4 - Launch      | Benchmark suite + recorded baselines (headline + dense scene), presets, write-up, v1.0                                                             |
 
 **M1 amendment (recorded 2026-07-16):** M1 was originally "50k brute force
 ≥ 60 fps". That is arithmetically infeasible: 50k² = 2.5e9 candidate pairs
@@ -833,6 +869,34 @@ of magnitude to spare. Pulling the grid into M1 was rejected: it front-loads all
 the first shipping milestone. The brute kernel is not throwaway - it is the
 degenerate one-run case of the same loop and stays forever as the grid's
 same-binary cross-check oracle.
+
+**M1 closing note (recorded 2026-08-06):** the amendment above named the grid
+and the worker pool as the levers that would close 8,192 at 60 fps, and left
+the claim open pending a measurement. It is measured and it closes. The shipped
+exe at `n = 8192`, `FLAG_GRID`, `rmax = 0.05`, seed `0x9E3779B97F4A7C15`, on
+the reference machine, records a worst p99 work window of **6.100 ms across six
+3600-frame captures** against the 16.67 ms budget, with the worst single frame
+anywhere in those runs at 14.244 ms (docs/BENCHMARKS.md, "The M1 live frame at
+8,192"). The reading is stated on the worst run rather than the best, because
+the run-to-run spread on an unquiesced host was wider than the effect being
+measured. The amendment's projection of ~52.8 ms brute-force pass and ~19 fps
+stands as written and is what the grid plus the pool replaced; nothing here
+revises it. One thing the measurement adds that the amendment did not
+anticipate: at this count the window is not force-bound at all - `rmax = 0.08`,
+with roughly four times the candidate neighbours, is not meaningfully slower -
+so the `rmax ≤ 0.05` pin is a bound the preset honours rather than the thing
+that buys the margin at 8,192.
+
+With that, M1 is closed and the maturity stage in the README is Alpha. Two
+criteria in the M1 row of the table above are met by something other than what
+they say, and both are worth naming here rather than leaving a reader to
+reconcile them. "Brute-force AVX2, single-threaded" is not what the shipped exe
+runs: the amendment moved the count onto the grid and the worker pool and said
+so, and the brute-force pass stays as the grid's same-binary cross-check rather
+than as the live path. "Interactive matrix" is met by the live reroll on `M`
+and the read-only species HUD on `H`, not by per-cell editing, which is an M4
+issue and is open. Read as a promise of a matrix editor at M1, the row promises
+more than was met.
 
 **M2 amendment (recorded 2026-08-05):** M2 was originally "uniform grid; 50k
 and 500k particles ≥ 60 fps". The grid met the first half on one core and not

@@ -57,7 +57,12 @@ jobs:
         run: ./tools/get-fasm.ps1
 
       - name: Assemble
-        run: ./build.ps1
+        # -Debug adds build/debug/, assembled with SWARM_DEBUG so the platform
+        # layer's debug-only assertions are in the stream. It changes nothing
+        # about the release artifacts every step below uses. Assembling it here
+        # is what stops that path from rotting unnoticed: a debug-only guard
+        # nothing ever builds is a guard that has stopped existing.
+        run: ./build.ps1 -Debug
 
       - name: Report the size budget
         # The conformance test enforces the same bound; this step makes the
@@ -75,6 +80,43 @@ jobs:
         run: |
           $p = Start-Process -FilePath .\build\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "swarm.exe -smoke exited with $($p.ExitCode)" }
+
+      - name: Smoke-run the debug build
+        # The non-vacuity control for the debug-only seam assertion. A guard
+        # that fires on a correct build is worse than none, and the only way to
+        # know it does not is to run a build that carries it. This exits 0
+        # exactly when every kernel core was entered under SEAM_MXCSR.
+        run: |
+          $p = Start-Process -FilePath .\build\debug\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "debug swarm.exe -smoke exited with $($p.ExitCode)" }
+
+      - name: Smoke-run with a preset on the command line
+        # The platform half of the preset surface. The accepted fixture has to
+        # reach the live loop and the refused one has to stop before it, so
+        # both directions are read rather than the happy one alone: an exe that
+        # ignored the file it was given would pass a one-sided check.
+        # PresetFixtureTests pins what makes each fixture what it is; this step
+        # only reads what the exe did with them.
+        #
+        # The two synthesized cases cover the reader's own limits rather than
+        # the grammar's - a name that opens nothing, and one byte past the
+        # 8192-byte cap. Neither is worth committing as a file.
+        run: |
+          function Invoke-Preset($file, $expected, $what) {
+            $p = Start-Process -FilePath .\build\swarm.exe -ArgumentList "-smoke $file" -Wait -PassThru
+            if ($p.ExitCode -ne $expected) {
+              throw "$what : swarm.exe -smoke $file exited with $($p.ExitCode), expected $expected"
+            }
+            Write-Host "$what : exit $($p.ExitCode)"
+          }
+          $accepted = 'tests/fixtures/preset/accepted.txt'
+          Invoke-Preset $accepted 0 'accepted fixture'
+          Invoke-Preset 'tests/fixtures/preset/rejected.txt' 1 'refused fixture'
+          Invoke-Preset 'tests/fixtures/preset/no-such-file.txt' 1 'name that opens nothing'
+          $oversized = Join-Path $env:RUNNER_TEMP 'oversized-preset.txt'
+          $text = [IO.File]::ReadAllText($accepted)
+          [IO.File]::WriteAllText($oversized, $text + ("`n" * (8193 - $text.Length)))
+          Invoke-Preset $oversized 1 'one byte past the read cap'
 
       - name: Test (conformance harness)
         # Locked-mode restore: a dependency drifting from the committed lock
