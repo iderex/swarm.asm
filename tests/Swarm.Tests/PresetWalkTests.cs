@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Swarm.Tests;
@@ -132,8 +133,13 @@ public sealed class PresetWalkTests
             File.Copy(good, Path.Combine(dir, Path.GetFileName(good)));
 
             // `n 0` is below the pinned lower bound, on line 2 of the grammar.
-            var malformed = File.ReadAllText(good).Replace("n 1048576", "n 0");
-            Assert.NotEqual(malformed, File.ReadAllText(good));
+            // The count is matched rather than spelled: whichever preset sorts
+            // first is whatever the directory holds, and a literal count went
+            // silently no-op the day a scene with a different `n` was added
+            // first, leaving this leg green while it corrupted nothing.
+            var original = File.ReadAllText(good);
+            var malformed = Regex.Replace(original, @"^n \d+\r?$", "n 0", RegexOptions.Multiline);
+            Assert.NotEqual(malformed, original);
             File.WriteAllText(Path.Combine(dir, "throwaway.scene"), malformed, new ASCIIEncoding());
 
             var complaints = Verdict(dir);

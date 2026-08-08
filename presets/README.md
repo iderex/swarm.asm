@@ -71,6 +71,43 @@ measured what it costs there: about 23% of the frame. A row quoted against
 it would stop describing the same grid if the ceiling moved and this scene's
 `rmax` moved with it.
 
+## The showcase set
+
+Four scenes for a first run, and they exist for a different reason than the
+pair above. The bench presets fail if a number is not reproducible; these fail
+if they all look the same. Each is described by the behaviour it settles into
+rather than by its matrix, because the matrix is what produced the behaviour
+and not what a reader wants to know.
+
+All four run at `n = 8192`, the count the compiled-in scene uses, and at
+`rmax = 0.0625`, which is the largest value the layout rule still answers with
+`g = 16`. Both are deliberate: the showcase costs what the shipped scene costs,
+so nothing here needs its own performance argument. Only `beta`, `dt`,
+`friction`, `force` and the matrix separate them.
+
+| file           | what it settles into                                                             |
+| -------------- | -------------------------------------------------------------------------------- |
+| `cells.txt`    | Large single-species colonies with hard edges, drifting slowly past one another. |
+| `chasers.txt`  | Elongated mixed packs that travel, stacked in pursuit order, across empty field. |
+| `knots.txt`    | Small mixed knots joined by thin wandering strands, constantly rearranging.      |
+| `rosettes.txt` | Slow, evenly spaced mixed rosettes, many of them hollow at the centre.           |
+
+`ShowcasePresetTests` measures the four rather than trusting the descriptions.
+It steps each scene 400 times through the shipped kernel and takes four numbers
+off the result: mean speed, the share of a 128x128 wrapped bin grid that holds
+anything, the count in the bin an average particle sits in, and the share of a
+particle's bin-mates that carry its own species. Every pair of scenes has to
+differ by at least 1.8x on one of those axes, so a fifth preset that is a fourth
+variation of an existing one reddens the suite instead of shipping.
+What that guard cannot do is judge whether the descriptions above match what is
+on the screen; that was settled by looking, and a later edit to a matrix would
+need looking again.
+
+The behaviour is a settled state and not a transient. The same four numbers
+were taken at 400, 800, 1800 and 3600 steps and every scene holds its shape:
+`chasers.txt` moves the most across that range and its mean speed goes 4.14,
+4.20, 4.24, 4.26.
+
 ## Adding a preset
 
 `PresetWalkTests` walks this directory and parses everything in it except this
@@ -80,6 +117,12 @@ extension does not matter; the name does not appear anywhere in the test. An
 emptied or deleted directory fails too, because a walk over nothing would
 otherwise pass forever.
 
+A showcase preset is covered twice over. `ShowcasePresetTests` names the four
+files above explicitly, because a set is judged as a set and a walk cannot say
+which files were meant to be compared. Adding a fifth showcase scene therefore
+means adding its name there as well, and the distinctness guard is what decides
+whether it earns its place.
+
 If a required key is ever added to the grammar, every file here needs it. There
-are two today, and `docs/MASTERPLAN.md` decision 10 is where that cost is
+are six today, and `docs/MASTERPLAN.md` decision 10 is where that cost is
 argued.
