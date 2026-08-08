@@ -470,8 +470,9 @@ stay serial on the main thread. Determinism by construction: the pass is a
 pure map (reads bank IN read-only, writes disjoint OUT[i]; each particle's
 accumulation runs serially in its pinned run order), so results are
 bit-identical for any thread count, assignment, and scheduling. Work
-distribution: **chunked self-scheduling** - one shared counter, `lock xadd`,
-chunk = a contiguous range of ~N/(8T) sorted indices. Pool: T-1 workers
+distribution: a **static even 16-aligned split** of `[0,n)` across the workers
+(see the amendment below - chunked self-scheduling over one shared counter was
+the original pin and is now the named upgrade). Pool: T-1 workers
 (`CreateThread` once at startup; T = physical P-cores via
 `GetLogicalProcessorInformationEx`, preset-overridable), main participates;
 per-worker auto-reset event pairs (go/done), main `SetEvent`s all, workers
@@ -481,6 +482,26 @@ unnecessary). Workers pin MXCSR at entry. The kernel never sees threads: the
 platform calls `swarm_pass(arena, first, last)` ranges. Matrix edits apply
 between join and signal. Gate test wired from M1: pass-split invariance;
 from M3: T=1 vs T=8 state-hash equality.
+
+**Amendment (recorded 2026-08-08, maintainer decision 2026-07-25, issue #124):**
+the shipped distribution is the static even 16-aligned split, and this decision
+now records that instead of the chunked self-scheduling it originally pinned.
+`pool_partition` computes `q = round_up_16(ceil(n/T))` and hands worker `w` the
+range `[min(w*q, n), min((w+1)*q, n))`, so the interior boundaries are multiples
+of 16 and the last range ends at `n`. The alignment is the reason for the shape:
+16 consecutive f32 fill one 64-byte line, so 16-aligned boundaries keep the
+seven disjoint OUT arrays off cache lines two workers both write, and the pass
+carries no false sharing. On a homogeneous part there is also no core-speed
+imbalance for a self-scheduling counter to absorb, so the counter would be
+contention bought for nothing. Chunked self-scheduling keeps its place as the
+**named upgrade for hybrid P/E-core parts**, where a static split leaves the
+fast cores waiting at the join; it is promoted on a measurement from such a
+part, not on the strength of this note. Determinism is untouched in both
+directions, because the pass is a pure map and any assignment yields identical
+bits: `ThreadingTests.PassParallelMatchesSerial` and
+`ThreadingTests.PassMtMatchesSerialPass` require exact equality against the
+serial pass, and neither reads how the ranges were assigned. The rationale
+below argues the original pin and is kept as the record of it.
 
 **Rationale:** Self-scheduling is ~10 lines, deterministic because the
 assignment cannot affect gather results, and it absorbs hybrid P/E-core
