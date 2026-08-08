@@ -151,7 +151,9 @@ pass (masterplan decision 3): a serial stable counting sort reorders the
 population cell-sorted, then the force pass reads only the 3×3 cell
 neighbourhood of each particle. `g` = the largest power of two with `1/g ≥ rmax`
 (clamped `[4, 512]`), so a small `rmax` gives a large `g` and sparse cells -
-the regime the grid wins in.
+the regime the grid wins in. The ceiling changes the answer only below
+`rmax = 1/1024`, where the rule would otherwise keep doubling; at or above that
+`rmax` the rule stops first and `g` is what `rmax` alone says (#148).
 
 | CPU           | n       | rmax  | g   | build ms | pass ms | frame ms | fps   | brute proj |
 | ------------- | ------- | ----- | --- | -------- | ------- | -------- | ----- | ---------- |
@@ -390,7 +392,7 @@ are the two that carry the reading.
 - **Scenes**: `n = 1,048,576` (the ABI's maximum `n`), 6 species, seed `0x5EED`,
   `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, `FLAG_GRID`,
   and the harness's deterministic `sin`-filled matrix. Headline is
-  `rmax = 1/512` so `g` clamps at 512; dense is `rmax = 1/256` so `g` is 256 and
+  `rmax = 1/512` so `g` is 512; dense is `rmax = 1/256` so `g` is 256 and
   each cell holds roughly four times the particles.
 - **build** is the near-sorted counting sort, i.e. every frame after the first.
   The first frame's build at this count is in the #177 table below and is three
@@ -490,8 +492,8 @@ be running at 1.79 GHz, which it is not under any load.
 
 **The growth from 500k to 1M is worse than linear in n**, and that is the part
 that matters for the headline. Near-sorted at `g = 512`, 500k costs 2.544 ms
-and 1M costs 7.049 ms: 2.1x the particles for **2.8x the build**. `g` is
-clamped at 512 for both, so the O(g²) zero-and-prefix half is identical between
+and 1M costs 7.049 ms: 2.1x the particles for **2.8x the build**. `g` is 512
+for both, so the O(g²) zero-and-prefix half is identical between
 them and cannot be the cause; what grows is the scatter, at ~2 particles per
 cell against ~4. Extrapolating this row to a count above 1M is not supported by
 two points, and none is offered.

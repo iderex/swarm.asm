@@ -156,8 +156,9 @@ if (haveAvx2)
 // there was none to choose from.
 //
 // Two scenes, because decision 12 names two and they answer different halves of
-// the question. Headline is rmax = 1/512, where g clamps at 512 and the cells
-// are as sparse as the clamp allows; dense is rmax = 1/256, where g halves to
+// the question. Headline is rmax = 1/512, where the layout rule stops at
+// g = 512 and the cells are as sparse as that rmax allows; dense is
+// rmax = 1/256, where g halves to
 // 256, each cell holds ~4x the particles, and k rises with it.
 //
 // The serial rows use the same instrument as the 500k rows above: build and
