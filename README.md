@@ -145,13 +145,19 @@ dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
 
 ```powershell
 .\build\swarm.exe                   # the built-in preset
-.\build\swarm.exe my-scene.txt      # a preset from a file
+.\build\swarm.exe presets\cells.txt # a preset from a file
 ```
 
 With no filename the exe runs the preset compiled into it. The first argument
 that does not start with `-` is read as a preset path, so `-smoke` and
 `-capture` can be given alongside one. A path that itself starts with `-` is
 not reachable, which is the trade every argument reader makes.
+
+[presets/](presets/) holds the committed scenes and describes each one:
+`headline.txt` and `dense.txt` are the two the numbers in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) are quoted against, and `cells.txt`,
+`chasers.txt`, `knots.txt` and `rosettes.txt` are four ecologies to watch. Each
+carries a pinned seed, so a run of one is the same run anywhere.
 
 A preset is the grammar in
 [docs/MASTERPLAN.md](docs/MASTERPLAN.md) decision 10 -
