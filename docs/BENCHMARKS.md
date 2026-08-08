@@ -18,14 +18,15 @@ and carries none of the bank-swap or copy cost a full `swarm_step` would fold
 in. Two code paths are compared at each particle count: the scalar reference
 (`force_path = 3`) and the AVX2 gather path (`force_path = 1`).
 
-Also measured, in its own section below: the **live work window** of
-`swarm.exe` at the M1 acceptance count, from the shipped exe's `-capture` mode.
-That is a different measurement from the pass benches above - it is the whole
-of step plus plot plus blit, on the shipped preset, taken from the product
+Also measured, in their own sections below: the **live work window** of
+`swarm.exe`, from the shipped exe's `-capture` mode, at the M1 acceptance count
+and at the two committed 1M scenes `presets/headline.txt` and
+`presets/dense.txt`. That is a different measurement from the pass benches
+above - it is the whole of step plus plot plus blit, taken from the product
 rather than from a harness.
 
 Not yet measured here (tracked on #5, milestone M4): the full end-to-end
-benchmark mode with its own scene set, the 1,048,576-particle headline, and
+benchmark mode with its own results file and per-phase breakdown, and
 regression gating against a stored baseline.
 
 ## How to run
@@ -690,6 +691,86 @@ needs a finer one than #169 built.
 is cheap relative to a fixed 1024×1024 raster cost at 8,192 particles; at 500k
 and 1M the force pass dominates again and the M2 and M3 rows above are the
 relevant ones.
+
+## The 1M live frame on the committed scenes (`swarm.exe -capture`; #166)
+
+The first rows here quoted against **committed preset files** rather than
+against a configuration described in prose. Both scenes are the decision 12
+pair, and both are read from the file by the shipped exe:
+
+```powershell
+.\build\swarm.exe presets\headline.txt -capture
+.\build\swarm.exe presets\dense.txt -capture
+```
+
+Same instrument as the M1 section above: the paced live loop, the work window
+of each frame only (step plus plot plus blit, never the pacing wait), 3600
+samples written to `swarm-frames.bin`, recomputed with the snippet printed
+there. The budget is one frame at 60 fps, 16.67 ms, on p99.
+
+### `presets/headline.txt` - 1M, rmax = 0.001953, g = 512, k = 12.6
+
+| run | mean ms | p50 ms  | p99 ms  | max ms  |
+| --- | ------- | ------- | ------- | ------- |
+| 1   | 91.030  | 103.353 | 144.919 | 297.549 |
+| 2   | 91.499  | 102.720 | 150.849 | 397.415 |
+| 3   | 83.412  | 87.872  | 148.587 | 243.700 |
+
+### `presets/dense.txt` - 1M, rmax = 0.003906, g = 256, k = 50.3
+
+| run | mean ms | p50 ms  | p99 ms  | max ms  |
+| --- | ------- | ------- | ------- | ------- |
+| 1   | 140.640 | 151.018 | 244.476 | 428.052 |
+| 2   | 137.985 | 151.884 | 222.048 | 265.362 |
+| 3   | 136.928 | 147.497 | 229.806 | 333.474 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`, so AVX2 and no
+  AVX-512; both presets carry `force_path = 0`, which resolves to `PATH_AVX2`.
+  The live loop drives `pool_step`, so the pass runs threaded across the
+  auto-detected 16 physical cores while the grid build stays serial.
+- **Scene**: whatever is in the two files, which is the point of this section.
+  `n = 1048576`, 4 species, seed `0x9E3779B97F4A7C15`, `FLAG_GRID` applied by
+  the exe, and only `rmax` differing between them. Each dump's own header
+  repeats `n = 1048576`, `flags = 0x1` and `seed = 0x9E3779B97F4A7C15`, so a
+  file cannot be quoted against a run it did not come from.
+- **Commit**: `33047f3` for `src/`, which the capture build is byte-for-byte,
+  plus the two preset files added by this change. **Date**: 2026-08-08.
+- Every run is 3600 consecutive frames from process start with **no warm-up
+  discarded**, so the uniform opening field is inside the samples. One headline
+  run costs about 5.5 minutes of wall clock and one dense run about 8.5.
+- **The host was not quiesced.** Other work was running during the captures,
+  which is what the `max` column and the spread between runs are for.
+
+### Reading the 1M rows - the 60 fps budget is missed on both scenes
+
+**Worst p99 of three headline runs is 150.849 ms against a 16.67 ms budget**,
+about 9.0x over, and the dense scene's worst p99 is 244.476 ms, about 14.7x
+over. Stated on the worst reading of three, as everywhere here. The 1M headline
+target is not met by the shipped exe today and nothing in this section claims
+otherwise; #125 is where the levers toward it are held.
+
+**The two scenes differ by density and nothing else**, which is what makes the
+pair worth carrying. `rmax` moves by a factor of two, `g` halves from 512 to
+256, the candidate neighbourhood the force loop walks goes from 37.0 to 145.0
+per particle, and the frame roughly 1.5x's. That the frame grows far less than
+the candidate count does is the grid build and the raster cost being
+`rmax`-independent, the same shape the M1 section reads at 8,192, and it is
+**not decomposed here** - this instrument times one window.
+
+**The mean sits below the p50 in all six runs.** That is a left tail rather
+than a right one: a population of frames materially faster than the median,
+which is where the uniform opening field lands before the scene organises. The
+mechanism is not measured here, and the percentiles are reported over the whole
+run rather than over a trimmed one, so the tables are the run and not an
+edited version of it.
+
+**These rows are not comparable to the #148 sweep**, though both are 1M at
+`g = 512` and `g = 256`. The sweep times build plus pass as a minimum over
+rounds on a frozen uniform bank, from the harness, at 6 species and seed
+`0x5EED`; this section times the whole live window including plot and `BitBlt`,
+as a distribution over an evolving scene, from the exe. Reading a plot cost out
+of the difference between them would be comparing two different measurements.
 
 ## The AVX2 force inner loop (cycles/candidate; #59)
 
