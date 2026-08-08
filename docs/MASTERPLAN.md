@@ -739,8 +739,8 @@ disclosed reference machine only).
    line disagree with each other and both are missed: 8-12 cycles/particle is
    ~2.6 ms at this part's 4.9 GHz rather than the ~4 ms decision 3 states, so
    the estimate was written against a clock near 2.5 GHz. Growth from 500k is
-   worse than linear - 2.1x the particles for 2.8x the build at a `g` clamped
-   equal for both, so the O(g²) half is not the cause and the scatter is.
+   worse than linear - 2.1x the particles for 2.8x the build at the same `g`
+   for both, so the O(g²) half is not the cause and the scatter is.
 3. **Scatter locality under energetic scenes.** The ~1.5-2 ms scatter
    estimate assumes temporal coherence; a hot matrix at the v_max clamp
    degrades write locality. Probe: an adversarial preset (all |a| = 1, high
