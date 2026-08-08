@@ -73,9 +73,12 @@ it would stop describing the same grid if the ceiling moved and this scene's
 
 ## Adding a preset
 
-Nothing in the suite walks this directory yet, so a file added here is covered
-by no gate and a grammar change could break it silently. Issue #168 is the walk
-test that closes that, and it replaces this paragraph when it lands.
+`PresetWalkTests` walks this directory and parses everything in it except this
+README, so dropping a file in is all it takes to be covered and a grammar
+change that breaks a committed scene fails the suite instead of shipping. The
+extension does not matter; the name does not appear anywhere in the test. An
+emptied or deleted directory fails too, because a walk over nothing would
+otherwise pass forever.
 
 If a required key is ever added to the grammar, every file here needs it. There
 are two today, and `docs/MASTERPLAN.md` decision 10 is where that cost is
