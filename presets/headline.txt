@@ -1,0 +1,15 @@
+swarm 1
+n 1048576
+species 4
+seed 0x9E3779B97F4A7C15
+rmax 0.001953
+beta 0.3
+dt 0.02
+friction 0.71
+force 10.0
+matrix
+0.5 -0.2 0.3 -0.5
+-0.3 0.6 -0.4 0.2
+0.2 0.3 -0.6 0.4
+-0.4 0.1 0.5 0.3
+end
