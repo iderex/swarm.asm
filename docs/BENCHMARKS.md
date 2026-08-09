@@ -510,6 +510,116 @@ pass is the larger term and is threaded, and no 1M pass figure is recorded here
 yet. It says the build's own budget line is missed on the input state the risk
 is written about, which is the question this probe was asked.
 
+## Where the 1M build's time sits (#243)
+
+The section above records the serial build at 1M and triggers risk 2's
+contingency. What it does not record is how that time divides between the
+build's two kinds of work, and the contingency's whole trade turns on the
+division. The per-thread per-bucket-cursor scatter divides the work that is
+proportional to `n` by the worker count, and multiplies the work that is not by
+it, because a cursor per thread per bucket means one histogram of every bucket
+per worker.
+
+`grid_sort` is four phases over one `(g*g + 1)`-dword block: zero, histogram,
+inclusive prefix, backward scatter (`src/kernel/grid.inc`). The zero and the
+prefix walk every bucket and never read `n`. The histogram and the scatter are
+proportional to it.
+
+**How the split is taken, without a clock inside the kernel.** `src/kernel/`
+makes no API calls, so a phase timer cannot live there. It does not have to.
+`g` is a function of `rmax` alone, the largest power of two with
+`1/g >= rmax` clamped to `[4, 512]` (`src/kernel/layout.inc`), so holding `rmax`
+fixed and moving `n` holds the O(g²) work exactly constant and moves only the
+O(n) work. A least-squares line through the four smallest populations,
+extrapolated back to `n = 0`, is the O(g²) half on its own.
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" run -c Release --project tests\Swarm.Bench\Swarm.Bench.csproj -- --buildsplit
+```
+
+### The ladder
+
+Both grid dimensions the 1M scenes use, both input states, min-of-rounds like
+every other figure here. This is the third of the three runs, so its rows can be
+matched against that run in the table below it.
+
+| n         | g = 512 sorted | g = 512 unsorted | g = 256 sorted | g = 256 unsorted |
+| --------- | -------------- | ---------------- | -------------- | ---------------- |
+| 1,024     | 0.192          | 0.192            | 0.065          | 0.043            |
+| 2,048     | 0.226          | 0.245            | 0.043          | 0.045            |
+| 4,096     | 0.319          | 0.314            | 0.054          | 0.090            |
+| 8,192     | 0.304          | 0.266            | 0.084          | 0.096            |
+| 16,384    | 0.293          | 0.369            | 0.088          | 0.153            |
+| 65,536    | 0.448          | 0.920            | 0.317          | 0.675            |
+| 262,144   | 1.334          | 2.719            | 1.456          | 2.742            |
+| 500,000   | 2.619          | 6.708            | 2.649          | 5.525            |
+| 1,048,576 | 6.959          | 39.647           | 7.241          | 31.547           |
+
+All figures in milliseconds.
+
+### The three runs, near-sorted input
+
+| run | g   | O(g²) half | build at 1M | O(n) half | O(g²) share |
+| --- | --- | ---------- | ----------- | --------- | ----------- |
+| 1   | 512 | 0.191      | 6.697       | 6.506     | 2.9%        |
+| 2   | 512 | 0.187      | 7.755       | 7.568     | 2.4%        |
+| 3   | 512 | 0.202      | 6.959       | 6.757     | 2.9%        |
+| 1   | 256 | 0.041      | 8.818       | 8.777     | 0.5%        |
+| 2   | 256 | 0.045      | 10.658      | 10.613    | 0.4%        |
+| 3   | 256 | 0.046      | 7.241       | 7.194     | 0.6%        |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200, **single-threaded** - the build is serial by design.
+  **Feature path**: AVX2 + FMA (no AVX-512), `force_path = 1`, `FLAG_GRID`.
+  **Seed / preset**: `0x5EED`, 6 species, the bench's varied attraction matrix.
+- **Kernel commit**: `7663810` · **Date**: 2026-08-09. The change these numbers
+  come with adds a bench section and touches no kernel source, so the measured
+  binary is that commit's. Run on a host that was **not** quiesced, and the two
+  input columns show it differently: see the disclosure below.
+
+### Reading it - the contingency divides 97% and multiplies 3%
+
+**The O(g²) half is 0.187 to 0.202 ms at `g = 512`, against a build of 6.7 to
+7.8 ms.** So 97% of the serial build at 1M is the histogram and the scatter, and
+under 3% is the zero and the prefix. At `g = 256` the same half is 0.041 to
+0.046 ms and the share is under 1%.
+
+**The intercept is the figure this section stands on, and it is the stable one.**
+Across the three runs it moves by 0.015 ms at `g = 512` while the build at 1M in
+the same runs moves by 1.06 ms. That is the point of taking the split at the
+bottom of the ladder rather than by subtracting neighbouring rows near the top,
+where the spread across rows doing identical build work is larger than the
+quantity being isolated.
+
+**It scales with the cell count, which is the instrument's own control.** 0.19 ms
+at 262,144 cells against 0.044 ms at 65,536 is 4.3x for a 4x difference in
+buckets, on a quantity that is a memset and a prefix over exactly that many
+dwords. A half that did not scale that way would not be the half it is named
+for.
+
+**What that says about the contingency, as arithmetic and not as a prediction.**
+Under the platform-owned scratch shape, `T` workers each need a histogram of
+every bucket, so the O(g²) work becomes `T`-fold. At the `T = 16` the threaded
+rows record and `g = 512`, an upper bound on the added work is
+`16 x 0.202 = 3.2 ms` of serial-equivalent time, against 6.8 ms of O(n) work
+that gets divided by the same 16. The bound is loose in the direction that
+favours the contingency: the per-worker zeroing is parallel, and only the
+cross-thread prefix is genuinely serialised. It is loose in the other direction
+too, because this measurement does **not** separate the zero from the prefix,
+and which of the two carries the 0.19 ms decides how much of the 3.2 ms
+parallelises. Separating them needs a clock inside `grid_sort`, which is the
+thing this measurement was built to avoid.
+
+**One column did not reproduce and it is left unexplained.** The near-sorted
+build at 1M reproduces the probe above: 6.959 to 7.755 ms here against its
+7.049 ms. The unsorted column does not. It runs 39.6 to 44.7 ms at `g = 512`
+against the 26.521 ms recorded there, and it inverts that section's near-equality
+between the two dimensions. Nothing here identifies a cause, and no claim is made
+that the recorded figure is wrong or that a regression exists; the host was not
+quiesced for either. The unsorted column is printed because dropping a column
+that disagreed would be the worse of the two options, and nothing in this
+section's reading rests on it.
+
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 
 Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and

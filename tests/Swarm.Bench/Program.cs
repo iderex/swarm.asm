@@ -49,6 +49,16 @@ if (args.Contains("--gsweep"))
     return 0;
 }
 
+// The build's n-independent half (#243) is behind an argument for the first of
+// those two reasons: it asks a question none of the sections below ask, and it
+// wants a quiesced host more than any of them, because the quantity it is after
+// is a tenth of a millisecond sitting inside a seven-millisecond figure.
+if (args.Contains("--buildsplit"))
+{
+    BuildSplit();
+    return 0;
+}
+
 int[] ns = [1024, 2048, 4096, 8192, 16384];
 const uint Scalar = 3, Avx2 = 1;
 
@@ -935,6 +945,97 @@ static unsafe double MeanCandidatesPerParticle(void* arena, uint n, int g)
         NativeMemory.Free(x); NativeMemory.Free(y);
         NativeMemory.Free(vx); NativeMemory.Free(vy); NativeMemory.Free(s);
     }
+}
+
+// --- the build's n-independent half (#243) ---------------------------------
+//
+// grid_sort is four phases over one (g*g + 1)-dword block: zero, histogram,
+// inclusive prefix, backward scatter (src/kernel/grid.inc). Two of them never
+// read n - the zero and the prefix walk every bucket whatever the population
+// is - and two are proportional to it. The parallel-scatter contingency divides
+// the O(n) half by the worker count and multiplies the O(g^2) half by it, so
+// which of the two carries the 7.049 ms recorded for the serial build at 1M
+// decides whether that trade can pay at all. Nothing else here splits them, and
+// subtracting adjacent rows of the #148 sweep does not: rows doing identical
+// build work there spread by 19% of the smallest.
+//
+// The split is taken without a timer inside grid.inc, which would cost
+// src/kernel/ its purity. g is a function of rmax alone - the largest power of
+// two with 1/g >= rmax, clamped to [4, 512] (src/kernel/layout.inc) - so
+// holding rmax fixed and moving n holds the O(g^2) work exactly constant and
+// moves only the O(n) work. The ladder's bottom rung is then the O(g^2) half
+// plus a residue that the rungs above it measure rather than assume.
+//
+// What this does NOT separate is zero from prefix, or histogram from scatter.
+// Each of those needs a clock inside the kernel. The contingency's question
+// does not ask for them: it moves the two groups in opposite directions, and
+// the groups are what this measures.
+//
+// Both input states are carried, because the O(n) half is the one whose cost
+// depends on them and the O(g^2) half is the one that cannot. Two dimensions
+// are carried for the same reason in the other direction: g = 512 is the
+// headline scene and g = 256 the dense one, a four-fold difference in cell
+// count, so the bottom rungs of the two ladders are a check on the instrument
+// rather than a second result.
+static unsafe void BuildSplit()
+{
+    Console.WriteLine();
+    Console.WriteLine("The build's n-independent half (#243): O(g^2) zero+prefix against O(n) histogram+scatter");
+    Console.WriteLine();
+
+    uint[] ladder = [1024, 2048, 4096, 8192, 16384, 65536, 262144, 500_000, 1_048_576];
+
+    foreach (float rmax in new[] { 1f / 512f, 1f / 256f })
+    {
+        int g = GridDim(rmax);
+        Console.WriteLine($"rmax = {rmax:0.00000}, g = {g}, cells = {(long)g * g}");
+        Console.WriteLine($"{"n",9} {"sorted ms",10} {"unsorted ms",12}");
+        Console.WriteLine(new string('-', 34));
+
+        var sorted = new double[ladder.Length];
+        for (int i = 0; i < ladder.Length; i++)
+        {
+            sorted[i] = TimeGridBuild(ladder[i], rmax, nearSorted: true);
+            double cold = TimeGridBuild(ladder[i], rmax);
+            Console.WriteLine($"{ladder[i],9} {sorted[i],10:0.000} {cold,12:0.000}");
+        }
+
+        // A least-squares line through the bottom four rungs, extrapolated to
+        // n = 0, is the O(g^2) half on its own. Four points rather than two
+        // because at g = 256 the whole quantity is tens of microseconds and a
+        // two-point slope there is drawn through the host's noise; the fit is
+        // over the rungs where the O(n) term is small enough not to bend it.
+        //
+        // It is an extrapolation and is printed beside the rung it starts from,
+        // so a reader can see how far it moved. The per-particle cost at 1024
+        // is not the per-particle cost at 1M, which is why the intercept and
+        // not the slope is what is read off here.
+        int fit = 4;
+        double mx = 0, my = 0;
+        for (int i = 0; i < fit; i++) { mx += ladder[i]; my += sorted[i]; }
+        mx /= fit;
+        my /= fit;
+        double sxy = 0, sxx = 0;
+        for (int i = 0; i < fit; i++)
+        {
+            sxy += (ladder[i] - mx) * (sorted[i] - my);
+            sxx += (ladder[i] - mx) * (ladder[i] - mx);
+        }
+        double intercept = my - sxy / sxx * mx;
+        double top = sorted[^1];
+
+        Console.WriteLine();
+        Console.WriteLine($"  {$"O(g^2) half (bottom {fit} rungs fitted back to n = 0)",-52} : {intercept,6:0.000} ms");
+        Console.WriteLine($"  {$"bottom rung, n = {ladder[0]}",-52} : {sorted[0],6:0.000} ms");
+        Console.WriteLine($"  {$"build at n = {ladder[^1]}",-52} : {top,6:0.000} ms");
+        Console.WriteLine(
+            $"  {"O(n) half there",-52} : {top - intercept,6:0.000} ms"
+            + $"  ({(top - intercept) / top * 100:0.0}% of the build)");
+        Console.WriteLine();
+    }
+
+    Console.WriteLine("sorted = OUT already cell-ordered (every frame after the first); unsorted = the first frame.");
+    Console.WriteLine("min-of-rounds, as every figure in this harness; ms is the clock-free primitive.");
 }
 
 // --- native surface + the ABI-mirrored params struct -----------------------
