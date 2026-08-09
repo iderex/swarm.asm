@@ -193,8 +193,18 @@ grid_sort:
 ; not move.
 ; ==================================================================
 
-GRID_CELLS_MAX   = 512*512               ; g clamps at 512 (layout.inc), so one
-                                         ;   histogram block is 1 MiB of dwords
+GRID_CELLS_MAX   = 512*512               ; g clamps at GRID_G_MAX (layout.inc), so
+                                         ;   one histogram block is 1 MiB of dwords
+        assert GRID_CELLS_MAX = GRID_G_MAX*GRID_G_MAX
+                                         ; The arena's own cell_start is sized from
+                                         ;   the real g and follows the clamp; this
+                                         ;   block is a fixed platform allocation
+                                         ;   and does NOT. Raising the clamp without
+                                         ;   raising this would have grid_hist_range
+                                         ;   zero g*g dwords into a smaller slot and
+                                         ;   walk into the next worker's histogram,
+                                         ;   so the two constants are tied here
+                                         ;   rather than left to agree by habit.
 GRID_CURSOR_TILE = 4096                  ; cells per grid_cursors tile: the
                                          ;   workspace slice stays 16 KiB, so it
                                          ;   is L1-resident while each worker's
@@ -203,7 +213,8 @@ GRID_CURSOR_TILE = 4096                  ; cells per grid_cursors tile: the
 ; ------------------------------------------------------------------
 ; grid_hist_range - count one slice of the population into one histogram.
 ;   in:       rcx = arena (cellid[first..last) valid), rdx = &hist[0], a block
-;             of at least g*g dwords owned by this caller alone,
+;             of GRID_CELLS_MAX dwords owned by this caller alone - that stride,
+;             not g*g, because grid_cursors indexes the blocks by it,
 ;             r8d = first, r9d = last (0 <= first <= last <= n)
 ;   out:      hist[0 .. g*g) = the number of particles in [first, last) whose
 ;             cell id is that cell. The block is zeroed here, so a stale block
@@ -244,10 +255,12 @@ grid_hist_range:
 ; ------------------------------------------------------------------
 ; grid_cursors - turn T per-worker histograms into T per-worker write cursors,
 ; and publish cell_start from the same sweep.
-;   in:       rcx = arena, rdx = &scratch[0], r8d = T (>= 1). scratch is T+1
-;             consecutive blocks of GRID_CELLS_MAX dwords: block w in [0, T) is
-;             worker w's histogram as grid_hist_range left it, and block T is
-;             workspace this routine owns
+;   in:       rcx = arena, rdx = &scratch[0], r8d = W (>= 1), the number of
+;             histograms to merge. scratch is at least W+1 consecutive blocks of
+;             GRID_CELLS_MAX dwords: block w in [0, W) is worker w's histogram as
+;             grid_hist_range left it, and block W is workspace this routine owns.
+;             The caller may own more blocks than it names here - pool_build
+;             sizes for the pool and passes the smaller build worker count
 ;   out:      block w holds, per cell, the index in IN at which worker w's first
 ;             particle of that cell is written; cell_start[0..g2] = the
 ;             exclusive-prefix run starts with cell_start[g2] = n - the same

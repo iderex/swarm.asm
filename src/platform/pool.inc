@@ -6,11 +6,14 @@
 ;
 ; Why this is platform, not kernel: the pool is pure OS orchestration
 ; (CreateThread / auto-reset events) and holds mutable state (handles, ranges).
-; The KERNEL never sees a thread - each worker crosses the thread-entry seam and
-; then calls the pure per-range pass `swarm_pass(arena, first, last)` semantics
-; (here `pool_pass`). Kernel purity (no API calls, no writable state in
-; src/kernel/) is preserved: this file lives in src/platform/ and is excluded
-; from the kernel source scan.
+; The KERNEL never sees a thread. For the pass a worker crosses the thread-entry
+; seam and then calls the pure per-range `swarm_pass(arena, first, last)`
+; semantics (here `pool_pass`); for the two build jobs it calls the pure
+; per-range kernel routines directly, because those are integer-only and wear no
+; FP seam - grid.inc's headers say MXCSR untouched, and the debug entry check
+; below exists for the FP path and has nothing to prove about them. Kernel purity
+; (no API calls, no writable state in src/kernel/) is preserved either way: this
+; file lives in src/platform/ and is excluded from the kernel source scan.
 ;
 ; Determinism (the load-bearing invariant). The pass is a pure map
 ; OUT[i] = f(i, IN, cell_start, params): IN and cell_start are frozen by the
@@ -63,11 +66,13 @@ SI_NPROC   = 0x20                      ; SYSTEM_INFO.dwNumberOfProcessors offset
 ;   clobbers: Win64 volatiles only; the seam saves/restores every nonvolatile
 ;             and MXCSR (identical contract to the swarm_pass export)
 ;   MXCSR:    saved, pinned 0x9FC0 across the core, restored on return
-;   debug:    every worker's core entry is checked here, and only here. This is
-;             a seam_wrap, so it carries seam_assert_pinned like every export;
-;             pool_worker_thread reaches pass_core through no other route, so a
-;             second check at the thread entry would read the parked thread's
-;             own word before the pin and prove nothing
+;   debug:    every worker's entry into an FP core is checked here, and only
+;             here. This is a seam_wrap, so it carries seam_assert_pinned like
+;             every export; pool_worker_thread reaches pass_core through no other
+;             route, so a second check at the thread entry would read the parked
+;             thread's own word before the pin and prove nothing. The build jobs
+;             enter no FP core and are checked nowhere, which is why grid.inc's
+;             MXCSR-untouched line has to stay true by inspection
 ; ------------------------------------------------------------------
 seam_wrap pool_pass, pass_core
 
@@ -76,11 +81,15 @@ seam_wrap pool_pass, pass_core
 ;   in:       ecx = worker index w (the LPVOID thread parameter; low 32 bits)
 ;   out:      eax = 0 at exit
 ;   clobbers: Win64 volatiles; preserves rbx/rsi/rbp (the nonvolatiles it uses)
-;   MXCSR:    the per-range pass pins it via pool_pass; the park loop is integer
+;   MXCSR:    a pass job pins it via pool_pass; the park loop and both build jobs
+;             are integer and leave it alone
 ; ------------------------------------------------------------------
-; Parks on go[w]; on wake either exits (shutdown) or runs the frozen-IN pass
-; over [first[w], last[w]) and signals done[w]. Auto-reset events: the wait
-; consumes the signal, so no explicit ResetEvent.
+; Parks on go[w]; on wake either exits (shutdown) or runs the job [pool_job]
+; names over [first[w], last[w]) and signals done[w]. Three jobs: the frozen-IN
+; pass, and the build's histogram and scatter over this worker's own scratch
+; block. The job word is published before any wake, so a woken worker reads the
+; one it was woken for. Auto-reset events: the wait consumes the signal, so no
+; explicit ResetEvent.
 pool_worker_thread:
         push    rbp
         mov     rbp, rsp
@@ -184,7 +193,7 @@ pool_partition:
 ; ------------------------------------------------------------------
 ; pool_run_job - one fan-out of an already-partitioned range: wake workers, run
 ; worker 0's share on this thread, join. The single place a work kind is turned
-; into T running copies of itself.
+; into W running copies of itself.
 ;   in:       rcx = arena, edx = POOL_JOB_*, r8d = W, the number of workers this
 ;             job is partitioned across (1 <= W <= pool_nthreads).
 ;             pool_first/pool_last[0..W) are filled and pool_arena is published
@@ -192,7 +201,7 @@ pool_partition:
 ;             woken, so their done events are never signalled and the join must
 ;             not wait on them
 ;   out:      every worker has finished its share of that job
-;   clobbers: Win64 volatiles; preserves rbx/rsi/rdi/r12 (and rbp)
+;   clobbers: Win64 volatiles; preserves rbx/rsi/rdi/r12/r13 (and rbp)
 ;   MXCSR:    the pass pins it per thread via pool_pass; the two build jobs are
 ;             integer and pin nothing (grid.inc: MXCSR untouched)
 ; ------------------------------------------------------------------
@@ -303,9 +312,9 @@ pool_fanout:
 ; equal-cell particles in ascending-i order (grid.inc says why).
 ;
 ; Falls back to the serial build, not to a wrong answer, whenever the parallel
-; shape does not apply: brute mode has no sort at all, and a pool that was never
-; created (or whose scratch allocation failed, which pool_init refuses to
-; return from) has nowhere to put the histograms. T = 1 is NOT a fallback case -
+; shape does not apply: brute mode has no sort at all, and a pool with no scratch
+; - because the allocation failed at pool_init - has nowhere to put the
+; histograms. T = 1 is NOT a fallback case -
 ; the one-worker fan-out runs the same three phases inline, which is what lets
 ; the harness sweep T = 1 as a real arm of BuildParallelMatchesSerial rather
 ; than as a comparison of the serial build against itself.
@@ -545,14 +554,15 @@ pool_init:
         mov     [pool_nworkers], eax   ; T-1
         lea     eax, [r14+1]           ; T+1 blocks: one histogram per worker
         imul    rdx, rax, GRID_CELLS_MAX*4  ;   plus grid_cursors' workspace
-        mov     [pool_scratch_bytes], rdx
         xor     ecx, ecx               ; VirtualAlloc(NULL, bytes,
         mov     r8d, MEM_COMMIT_RESERVE ;   MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
         mov     r9d, PAGE_READWRITE
-        call    [VirtualAlloc]
-        test    rax, rax
-        jz      .fail                  ; fail-closed: no scratch, no pool
-        mov     [pool_scratch], rax
+        call    [VirtualAlloc]         ; a failure here is NOT fatal: pool_scratch
+        mov     [pool_scratch], rax    ;   stays 0, pool_build falls back to the
+                                       ;   serial sort, and the pass is untouched.
+                                       ;   Refusing the pool would turn a missing
+                                       ;   optimisation into an exe that does not
+                                       ;   start (swarm.asm exits on pool_init < 1)
         mov     esi, 1                 ; spawn workers 1..T-1
   .spawn:
         cmp     esi, r14d
@@ -688,7 +698,6 @@ pool_shutdown:
         mov     r8d, MEM_RELEASE
         call    [VirtualFree]
         mov     qword [pool_scratch], 0
-        mov     qword [pool_scratch_bytes], 0
   .no_scratch:
         mov     dword [pool_nthreads], 0
         mov     dword [pool_nworkers], 0
@@ -717,8 +726,9 @@ macro pool_storage {
   pool_job      dd 0                   ; POOL_JOB_*, published before each wake
   pool_pad0     dd 0                   ; keep the quadwords below 8-aligned
   pool_arena    dq 0                   ; the frame's arena, published to workers
-  pool_scratch  dq 0                   ; (T+1) x GRID_CELLS_MAX dwords, or 0
-  pool_scratch_bytes dq 0              ; what VirtualFree releases
+  pool_scratch  dq 0                   ; (T+1) x GRID_CELLS_MAX dwords, or 0 when
+                                       ;   the commit failed (the build then runs
+                                       ;   serially; MEM_RELEASE needs no length)
   pool_first    rd POOL_MAX            ; per-worker range start
   pool_last     rd POOL_MAX            ; per-worker range end (exclusive)
   pool_go       rq POOL_MAX            ; per-worker wake event (auto-reset)

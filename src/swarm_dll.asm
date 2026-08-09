@@ -317,8 +317,9 @@ section '.edata' export data readable
 
   ; The M3 pool exports (swarm_pool_init / swarm_step_mt / swarm_pass_mt /
   ; swarm_build_mt / swarm_pool_shutdown) drive the real worker pool from the
-  ; harness so the PassParallelMatchesSerial and BuildParallelMatchesSerial
-  ; determinism gates can compare several thread counts against the serial path. The serial swarm_step / swarm_pass stay intact - no
+  ; harness, so the PassParallelMatchesSerial and BuildParallelMatchesSerial
+  ; determinism gates can compare several thread counts against the serial
+  ; path. The serial swarm_step / swarm_pass stay intact - no
   ; threading crosses the P/Invoke boundary; the pool is an in-DLL concern.
   export 'swarm.kernel.dll',\
          swarm_version,      'swarm_version',\

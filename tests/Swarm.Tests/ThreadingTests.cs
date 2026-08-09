@@ -6,7 +6,7 @@ namespace Swarm.Tests;
 /// <summary>
 /// The M3 worker-pool determinism gate (issue #68). The force+integrate pass is
 /// a pure map - OUT[i] = f(i, IN, cell_start, params) with IN and cell_start
-/// frozen by the serial build before any worker runs and disjoint one-writer
+/// frozen by the build before any worker runs the pass, and disjoint one-writer
 /// ranges covering [0, n) - so the threaded result must be BIT-IDENTICAL to the
 /// serial path for any thread count T, and equal across T. This is the machine-
 /// checked form of <see cref="GridTests.GridPassSplitInvariance"/>, driving the
@@ -121,7 +121,7 @@ public sealed unsafe class ThreadingTests
         finally { NativeMemory.AlignedFree(a); }
     }
 
-    // Threaded: swarm_step_mt (serial build + parallel pass) at thread count t.
+    // Threaded: swarm_step_mt (parallel build + parallel pass) at thread count t.
     private static float[] ThreadedStep(SwarmParams p, uint steps, int t)
     {
         Assert.True(swarm_pool_init(t) >= 1, $"pool_init({t}) failed");
@@ -247,7 +247,15 @@ public sealed unsafe class ThreadingTests
     // that is right for one worker and wrong for several shows up; the 100k row
     // at g = 512 has more cells than particles, so W pins to 1 and it is the
     // one-worker arm at the largest dimension the kernel clamps to.
+    // The 49-particle row is not a size, it is the EMPTY-RANGE case, and it is
+    // the only row that reaches one. rmax = 0.25 gives g = 4, so g*g = 16 and
+    // W saturates at T; the partition rounds each range up to a multiple of 16,
+    // so at T >= 3 the tail workers get first == last and run zero particles.
+    // Without it, a `jbe` written `jb` on the empty-count guard in
+    // grid_hist_range wraps its counter to 4 billion and walks the heap, and
+    // every other row here stays green while it does.
     [Theory]
+    [InlineData(49u, 4u, 0xDEADul, 0.25f, 1u, FlagGrid)]         // empty ranges
     [InlineData(5000u, 4u, 0x1234ul, 0.10f, 1u, FlagGrid)]       // g = 8,  W = T
     [InlineData(20000u, 6u, 0xBEEFul, 0.05f, 1u, FlagGrid)]      // g = 16, W = T
     [InlineData(200000u, 6u, 0xC0FFEEul, 1f / 256f, 1u, FlagGrid)] // g = 256, W = 3

@@ -507,14 +507,16 @@ below argues the original pin and is kept as the record of it.
 assignment cannot affect gather results, and it absorbs hybrid P/E-core
 imbalance that a static partition cannot. A work-weighted static partitioner
 is machinery for nothing once any assignment yields identical bits. Serial
-build inside M3 is the Amdahl trade: ~4 ms serial against a ~10 ms frame,
+build inside M3 was the Amdahl trade: ~4 ms serial against a ~10 ms frame,
 versus per-thread histograms + cursor merge + an extra barrier.
 `WaitOnAddress` is banned - it lives in an api-set DLL, not in kernel32's
 import surface; events are kernel32.
 
 **Rejected:** work-weighted static bands and a parallel scatter as v1 (kept
 as the named contingency; promoted only if the serial build measurably breaks
-the budget); pairwise accumulation with per-thread force buffers (needs a
+the budget - **that condition fired and the contingency is built**, see risk 2
+below and `docs/BENCHMARKS.md`; the build now fans out across
+`W = clamp(n / (g*g), 1, T)` workers while the pass keeps the whole pool); pairwise accumulation with per-thread force buffers (needs a
 pinned reduction order plus ~8 MB/thread of traffic - a determinism liability
 for a 2× the budget does not need); `WaitOnAddress` (import rule); hard
 thread affinity (ideal-processor hint only).

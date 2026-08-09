@@ -16,7 +16,7 @@
 ; without it, n = 0 mod 16 (including the headline 2^20) would get zero pad
 ; and unmasked tail loads would read out of bounds.
 ;
-; g = the largest power of two with 1/g >= rmax, clamped to [4, 512]
+; g = the largest power of two with 1/g >= rmax, clamped to [4, GRID_G_MAX]
 ; (decision 3): the cell edge 1/g must be at least rmax so the 3x3
 ; neighbourhood covers the cutoff. rmax <= 0.25 guarantees g = 4 qualifies
 ; (1/4 = 0.25 >= rmax always); the loop grows g while the NEXT candidate
@@ -26,11 +26,17 @@
 ; floats) and halves 1/(2g) by an exponent decrement - both exact, no FP
 ; instruction needed.
 
+GRID_G_MAX = 512                        ; the cell-dimension ceiling (decision 3).
+                                        ; grid.inc asserts its own scratch block
+                                        ; is sized from this, so raising it here
+                                        ; reddens the build rather than silently
+                                        ; overrunning a fixed-size histogram.
+
 ; ------------------------------------------------------------------
 ; arena_dims_core - padded_n and grid g for VALIDATED params (no revalidation).
 ;   in:       rcx = SwarmParams* (already validated by the caller)
 ;   out:      eax = padded_n = ((n+15) & ~15) + 16
-;             edx = g (power of two in [4, 512])
+;             edx = g (power of two in [4, GRID_G_MAX])
 ;   clobbers: rax, rdx, r8, r9, flags
 ;   MXCSR:    untouched (integer bit comparisons only - see the g note above)
 ;   align:    none required
@@ -45,7 +51,7 @@ arena_dims_core:
         mov     edx, 4                  ;   so integer order = float order
         mov     r9d, 0x3E000000         ; f32 bits of 1/(2*4)
   .grow:
-        cmp     edx, 512
+        cmp     edx, GRID_G_MAX
         jae     .done
         cmp     r9d, r8d                ; while 1/(2g) >= rmax: g *= 2
         jb      .done

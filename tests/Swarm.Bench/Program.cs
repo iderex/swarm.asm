@@ -187,7 +187,7 @@ if (haveAvx2)
 // a pass before it times the build; the first frame's build is the unsorted
 // column of the #177 table below and is several times this one.
 //
-// The threaded rows fan only the pass. The build stays serial in v1, which is
+// The threaded rows fan only the pass. The build fans out across W = clamp(n/(g*g), 1, T) workers (#243), which is
 // what risk 2 and its contingency are about, so it is added back unchanged into
 // every threaded frame. A frame counting only the part that scaled would answer
 // a question nobody asked.
