@@ -617,7 +617,8 @@ none).
 from a memory DC. `BitBlt` is chosen over `SetDIBitsToDevice`; the comparison
 between the two is not yet measured - it is deferred to the M4 frame-time
 capture (#5). Clear via `rep stosd` / NT stores (~0.3 ms at 1080p). Plot:
-**serial**, 1 pixel per particle (a 2×2 splat is a preset toggle),
+**serial**, 1 pixel per particle (a 2×2 splat is a toggle - see the amendment
+below, which carries it platform-side instead of in the preset),
 `px = min(int(x*w), w-1)` (belt behind the wrap canonicalization), color from
 an 8-entry BGRA species palette; last-write-wins in cell-sorted order - the
 framebuffer is deterministic and `swarm_plot` (a pure kernel routine writing
@@ -626,6 +627,22 @@ plotting sweep the framebuffer near-scanline - ~0.8-1 ms at 1M instead of 1M
 random cache-line round trips. The matrix UI/HUD is GDI in the platform
 layer, outside the determinism surface: n × n colored cells, wheel/drag
 edits a[i][j] in [-1,1], applied at step boundaries only.
+
+**Amendment (recorded 2026-08-09, maintainer decision 2026-07-25, issue #133):**
+the 2×2 splat is switched platform-side, on the command line or by a key, and
+not by the preset. Decision 10's grammar is untouched: no new key, so the eight
+keys required exactly once stay eight, the parser and its fuzz surface do not
+move, and none of the six scene files under `presets/` needs migrating. The
+parenthetical above named the preset as the carrier and is corrected here rather
+than left standing, because the sentence said the opposite of the decision it
+was supposed to record.
+
+The cost is accepted rather than avoided, and it is worth stating where the
+decision is. A preset then does not fully describe the scene's look, so once the
+splat exists, a `docs/BENCHMARKS.md` row or a `README.md` capture that cites a
+preset by path no longer says which plot mode produced it, and the mode has to
+be disclosed beside the row instead. That is accepted for this one visual knob
+and is not a precedent for moving other scene properties out of the preset.
 
 **Rationale:** The plot stays serial because "race-free by construction"
 parallel-raster schemes fail here: cell rows map to _fractional_ pixel rows,
