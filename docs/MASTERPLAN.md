@@ -507,14 +507,16 @@ below argues the original pin and is kept as the record of it.
 assignment cannot affect gather results, and it absorbs hybrid P/E-core
 imbalance that a static partition cannot. A work-weighted static partitioner
 is machinery for nothing once any assignment yields identical bits. Serial
-build inside M3 is the Amdahl trade: ~4 ms serial against a ~10 ms frame,
+build inside M3 was the Amdahl trade: ~4 ms serial against a ~10 ms frame,
 versus per-thread histograms + cursor merge + an extra barrier.
 `WaitOnAddress` is banned - it lives in an api-set DLL, not in kernel32's
 import surface; events are kernel32.
 
 **Rejected:** work-weighted static bands and a parallel scatter as v1 (kept
 as the named contingency; promoted only if the serial build measurably breaks
-the budget); pairwise accumulation with per-thread force buffers (needs a
+the budget - **that condition fired and the contingency is built**, see risk 2
+below and `docs/BENCHMARKS.md`; the build now fans out across
+`W = clamp(n / (g*g), 1, T)` workers while the pass keeps the whole pool); pairwise accumulation with per-thread force buffers (needs a
 pinned reduction order plus ~8 MB/thread of traffic - a determinism liability
 for a 2× the budget does not need); `WaitOnAddress` (import rule); hard
 thread affinity (ideal-processor hint only).
@@ -762,6 +764,20 @@ disclosed reference machine only).
    the estimate was written against a clock near 2.5 GHz. Growth from 500k is
    worse than linear - 2.1x the particles for 2.8x the build at the same `g`
    for both, so the O(g²) half is not the cause and the scatter is.
+   **Contingency executed 2026-08-09 (#243, docs/BENCHMARKS.md): the line is
+   met.** The per-thread per-bucket-cursor scatter is in the tree as
+   `swarm_build_mt`, byte-identical to the serial build at every worker count on
+   both input states, and at n = 1,048,576, g = 512 the near-sorted build comes
+   to 3.338 and 3.459 ms across two runs against the ~4.5 ms this line names,
+   from 5.741 and 5.712 ms serial in the same runs. The dense scene (g = 256)
+   reaches 2.15-2.18 ms. One thing was learned that this line did not
+   anticipate: the contingency does **not** pay across the whole pool. Each
+   worker needs a count for every bucket, so the O(g²) half is multiplied by the
+   worker count while the O(n) half is divided by it, and at g = 512 with all 16
+   workers the build measured 0.75x and 1.03x - at or below break-even. The
+   build therefore splits across `W = clamp(n / (g*g), 1, T)` workers and the
+   pass keeps the whole pool. The first frame is not fixed by any of this: the
+   unsorted build still costs ~11 ms at 1M, which is most of a frame period.
 3. **Scatter locality under energetic scenes.** The ~1.5-2 ms scatter
    estimate assumes temporal coherence; a hot matrix at the v_max clamp
    degrades write locality. Probe: an adversarial preset (all |a| = 1, high

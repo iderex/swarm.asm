@@ -316,9 +316,10 @@ swarm_call_under_mxcsr:
 section '.edata' export data readable
 
   ; The M3 pool exports (swarm_pool_init / swarm_step_mt / swarm_pass_mt /
-  ; swarm_pool_shutdown) drive the real worker pool from the harness so the
-  ; PassParallelMatchesSerial determinism gate can compare several thread counts
-  ; against the serial path. The serial swarm_step / swarm_pass stay intact - no
+  ; swarm_build_mt / swarm_pool_shutdown) drive the real worker pool from the
+  ; harness, so the PassParallelMatchesSerial and BuildParallelMatchesSerial
+  ; determinism gates can compare several thread counts against the serial
+  ; path. The serial swarm_step / swarm_pass stay intact - no
   ; threading crosses the P/Invoke boundary; the pool is an in-DLL concern.
   export 'swarm.kernel.dll',\
          swarm_version,      'swarm_version',\
@@ -337,6 +338,7 @@ section '.edata' export data readable
          pool_init,          'swarm_pool_init',\
          pool_step,          'swarm_step_mt',\
          pool_pass_all,      'swarm_pass_mt',\
+         pool_build,         'swarm_build_mt',\
          pool_shutdown,      'swarm_pool_shutdown'
 
 section '.data' data readable writeable
@@ -349,8 +351,13 @@ section '.idata' import data readable writeable
 
   ; The DLL's only imports - all genuinely kernel32 (WaitOnAddress/WakeByAddress
   ; are deliberately excluded: they forward through API-MS-Win-Core-Synch-*).
+  ; VirtualAlloc/VirtualFree hold the pool's per-worker histogram scratch. That
+  ; scratch is platform-owned precisely so the arena's size stays a function of
+  ; SwarmParams alone, which has no thread count in it (grid.inc says why).
   library kernel32, 'KERNEL32.DLL'
   import kernel32,\
+         VirtualAlloc,'VirtualAlloc',\
+         VirtualFree,'VirtualFree',\
          CreateThread,'CreateThread',\
          CreateEventW,'CreateEventW',\
          SetEvent,'SetEvent',\

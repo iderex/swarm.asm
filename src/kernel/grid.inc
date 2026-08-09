@@ -164,6 +164,303 @@ grid_sort:
         pop     rbx
         ret
 
+; ==================================================================
+; The same counting sort, split into three routines a worker pool can drive
+; (docs/MASTERPLAN.md, decision 6's per-thread per-bucket cursors).
+;
+; grid_sort above is one serial sweep over four phases. The split keeps every
+; phase and moves only WHERE each particle's write index comes from:
+;
+;   grid_hist_range   worker w counts its own slice into its own histogram
+;   grid_cursors      the T histograms become T per-cell write cursors, and
+;                     cell_start[0..g2] is published from the same sweep
+;   grid_scatter_range  worker w scatters its slice forward from its cursors
+;
+; Stability, which is the whole contract. The serial sort scatters BACKWARD
+; with a pre-decrement so equal-cell particles keep ascending-i order. Here
+; worker w's cursor for cell c starts at cell_start[c] plus the counts every
+; LOWER-numbered worker put in c, and each worker walks its own slice forward.
+; Ranges are ascending in w (pool_partition), so within a cell the global write
+; order is ascending i exactly as before, and IN comes out bit-identical to the
+; serial build for any worker count and any completion order.
+;
+; The histograms are NOT in the arena. layout_bytes_core sizes the arena from
+; SwarmParams alone (abi.inc pins that as an ABI property, and the harness
+; asserts the formula), and a thread count is not in SwarmParams - so an arena
+; holding T histograms would have a size that depends on the machine's core
+; count. The scratch is platform-owned instead and arrives as an argument, so
+; these stay pure functions of what they are handed and swarm_layout_bytes does
+; not move.
+; ==================================================================
+
+GRID_CELLS_MAX   = 512*512               ; g clamps at GRID_G_MAX (layout.inc), so
+                                         ;   one histogram block is 1 MiB of dwords
+        assert GRID_CELLS_MAX = GRID_G_MAX*GRID_G_MAX
+                                         ; The arena's own cell_start is sized from
+                                         ;   the real g and follows the clamp; this
+                                         ;   block is a fixed platform allocation
+                                         ;   and does NOT. Raising the clamp without
+                                         ;   raising this would have grid_hist_range
+                                         ;   zero g*g dwords into a smaller slot and
+                                         ;   walk into the next worker's histogram,
+                                         ;   so the two constants are tied here
+                                         ;   rather than left to agree by habit.
+GRID_CURSOR_TILE = 4096                  ; cells per grid_cursors tile: the
+                                         ;   workspace slice stays 16 KiB, so it
+                                         ;   is L1-resident while each worker's
+                                         ;   block is streamed past it
+
+; ------------------------------------------------------------------
+; grid_hist_range - count one slice of the population into one histogram.
+;   in:       rcx = arena (cellid[first..last) valid), rdx = &hist[0], a block
+;             of GRID_CELLS_MAX dwords owned by this caller alone - that stride,
+;             not g*g, because grid_cursors indexes the blocks by it,
+;             r8d = first, r9d = last (0 <= first <= last <= n)
+;   out:      hist[0 .. g*g) = the number of particles in [first, last) whose
+;             cell id is that cell. The block is zeroed here, so a stale block
+;             from an earlier frame cannot leak in
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; saves+restores rsi, rdi
+;   MXCSR:    untouched (integer counting)
+; ------------------------------------------------------------------
+grid_hist_range:
+        push    rsi
+        push    rdi
+        mov     r10d, [rcx+AH_G]
+        imul    r10d, r10d              ; g2 = g*g (number of cells)
+        mov     eax, [rcx+AH_PADDED]
+        imul    rax, rax, AR_CELLID*4   ; 12 * stride bytes
+        lea     rsi, [rcx+rax+AH_SIZE]  ; &cellid[0]
+        mov     r11, rdx                ; hist base
+        mov     rdi, r11                ; zero hist[0 .. g2)
+        mov     ecx, r10d
+        xor     eax, eax
+        cld
+        rep     stosd
+        mov     ecx, r9d
+        sub     ecx, r8d                ; count = last - first
+        jbe     .done
+        mov     eax, r8d                ; &cellid[first]
+        lea     rsi, [rsi+rax*4]
+  .hist:
+        mov     eax, [rsi]
+        inc     dword [r11+rax*4]
+        add     rsi, 4
+        dec     ecx
+        jnz     .hist
+  .done:
+        pop     rdi
+        pop     rsi
+        ret
+
+; ------------------------------------------------------------------
+; grid_cursors - turn T per-worker histograms into T per-worker write cursors,
+; and publish cell_start from the same sweep.
+;   in:       rcx = arena, rdx = &scratch[0], r8d = W (>= 1), the number of
+;             histograms to merge. scratch is at least W+1 consecutive blocks of
+;             GRID_CELLS_MAX dwords: block w in [0, W) is worker w's histogram as
+;             grid_hist_range left it, and block W is workspace this routine owns.
+;             The caller may own more blocks than it names here - pool_build
+;             sizes for the pool and passes the smaller build worker count
+;   out:      block w holds, per cell, the index in IN at which worker w's first
+;             particle of that cell is written; cell_start[0..g2] = the
+;             exclusive-prefix run starts with cell_start[g2] = n - the same
+;             array the serial sort leaves behind, and the one neighbour_runs
+;             reads
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; saves+restores rbx, rbp,
+;             rsi, rdi, r12-r15
+;   MXCSR:    untouched (integer prefix sum)
+; ------------------------------------------------------------------
+; Walked in tiles of cells rather than cell by cell: consecutive workers' counts
+; for one cell are GRID_CELLS_MAX*4 bytes apart, so a cell-major walk would take
+; a fresh page per read. Tiling makes every stream sequential - each worker's
+; block is read once per pass, and the workspace tile stays in L1.
+grid_cursors:
+        push    rbx
+        push    rbp
+        push    rsi
+        push    rdi
+        push    r12
+        push    r13
+        push    r14
+        push    r15
+        mov     rbx, rdx                ; scratch base
+        mov     r12d, r8d               ; T
+        mov     r13d, [rcx+AH_PARAMS+SP_N]  ; n
+        mov     r10d, [rcx+AH_G]
+        imul    r10d, r10d              ; g2
+        mov     eax, [rcx+AH_PADDED]
+        imul    rax, rax, AR_ARRAYS*4   ; 13 arrays * stride bytes
+        lea     r14, [rcx+rax+AH_SIZE]  ; &cell_start[0]
+        imul    rax, r12, GRID_CELLS_MAX*4
+        lea     r15, [rbx+rax]          ; &run[0] = block T, the workspace
+        xor     ebp, ebp                ; carry = particles placed so far
+        xor     r11d, r11d              ; c0 = first cell of the tile
+  .tile:
+        cmp     r11d, r10d
+        jae     .tail
+        mov     r9d, r10d
+        sub     r9d, r11d
+        cmp     r9d, GRID_CURSOR_TILE
+        jbe     .cnt_ok
+        mov     r9d, GRID_CURSOR_TILE
+  .cnt_ok:                              ; r9d = cnt, cells in this tile
+        lea     rdi, [r15+r11*4]        ; run[c0 .. c0+cnt) = 0
+        mov     ecx, r9d
+        xor     eax, eax
+        cld
+        rep     stosd
+
+        ; 1. per worker, in order: hand it the tile-local offset it has earned
+        ;    so far and add its own count on. Ascending w is what makes the
+        ;    result the stable order.
+        xor     r8d, r8d                ; w = 0
+  .p1w:
+        cmp     r8d, r12d
+        jae     .p1done
+        imul    rax, r8, GRID_CELLS_MAX*4
+        lea     rsi, [rbx+rax]
+        lea     rsi, [rsi+r11*4]        ; &hist[w][c0]
+        lea     rdi, [r15+r11*4]        ; &run[c0]
+        mov     ecx, r9d
+  .p1c:
+        mov     eax, [rsi]              ; this worker's count for the cell
+        mov     edx, [rdi]              ; offsets handed out so far
+        mov     [rsi], edx
+        add     edx, eax
+        mov     [rdi], edx
+        add     rsi, 4
+        add     rdi, 4
+        dec     ecx
+        jnz     .p1c
+        inc     r8d
+        jmp     .p1w
+  .p1done:
+        ; 2. run[c] is now the cell's whole count. Replace it with the cell's
+        ;    global base and publish that base as cell_start[c].
+        lea     rdi, [r15+r11*4]
+        lea     rsi, [r14+r11*4]
+        mov     ecx, r9d
+  .p2c:
+        mov     eax, [rdi]
+        mov     [rdi], ebp
+        mov     [rsi], ebp
+        add     ebp, eax
+        add     rdi, 4
+        add     rsi, 4
+        dec     ecx
+        jnz     .p2c
+
+        ; 3. lift every worker's tile-local offset by that base
+        xor     r8d, r8d
+  .p3w:
+        cmp     r8d, r12d
+        jae     .p3done
+        imul    rax, r8, GRID_CELLS_MAX*4
+        lea     rsi, [rbx+rax]
+        lea     rsi, [rsi+r11*4]
+        lea     rdi, [r15+r11*4]
+        mov     ecx, r9d
+  .p3c:
+        mov     eax, [rdi]
+        add     [rsi], eax
+        add     rsi, 4
+        add     rdi, 4
+        dec     ecx
+        jnz     .p3c
+        inc     r8d
+        jmp     .p3w
+  .p3done:
+        add     r11d, r9d
+        jmp     .tile
+  .tail:
+        mov     [r14+r10*4], r13d       ; cell_start[g2] = n (last-run end)
+        pop     r15
+        pop     r14
+        pop     r13
+        pop     r12
+        pop     rdi
+        pop     rsi
+        pop     rbp
+        pop     rbx
+        ret
+
+; ------------------------------------------------------------------
+; grid_scatter_range - write one slice of OUT into its place in IN.
+;   in:       rcx = arena, rdx = &cursor[0], this worker's block as grid_cursors
+;             left it, r8d = first, r9d = last - the SAME range the matching
+;             grid_hist_range call counted
+;   out:      IN[cursor[c]++] = OUT[i] (six components) for i ascending over
+;             [first, last); the block is left one past this worker's last write
+;             in each cell
+;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; saves+restores rbx, rsi,
+;             rdi, r12-r15
+;   MXCSR:    untouched (integer copy)
+; ------------------------------------------------------------------
+; Forward with a post-increment, where the serial sort runs backward with a
+; pre-decrement. Both land equal-cell particles in ascending i; the direction
+; differs because the serial sort derives its cursor by consuming an inclusive
+; prefix, and this one is handed an exclusive prefix already split by worker.
+grid_scatter_range:
+        push    rbx
+        push    rsi
+        push    rdi
+        push    r12
+        push    r13
+        push    r14
+        push    r15
+        mov     rbx, rdx                ; cursor block
+        mov     r12d, r8d               ; i = first
+        mov     r10d, r9d               ; last
+        mov     r14d, [rcx+AH_PADDED]
+        shl     r14, 2                  ; stride (bytes)
+        lea     r15, [rcx+AH_SIZE]      ; OUT base
+        imul    rax, r14, AR_X_IN
+        lea     r11, [r15+rax]          ; IN base
+        imul    rax, r14, AR_CELLID
+        lea     r13, [r15+rax]          ; cellid base
+  .scatter:
+        cmp     r12d, r10d
+        jae     .done
+        mov     eax, [r13+r12*4]        ; c = cellid[i]
+        mov     ecx, [rbx+rax*4]        ; pos = cursor[c]
+        lea     edx, [rcx+1]
+        mov     [rbx+rax*4], edx        ; cursor[c] = pos + 1
+        lea     rsi, [r15+r12*4]        ; &OUT.x[i]
+        lea     rdi, [r11+rcx*4]        ; &IN.x[pos]
+        mov     eax, [rsi]
+        mov     [rdi], eax              ; x
+        add     rsi, r14
+        add     rdi, r14
+        mov     eax, [rsi]
+        mov     [rdi], eax              ; y
+        add     rsi, r14
+        add     rdi, r14
+        mov     eax, [rsi]
+        mov     [rdi], eax              ; vx
+        add     rsi, r14
+        add     rdi, r14
+        mov     eax, [rsi]
+        mov     [rdi], eax              ; vy
+        add     rsi, r14
+        add     rdi, r14
+        mov     eax, [rsi]
+        mov     [rdi], eax              ; species
+        add     rsi, r14
+        add     rdi, r14
+        mov     eax, [rsi]
+        mov     [rdi], eax              ; id
+        inc     r12d
+        jmp     .scatter
+  .done:
+        pop     r15
+        pop     r14
+        pop     r13
+        pop     r12
+        pop     rdi
+        pop     rsi
+        pop     rbx
+        ret
+
 ; neighbour_runs stack locals (the column window is loop-invariant across the
 ; three rows, so it is derived once).
 NR_LO1    = 0                            ; column low index of run 1

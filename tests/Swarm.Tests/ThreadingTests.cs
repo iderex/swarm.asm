@@ -6,7 +6,7 @@ namespace Swarm.Tests;
 /// <summary>
 /// The M3 worker-pool determinism gate (issue #68). The force+integrate pass is
 /// a pure map - OUT[i] = f(i, IN, cell_start, params) with IN and cell_start
-/// frozen by the serial build before any worker runs and disjoint one-writer
+/// frozen by the build before any worker runs the pass, and disjoint one-writer
 /// ranges covering [0, n) - so the threaded result must be BIT-IDENTICAL to the
 /// serial path for any thread count T, and equal across T. This is the machine-
 /// checked form of <see cref="GridTests.GridPassSplitInvariance"/>, driving the
@@ -58,6 +58,9 @@ public sealed unsafe class ThreadingTests
 
     [DllImport("swarm.kernel.dll")]
     private static extern void swarm_pass_mt(void* arena);
+
+    [DllImport("swarm.kernel.dll")]
+    private static extern void swarm_build_mt(void* arena);
 
     [DllImport("swarm.kernel.dll")]
     private static extern void swarm_pool_shutdown();
@@ -118,7 +121,7 @@ public sealed unsafe class ThreadingTests
         finally { NativeMemory.AlignedFree(a); }
     }
 
-    // Threaded: swarm_step_mt (serial build + parallel pass) at thread count t.
+    // Threaded: swarm_step_mt (parallel build + parallel pass) at thread count t.
     private static float[] ThreadedStep(SwarmParams p, uint steps, int t)
     {
         Assert.True(swarm_pool_init(t) >= 1, $"pool_init({t}) failed");
@@ -205,6 +208,102 @@ public sealed unsafe class ThreadingTests
                 finally { NativeMemory.AlignedFree(b); }
             }
             finally { swarm_pool_shutdown(); }
+        }
+    }
+
+    // The whole arena as bytes. The build's result is not only the reordered IN
+    // bank that swarm_read_state can see - it is also cell_start, the run-start
+    // table every neighbourhood lookup indexes. Comparing the image covers both,
+    // and a zeroed allocation is what makes it legitimate: every byte neither
+    // build writes then holds 0 on both sides instead of whatever the allocator
+    // handed back.
+    private static byte[] ArenaImage(void* arena, ulong size) =>
+        new ReadOnlySpan<byte>(arena, checked((int)size)).ToArray();
+
+    private static void* ZeroedArena(ulong size)
+    {
+        void* a = NativeMemory.AlignedAlloc((nuint)size, 64);
+        NativeMemory.Clear(a, (nuint)size);
+        return a;
+    }
+
+    // The build's own determinism gate (issue #243). swarm_build_mt fans the
+    // counting sort's two O(n) phases across the pool - each worker histograms
+    // its own slice, then scatters it from its own per-cell cursors - and the
+    // result has to be the serial sort's result BYTE FOR BYTE at every thread
+    // count. Exact, never epsilon: the sort moves dwords and computes nothing,
+    // so any difference at all is a lost or reordered particle, and the stable
+    // order is what every cross-implementation cell-border test rests on.
+    //
+    // Both input states, because they fail differently. warm = 0 is the first
+    // frame, where the seeded population is in no cell order and the scatter
+    // writes are scattered; warm = 4 is the near-sorted steady state, where a
+    // worker's slice lands almost contiguously and an off-by-one in the cursor
+    // split is far easier to hide.
+    // The scenes are chosen for what they do to the build's worker bound
+    // W = clamp(n / (g*g), 1, T), not only for size. The first two have tiny
+    // cell counts, so W saturates at T and the sweep is a real thread sweep; the
+    // 200k row at g = 256 sits in the middle at W = 3, which is where a cursor
+    // that is right for one worker and wrong for several shows up; the 100k row
+    // at g = 512 has more cells than particles, so W pins to 1 and it is the
+    // one-worker arm at the largest dimension the kernel clamps to.
+    // The 49-particle row is not a size, it is the EMPTY-RANGE case, and it is
+    // the only row that reaches one. rmax = 0.25 gives g = 4, so g*g = 16 and
+    // W saturates at T; the partition rounds each range up to a multiple of 16,
+    // so at T >= 3 the tail workers get first == last and run zero particles.
+    // Without it, a `jbe` written `jb` on the empty-count guard in
+    // grid_hist_range wraps its counter to 4 billion and walks the heap, and
+    // every other row here stays green while it does.
+    [Theory]
+    [InlineData(49u, 4u, 0xDEADul, 0.25f, 1u, FlagGrid)]         // empty ranges
+    [InlineData(5000u, 4u, 0x1234ul, 0.10f, 1u, FlagGrid)]       // g = 8,  W = T
+    [InlineData(20000u, 6u, 0xBEEFul, 0.05f, 1u, FlagGrid)]      // g = 16, W = T
+    [InlineData(200000u, 6u, 0xC0FFEEul, 1f / 256f, 1u, FlagGrid)] // g = 256, W = 3
+    [InlineData(100000u, 6u, 0x5EEDul, 1f / 512f, 1u, FlagGrid)] // g = 512, W = 1
+    [InlineData(3000u, 4u, 0x0077ul, 0.08f, 1u, 0u)]             // brute: no sort
+    public void BuildParallelMatchesSerial(
+        uint n, uint species, ulong seed, float rmax, uint forcePath, uint flags)
+    {
+        _ = NativeKernel.Handle;
+        var p = Make(n, species, seed, rmax, forcePath, flags);
+        ulong size = swarm_layout_bytes(in p);
+        Assert.NotEqual(0ul, size);
+
+        foreach (uint warm in (uint[])[0u, 4u])
+        {
+            byte[] serial;
+            void* a = ZeroedArena(size);
+            try
+            {
+                Assert.Equal(0, swarm_init(a, size, in p));
+                if (warm > 0) swarm_step(a, warm);
+                swarm_build(a);
+                serial = ArenaImage(a, size);
+            }
+            finally { NativeMemory.AlignedFree(a); }
+
+            foreach (int t in ThreadCounts)
+            {
+                Assert.True(swarm_pool_init(t) >= 1, $"pool_init({t}) failed");
+                try
+                {
+                    void* b = ZeroedArena(size);
+                    try
+                    {
+                        // Identical state up to the build: the warm-up runs the
+                        // serial step on both sides, so the only thing under
+                        // test is which build produced the final IN bank.
+                        Assert.Equal(0, swarm_init(b, size, in p));
+                        if (warm > 0) swarm_step(b, warm);
+                        swarm_build_mt(b);
+                        Assert.True(
+                            serial.AsSpan().SequenceEqual(ArenaImage(b, size)),
+                            $"swarm_build_mt at T={t} (warm={warm}) differs from swarm_build");
+                    }
+                    finally { NativeMemory.AlignedFree(b); }
+                }
+                finally { swarm_pool_shutdown(); }
+            }
         }
     }
 }

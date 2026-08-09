@@ -284,7 +284,7 @@ start:
         cmp     dword [paused], 0
         jne     .plot                   ; paused: skip the step, keep drawing
         mov     rcx, [arena]            ; advance the simulation one step across
-        mov     edx, 1                  ;   the worker pool (build serial, pass
+        mov     edx, 1                  ;   the worker pool (build and pass both
         call    pool_step               ;   parallel) - bit-identical to sim_step
   .plot:
         mov     rcx, [arena]            ; raster the state into the DIB

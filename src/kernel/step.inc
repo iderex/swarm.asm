@@ -418,26 +418,52 @@ macro cache_pass_consts {
 ;   MXCSR:    untouched (integer copy / sort)
 ; ------------------------------------------------------------------
 build_core:
-        push    rbx
-        mov     rbx, rcx                ; arena survives the rep movsd (kills rcx)
+        mov     r11d, [rcx+AH_PARAMS+SP_FLAGS]
+        test    r11d, FLAG_GRID
+        jnz     .grid
         push    rsi
         push    rdi
-        mov     eax, [rbx+AH_PADDED]    ; padded_n
-        lea     rsi, [rbx+AH_SIZE]      ; bank OUT base
+        mov     eax, [rcx+AH_PADDED]    ; padded_n
+        lea     rsi, [rcx+AH_SIZE]      ; bank OUT base
         imul    r10d, eax, AR_X_IN      ; 6*padded_n dwords = one bank
         lea     rdi, [rsi+r10*4]        ; bank IN base = OUT + 6*stride
         cld
-        mov     r11d, [rbx+AH_PARAMS+SP_FLAGS]
-        test    r11d, FLAG_GRID
-        jnz     .pads_only
         mov     ecx, r10d               ; brute: copy the whole OUT bank -> IN
         rep     movsd
         pop     rdi
         pop     rsi
-        pop     rbx
         ret
-  .pads_only:
-        mov     r11d, [rbx+AH_PARAMS+SP_N]  ; n (zero-extended: r11 is an index)
+  .grid:
+        push    rbx
+        mov     rbx, rcx                ; arena survives the pad copy
+        call    build_pads_core         ; carry the six pad tails OUT -> IN
+        mov     rcx, rbx
+        pop     rbx
+        jmp     grid_sort               ; overlay IN[0..n); rets to caller
+
+; ------------------------------------------------------------------
+; build_pads_core - the grid-mode half of build_core that is not the sort:
+; carry each of the six OUT pad tails [n, padded_n) into IN.
+;
+; Split out because the parallel build (pool_build) needs exactly this and
+; nothing else before it fans the sort out; both callers reach the same bytes,
+; so there is one description of what the pads are for rather than two.
+;
+;   in:       rcx = arena
+;   out:      IN pads = OUT pads for all six particle arrays; IN[0..n)
+;             untouched - the caller's sort overlays it
+;   clobbers: rax, rcx, r10, r11, flags; saves+restores rsi, rdi
+;   MXCSR:    untouched (integer copy)
+; ------------------------------------------------------------------
+build_pads_core:
+        push    rsi
+        push    rdi
+        mov     eax, [rcx+AH_PADDED]    ; padded_n
+        lea     rsi, [rcx+AH_SIZE]      ; bank OUT base
+        imul    r10d, eax, AR_X_IN
+        lea     rdi, [rsi+r10*4]        ; bank IN base = OUT + 6*stride
+        cld
+        mov     r11d, [rcx+AH_PARAMS+SP_N]  ; n (zero-extended: r11 is an index)
         sub     eax, r11d               ; pad = padded_n - n, in [16, 31]
         lea     rsi, [rsi+r11*4]        ; &OUT.x[n], the first pad element
         lea     rdi, [rdi+r11*4]        ; &IN.x[n]
@@ -451,9 +477,7 @@ build_core:
         jnz     .pad
         pop     rdi
         pop     rsi
-        mov     rcx, rbx                ; grid_sort takes the arena in rcx
-        pop     rbx
-        jmp     grid_sort               ; overlay IN[0..n); rets to caller
+        ret
 
 ; ------------------------------------------------------------------
 ; pass_core - dispatch the fused force+integrate to the code path the arena

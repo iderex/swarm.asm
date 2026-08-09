@@ -59,6 +59,16 @@ if (args.Contains("--buildsplit"))
     return 0;
 }
 
+// The contingency's own re-measurement (#243), behind an argument for the same
+// two reasons as the split above, plus a third: it holds a live worker pool, and
+// a pool running through the rest of the report would change every figure after
+// it.
+if (args.Contains("--buildmt"))
+{
+    BuildMt();
+    return 0;
+}
+
 int[] ns = [1024, 2048, 4096, 8192, 16384];
 const uint Scalar = 3, Avx2 = 1;
 
@@ -177,7 +187,7 @@ if (haveAvx2)
 // a pass before it times the build; the first frame's build is the unsorted
 // column of the #177 table below and is several times this one.
 //
-// The threaded rows fan only the pass. The build stays serial in v1, which is
+// The threaded rows fan only the pass. The build fans out across W = clamp(n/(g*g), 1, T) workers (#243), which is
 // what risk 2 and its contingency are about, so it is added back unchanged into
 // every threaded frame. A frame counting only the part that scaled would answer
 // a question nobody asked.
@@ -565,6 +575,32 @@ static unsafe double TimeGridPass(uint n, float rmax)
 //   nearSorted: true - a pass has run over sorted IN, so OUT is written at the
 //     same indices and is already cell-ordered. This is every frame after the
 //     first, and it is the "near-sorted input" masterplan risk 2 estimates.
+// The parallel build at a given thread count, on the same two input states and
+// with the same warm-up and min-of-rounds discipline TimeGridBuild uses, so the
+// two columns are subtractable. The pool must already be initialised by the
+// caller; swarm_build_mt falls back to the serial build when there is none, and
+// a figure taken through that fallback would read as a parallel one.
+static unsafe double TimeGridBuildMt(uint n, float rmax, bool nearSorted)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed n={n} rmax={rmax}");
+        if (nearSorted)
+        {
+            Native.swarm_build(arena);
+            Native.swarm_pass(arena, 0, n);
+        }
+        for (int i = 0; i < 3; i++)
+            Native.swarm_build_mt(arena);
+        return MinOfRounds(() => Native.swarm_build_mt(arena));
+    }
+    finally { NativeMemory.AlignedFree(arena); }
+}
+
 static unsafe double TimeGridBuild(uint n, float rmax, bool nearSorted = false)
 {
     SwarmParams p = MakeGridParams(n, rmax);
@@ -977,6 +1013,59 @@ static unsafe double MeanCandidatesPerParticle(void* arena, uint n, int g)
 // headline scene and g = 256 the dense one, a four-fold difference in cell
 // count, so the bottom rungs of the two ladders are a check on the instrument
 // rather than a second result.
+// --- Risk 2's contingency, measured (#243) ---------------------------------
+// The parallel scatter against the serial build it replaces, at the count and
+// the two dimensions the 1M scenes use, on both input states.
+//
+// The serial column is re-measured in the same run rather than quoted from the
+// section above, because the two figures are only subtractable if the host was
+// in the same state for both. The thread sweep is the whole result: the
+// contingency divides the O(n) half by T and multiplies the O(g^2) half by it,
+// so a win at one T is not a win at another, and the crossing point is the thing
+// the masterplan risk wants recorded.
+//
+// Both input states, because the risk is stated for near-sorted input and the
+// unsorted column is the first frame, and they differ by more than the frame
+// budget.
+static unsafe void BuildMt()
+{
+    Console.WriteLine();
+    Console.WriteLine("Risk 2's contingency (#243): parallel scatter vs the serial build at 1M");
+    Console.WriteLine();
+
+    const uint N = 1_048_576;
+    foreach (float rmax in new[] { 1f / 512f, 1f / 256f })
+    {
+        int g = GridDim(rmax);
+        double serialSorted = TimeGridBuild(N, rmax, nearSorted: true);
+        double serialCold = TimeGridBuild(N, rmax);
+        Console.WriteLine($"rmax = {rmax:0.00000}, g = {g}, cells = {(long)g * g}");
+        Console.WriteLine($"  serial: sorted {serialSorted:0.000} ms   unsorted {serialCold:0.000} ms");
+        Console.WriteLine();
+        Console.WriteLine($"{"T",4} {"sorted ms",10} {"x",7} {"unsorted ms",12} {"x",7}");
+        Console.WriteLine(new string('-', 44));
+        foreach (int t in new[] { 1, 2, 4, 8, 16, 0 })
+        {
+            int actual = Native.swarm_pool_init(t);
+            if (actual < 1)
+                throw new InvalidOperationException($"pool_init({t}) failed");
+            try
+            {
+                double sorted = TimeGridBuildMt(N, rmax, nearSorted: true);
+                double cold = TimeGridBuildMt(N, rmax, nearSorted: false);
+                Console.WriteLine(
+                    $"{actual,4} {sorted,10:0.000} {serialSorted / sorted,6:0.00}x " +
+                    $"{cold,12:0.000} {serialCold / cold,6:0.00}x");
+            }
+            finally { Native.swarm_pool_shutdown(); }
+        }
+        Console.WriteLine();
+    }
+    Console.WriteLine("T is the pool's ACTUAL worker count (0 asks for the physical-core count).");
+    Console.WriteLine("x = serial ms / parallel ms at that T; below 1.00 the contingency costs more than it saves.");
+    Console.WriteLine("ms = best of 9 rounds, as every other figure here; the host was not quiesced unless said so.");
+}
+
 static unsafe void BuildSplit()
 {
     Console.WriteLine();
@@ -1065,6 +1154,9 @@ internal static unsafe class Native
 
     [DllImport("swarm.kernel.dll")]
     internal static extern void swarm_pass_mt(void* arena);
+
+    [DllImport("swarm.kernel.dll")]
+    internal static extern void swarm_build_mt(void* arena);
 
     [DllImport("swarm.kernel.dll")]
     internal static extern void swarm_pool_shutdown();
