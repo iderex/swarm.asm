@@ -1,7 +1,8 @@
 ; SPDX-License-Identifier: MIT
 ; pool.inc - the M3 persistent worker pool (platform layer; docs/MASTERPLAN.md
-; decision 6, issue #68). Parallelises the force+integrate pass across cores;
-; the build (counting sort) stays serial in v1.
+; decision 6, issue #68). Parallelises the force+integrate pass across cores,
+; and - since #243 - the counting-sort build's two O(n) phases as well, over the
+; same threads and the same static split.
 ;
 ; Why this is platform, not kernel: the pool is pure OS orchestration
 ; (CreateThread / auto-reset events) and holds mutable state (handles, ranges).
@@ -13,7 +14,7 @@
 ;
 ; Determinism (the load-bearing invariant). The pass is a pure map
 ; OUT[i] = f(i, IN, cell_start, params): IN and cell_start are frozen by the
-; serial build before any worker is signalled, ranges are disjoint and cover
+; build before any worker is signalled for the pass, ranges are disjoint and cover
 ; [0,n) exactly, so the OUT bank is bit-identical to the serial pass for ANY
 ; thread count, partition, and completion order - the machine-checked form of
 ; GridPassSplitInvariance. The one landmine is MXCSR: it is PER THREAD, so a
@@ -41,6 +42,12 @@
 
 POOL_MAX = 64                          ; worker cap (WaitForMultipleObjects
                                        ;   takes <= 64 handles: T-1 <= 63)
+POOL_JOB_PASS    = 0                   ; the fan-out's three work kinds
+POOL_JOB_HIST    = 1
+POOL_JOB_SCATTER = 2
+MEM_COMMIT_RESERVE = 0x3000            ; MEM_COMMIT | MEM_RESERVE
+MEM_RELEASE        = 0x8000
+PAGE_READWRITE     = 4
 RELATION_PROCESSOR_CORE = 0            ; LOGICAL_PROCESSOR_RELATIONSHIP value
 LPI_REL    = 8                         ; SYSTEM_LOGICAL_PROCESSOR_INFORMATION
                                        ;   .Relationship offset (record stride 32)
@@ -88,12 +95,31 @@ pool_worker_thread:
         call    [WaitForSingleObject]
         cmp     dword [pool_stopflag], 0
         jne     .exit
+        mov     esi, [pool_job]
+        test    esi, esi
+        jnz     .build_job
         mov     rcx, [pool_arena]      ; pool_pass(arena, first[w], last[w])
         lea     rax, [pool_first]
         mov     edx, [rax+rbx*4]
         lea     rax, [pool_last]
         mov     r8d, [rax+rbx*4]
         call    pool_pass
+        jmp     .signal
+  .build_job:                          ; grid_*_range(arena, &scratch[w],
+        mov     rcx, [pool_arena]      ;   first[w], last[w])
+        imul    rdx, rbx, GRID_CELLS_MAX*4
+        add     rdx, [pool_scratch]
+        lea     rax, [pool_first]
+        mov     r8d, [rax+rbx*4]
+        lea     rax, [pool_last]
+        mov     r9d, [rax+rbx*4]
+        cmp     esi, POOL_JOB_HIST
+        jne     .scatter_job
+        call    grid_hist_range
+        jmp     .signal
+  .scatter_job:
+        call    grid_scatter_range
+  .signal:
         lea     rax, [pool_done]       ; SetEvent(done[w])
         mov     rcx, [rax+rbx*8]
         call    [SetEvent]
@@ -107,19 +133,20 @@ pool_worker_thread:
         ret
 
 ; ------------------------------------------------------------------
-; pool_partition - static even 16-aligned split of [0,n) across T workers.
-;   in:       ecx = n; reads [pool_nthreads] = T
-;   out:      pool_first[w], pool_last[w] for w in 0..T-1: disjoint, covering
-;             [0,n) exactly, interior boundaries multiples of 16, last[T-1] = n
+; pool_partition - static even 16-aligned split of [0,n) across W workers.
+;   in:       ecx = n, edx = W (>= 1, <= pool_nthreads)
+;   out:      pool_first[w], pool_last[w] for w in 0..W-1: disjoint, covering
+;             [0,n) exactly, interior boundaries multiples of 16, last[W-1] = n.
+;             Slots at or above W are left as they were and must not be read
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, flags; preserves rbx
 ;   MXCSR:    untouched (integer only)
 ; ------------------------------------------------------------------
-; q = round_up_16(ceil(n/T)); first[w] = min(w*q, n); last[w] = min((w+1)*q, n).
-; T <= 64 and n <= 2^20, so w*q < 2^21 - the 32-bit multiply cannot overflow.
+; q = round_up_16(ceil(n/W)); first[w] = min(w*q, n); last[w] = min((w+1)*q, n).
+; W <= 64 and n <= 2^20, so w*q < 2^21 - the 32-bit multiply cannot overflow.
 pool_partition:
         push    rbx
         mov     r8d, ecx               ; n
-        mov     r9d, [pool_nthreads]   ; T
+        mov     r9d, edx               ; W
         mov     eax, r8d
         add     eax, r9d
         dec     eax                    ; n + T - 1
@@ -155,27 +182,33 @@ pool_partition:
         ret
 
 ; ------------------------------------------------------------------
-; pool_fanout - one parallel pass over [0,n): wake workers, run worker 0's
-; range on this thread, join. No build, no frame advance (the caller owns
-; those). Assumes IN and cell_start are already frozen by the serial build.
-;   in:       rcx = arena
-;   out:      OUT[0..n) integrated
-;   clobbers: Win64 volatiles; preserves rbx/rsi/r12 (and rbp)
-;   MXCSR:    the pass pins it per thread via pool_pass; fanout is integer
+; pool_run_job - one fan-out of an already-partitioned range: wake workers, run
+; worker 0's share on this thread, join. The single place a work kind is turned
+; into T running copies of itself.
+;   in:       rcx = arena, edx = POOL_JOB_*, r8d = W, the number of workers this
+;             job is partitioned across (1 <= W <= pool_nthreads).
+;             pool_first/pool_last[0..W) are filled and pool_arena is published
+;             by the caller. Workers at or above W stay parked - they are never
+;             woken, so their done events are never signalled and the join must
+;             not wait on them
+;   out:      every worker has finished its share of that job
+;   clobbers: Win64 volatiles; preserves rbx/rsi/rdi/r12 (and rbp)
+;   MXCSR:    the pass pins it per thread via pool_pass; the two build jobs are
+;             integer and pin nothing (grid.inc: MXCSR untouched)
 ; ------------------------------------------------------------------
-pool_fanout:
+pool_run_job:
         push    rbp
         mov     rbp, rsp
         push    rbx
         push    rsi
         push    rdi
         push    r12
-        sub     rsp, 32                ; shadow space (all API calls <= 4 args)
+        push    r13
+        sub     rsp, 40                ; shadow space (all API calls <= 4 args)
         mov     rbx, rcx               ; arena
-        mov     [pool_arena], rbx      ; publish for the workers
-        mov     ecx, [rbx+AH_PARAMS+SP_N]
-        call    pool_partition         ; fill first/last[0..T-1]
-        mov     r12d, [pool_nthreads]  ; T
+        mov     r13d, edx              ; job
+        mov     [pool_job], r13d       ; publish before any worker is woken
+        mov     r12d, r8d              ; W
         mov     esi, 1                 ; wake workers 1..T-1
   .wake:
         cmp     esi, r12d
@@ -186,13 +219,30 @@ pool_fanout:
         inc     esi
         jmp     .wake
   .main_work:
-        mov     rcx, rbx               ; worker 0 runs on this thread:
-        lea     rax, [pool_first]      ;   pool_pass(arena, first[0], last[0])
+        test    r13d, r13d             ; worker 0 runs on this thread
+        jnz     .main_build
+        mov     rcx, rbx               ; pool_pass(arena, first[0], last[0])
+        lea     rax, [pool_first]
         mov     edx, [rax]
         lea     rax, [pool_last]
         mov     r8d, [rax]
         call    pool_pass
-        cmp     r12d, 1                ; single worker: nothing to join
+        jmp     .join
+  .main_build:                         ; grid_*_range(arena, &scratch[0],
+        mov     rcx, rbx               ;   first[0], last[0])
+        mov     rdx, [pool_scratch]
+        lea     rax, [pool_first]
+        mov     r8d, [rax]
+        lea     rax, [pool_last]
+        mov     r9d, [rax]
+        cmp     r13d, POOL_JOB_HIST
+        jne     .main_scatter
+        call    grid_hist_range
+        jmp     .join
+  .main_scatter:
+        call    grid_scatter_range
+  .join:
+        cmp     r12d, 1                ; one worker: nothing to join
         jbe     .done
         mov     ecx, r12d              ; WaitForMultipleObjects(T-1,
         dec     ecx                    ;   &done[1], TRUE, INFINITE)
@@ -202,10 +252,135 @@ pool_fanout:
         mov     r9d, -1                ; INFINITE
         call    [WaitForMultipleObjects]
   .done:
-        add     rsp, 32
+        add     rsp, 40
+        pop     r13
         pop     r12
         pop     rdi
         pop     rsi
+        pop     rbx
+        pop     rbp
+        ret
+
+; ------------------------------------------------------------------
+; pool_fanout - one parallel pass over [0,n): partition, then fan the pass out.
+; No build, no frame advance (the caller owns those). Assumes IN and cell_start
+; are already frozen by the build.
+;   in:       rcx = arena
+;   out:      OUT[0..n) integrated
+;   clobbers: Win64 volatiles only. rbx/rbp are saved here; rsi/rdi/r12/r13 by
+;             pool_run_job; r14/r15 are never touched - so the whole nonvolatile
+;             set survives, which swarm_pass_mt tail-jumps to this for
+;   MXCSR:    the pass pins it per thread via pool_pass; fanout is integer
+; ------------------------------------------------------------------
+pool_fanout:
+        push    rbp
+        mov     rbp, rsp
+        push    rbx
+        sub     rsp, 40
+        mov     rbx, rcx               ; arena
+        mov     [pool_arena], rbx      ; publish for the workers
+        mov     ecx, [rbx+AH_PARAMS+SP_N]
+        mov     edx, [pool_nthreads]
+        call    pool_partition         ; fill first/last[0..T-1]
+        mov     rcx, rbx
+        mov     edx, POOL_JOB_PASS
+        mov     r8d, [pool_nthreads]   ; the pass scales with the whole pool
+        call    pool_run_job
+        add     rsp, 40
+        pop     rbx
+        pop     rbp
+        ret
+
+; ------------------------------------------------------------------
+; pool_build - the grid build with its scatter across the worker pool
+; (docs/MASTERPLAN.md, decision 6; risk 2's contingency).
+;
+; Four phases, the same four the serial sort runs, re-cut so the O(n) two are
+; parallel: the pads are carried, every worker counts its own slice into its own
+; histogram, one sweep turns the T histograms into T per-cell write cursors and
+; publishes cell_start, and every worker scatters its own slice from its own
+; cursors. Bit-identical to grid_sort for any T - the cursor split is what keeps
+; equal-cell particles in ascending-i order (grid.inc says why).
+;
+; Falls back to the serial build, not to a wrong answer, whenever the parallel
+; shape does not apply: brute mode has no sort at all, and a pool that was never
+; created (or whose scratch allocation failed, which pool_init refuses to
+; return from) has nowhere to put the histograms. T = 1 is NOT a fallback case -
+; the one-worker fan-out runs the same three phases inline, which is what lets
+; the harness sweep T = 1 as a real arm of BuildParallelMatchesSerial rather
+; than as a comparison of the serial build against itself.
+;
+; THE BUILD DOES NOT USE THE WHOLE POOL, and the pass does. The two scale in
+; opposite directions: adding a worker divides the O(n) histogram and scatter,
+; and multiplies the O(g*g) cursor sweep, because every worker needs a count for
+; every cell whether or not it holds a particle there. So the bound is the point
+; where a worker's slice stops being bigger than its own bucket array:
+;
+;       W = clamp(n / (g*g), 1, T)
+;
+; A worker below that line spends more time walking buckets than particles, and
+; past it the fan-out costs more than it saves. This is derived rather than
+; tuned, and docs/BENCHMARKS.md records that it lands on the measured optimum at
+; both dimensions the 1M scenes use - W = 4 at g = 512 and W = 16 at g = 256 -
+; where the whole-pool fan-out was at or below break-even at g = 512.
+;
+;   in:       rcx = arena
+;   out:      as build_core: IN pads carried, IN[0..n) cell-sorted, cell_start
+;             filled
+;   clobbers: Win64 volatiles only. rbx/rbp/r12 are saved here; rsi/rdi/r13 by
+;             pool_run_job; r14/r15 are never touched - the same whole-set
+;             promise build_core makes, since swarm_build_mt exports this
+;   MXCSR:    untouched (the whole build is integer)
+; ------------------------------------------------------------------
+pool_build:
+        mov     eax, [rcx+AH_PARAMS+SP_FLAGS]
+        test    eax, FLAG_GRID
+        jz      build_core             ; brute: nothing to parallelise
+        cmp     dword [pool_nthreads], 1
+        jb      build_core             ; no pool at all: nowhere to fan out to
+        cmp     qword [pool_scratch], 0
+        je      build_core             ; fail-closed: no scratch, no parallel sort
+        push    rbp
+        mov     rbp, rsp
+        push    rbx
+        push    r12
+        sub     rsp, 32                ; shadow space (all calls <= 4 args)
+        mov     rbx, rcx               ; arena
+        mov     [pool_arena], rbx      ; publish for the workers
+        call    build_pads_core        ; the six pad tails OUT -> IN
+        mov     ecx, [rbx+AH_G]        ; W = clamp(n / (g*g), 1, T)
+        imul    ecx, ecx               ; g*g >= 16, so the divisor is never zero
+        mov     eax, [rbx+AH_PARAMS+SP_N]
+        xor     edx, edx
+        div     ecx
+        mov     r12d, eax
+        test    r12d, r12d
+        jnz     .w_lo_ok
+        mov     r12d, 1
+  .w_lo_ok:
+        cmp     r12d, [pool_nthreads]
+        jbe     .w_hi_ok
+        mov     r12d, [pool_nthreads]
+  .w_hi_ok:
+        mov     ecx, [rbx+AH_PARAMS+SP_N]
+        mov     edx, r12d
+        call    pool_partition         ; one partition for BOTH build jobs: the
+                                       ;   scatter must replay the histogram's
+                                       ;   ranges exactly or the cursors lie
+        mov     rcx, rbx
+        mov     edx, POOL_JOB_HIST
+        mov     r8d, r12d
+        call    pool_run_job
+        mov     rcx, rbx               ; grid_cursors(arena, scratch, W)
+        mov     rdx, [pool_scratch]
+        mov     r8d, r12d
+        call    grid_cursors
+        mov     rcx, rbx
+        mov     edx, POOL_JOB_SCATTER
+        mov     r8d, r12d
+        call    pool_run_job
+        add     rsp, 32
+        pop     r12
         pop     rbx
         pop     rbp
         ret
@@ -222,10 +397,11 @@ pool_pass_all:
         jmp     pool_fanout
 
 ; ------------------------------------------------------------------
-; pool_step - the threaded frame loop: serial build, parallel pass, advance.
+; pool_step - the threaded frame loop: parallel build, parallel pass, advance.
 ;   in:       rcx = arena, edx = n_steps
 ;   out:      the world advanced n_steps; AH_FRAME += n_steps. Bit-identical to
-;             swarm_step for any T (build is serial; the pass is split-invariant)
+;             swarm_step for any T - the pass is split-invariant and the build's
+;             per-worker cursors reproduce the serial sort's order exactly
 ;   clobbers: Win64 volatiles; preserves rbx/rsi (and rbp)
 ;   MXCSR:    build is integer; the pass pins it per thread via pool_pass
 ; ------------------------------------------------------------------
@@ -241,7 +417,7 @@ pool_step:
         mov     esi, edx               ; remaining steps
   .loop:
         mov     rcx, rbx
-        call    build_core             ; serial: OUT -> IN (+ grid sort)
+        call    pool_build             ; OUT -> IN (+ grid sort, scatter fanned out)
         mov     rcx, rbx
         call    pool_fanout            ; parallel: pass over [0,n)
         inc     qword [rbx+AH_FRAME]
@@ -367,6 +543,16 @@ pool_init:
         mov     eax, r14d
         dec     eax
         mov     [pool_nworkers], eax   ; T-1
+        lea     eax, [r14+1]           ; T+1 blocks: one histogram per worker
+        imul    rdx, rax, GRID_CELLS_MAX*4  ;   plus grid_cursors' workspace
+        mov     [pool_scratch_bytes], rdx
+        xor     ecx, ecx               ; VirtualAlloc(NULL, bytes,
+        mov     r8d, MEM_COMMIT_RESERVE ;   MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+        mov     r9d, PAGE_READWRITE
+        call    [VirtualAlloc]
+        test    rax, rax
+        jz      .fail                  ; fail-closed: no scratch, no pool
+        mov     [pool_scratch], rax
         mov     esi, 1                 ; spawn workers 1..T-1
   .spawn:
         cmp     esi, r14d
@@ -495,6 +681,15 @@ pool_shutdown:
         inc     ebx
         jmp     .cloop
   .reset:
+        mov     rcx, [pool_scratch]    ; VirtualFree(scratch, 0, MEM_RELEASE)
+        test    rcx, rcx
+        jz      .no_scratch
+        xor     edx, edx
+        mov     r8d, MEM_RELEASE
+        call    [VirtualFree]
+        mov     qword [pool_scratch], 0
+        mov     qword [pool_scratch_bytes], 0
+  .no_scratch:
         mov     dword [pool_nthreads], 0
         mov     dword [pool_nworkers], 0
         mov     dword [pool_stopflag], 0
@@ -519,7 +714,11 @@ macro pool_storage {
   pool_nworkers dd 0                   ; T-1 (created threads)
   pool_stopflag dd 0                   ; workers exit their park loop when set
   pool_cpulen   dd 0                   ; GetLogicalProcessorInformation length
+  pool_job      dd 0                   ; POOL_JOB_*, published before each wake
+  pool_pad0     dd 0                   ; keep the quadwords below 8-aligned
   pool_arena    dq 0                   ; the frame's arena, published to workers
+  pool_scratch  dq 0                   ; (T+1) x GRID_CELLS_MAX dwords, or 0
+  pool_scratch_bytes dq 0              ; what VirtualFree releases
   pool_first    rd POOL_MAX            ; per-worker range start
   pool_last     rd POOL_MAX            ; per-worker range end (exclusive)
   pool_go       rq POOL_MAX            ; per-worker wake event (auto-reset)

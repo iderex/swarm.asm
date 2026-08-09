@@ -620,6 +620,107 @@ quiesced for either. The unsorted column is printed because dropping a column
 that disagreed would be the worse of the two options, and nothing in this
 section's reading rests on it.
 
+## Risk 2's contingency, built and measured (#243)
+
+The section above says what the contingency trades. This is what it costs and
+what it returns, with the parallel scatter in the tree rather than argued about.
+
+`swarm_build_mt` (`pool_build`, `src/platform/pool.inc`) runs the counting sort's
+two O(n) phases across the worker pool: each worker histograms its own slice into
+its own block of per-cell counts, one sweep turns those blocks into per-worker
+per-cell write cursors and publishes `cell_start`, and each worker then scatters
+its own slice forward from its own cursors. The result is byte-identical to the
+serial `swarm_build` at every worker count, asserted by
+`BuildParallelMatchesSerial` in `tests/Swarm.Tests/ThreadingTests.cs` over the
+whole arena image - the reordered bank and the run-start table together - on the
+unsorted first frame and on the near-sorted steady state.
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" run -c Release --project tests\Swarm.Bench\Swarm.Bench.csproj -- --buildmt
+```
+
+Reference machine: AMD Ryzen 9 5950X (Zen 3), 16 physical / 32 logical cores,
+Windows 11, AVX2 (`swarm_cpu_paths = 0x1`). `n = 1,048,576`, both grid dimensions
+the 1M scenes use, seed and matrix as every other grid row here. Each figure is
+the best of nine rounds. **The host was not quiesced.** Both runs were taken at
+commit `49fba06` plus this change, with the serial column re-measured inside the
+same run so the two columns are subtractable.
+
+### The two runs
+
+`T` is the pool's actual worker count; the two `16` rows in each block are the
+explicit request and the auto-detect, which resolve to the same number on this
+part. `x` is serial ms divided by parallel ms.
+
+`rmax = 1/512`, `g = 512`, 262,144 cells - the headline scene:
+
+| run | serial sorted | T=1   | T=2   | T=4   | T=8   | T=16  | T=16 (auto) |
+| --- | ------------- | ----- | ----- | ----- | ----- | ----- | ----------- |
+| 1   | 5.741         | 5.694 | 4.380 | 3.617 | 3.598 | 4.085 | 3.338       |
+| 2   | 5.712         | 5.748 | 4.498 | 3.135 | 3.731 | 3.087 | 3.459       |
+
+| run | serial unsorted | T=1    | T=2    | T=4    | T=8    | T=16   | T=16 (auto) |
+| --- | --------------- | ------ | ------ | ------ | ------ | ------ | ----------- |
+| 1   | 21.086          | 17.968 | 16.431 | 12.001 | 12.475 | 12.594 | 11.103      |
+| 2   | 23.963          | 22.001 | 13.485 | 10.002 | 10.844 | 11.830 | 11.445      |
+
+`rmax = 1/256`, `g = 256`, 65,536 cells - the dense scene:
+
+| run | serial sorted | T=1   | T=2   | T=4   | T=8   | T=16  | T=16 (auto) |
+| --- | ------------- | ----- | ----- | ----- | ----- | ----- | ----------- |
+| 1   | 5.958         | 5.652 | 3.922 | 2.598 | 2.532 | 2.183 | 2.179       |
+| 2   | 5.818         | 5.460 | 3.183 | 3.026 | 2.353 | 2.393 | 2.153       |
+
+| run | serial unsorted | T=1    | T=2    | T=4   | T=8   | T=16  | T=16 (auto) |
+| --- | --------------- | ------ | ------ | ----- | ----- | ----- | ----------- |
+| 1   | 20.638          | 15.390 | 12.364 | 7.691 | 5.203 | 7.151 | 6.905       |
+| 2   | 17.335          | 13.532 | 10.577 | 8.189 | 4.625 | 6.412 | 6.913       |
+
+### Reading it - risk 2's line is met at the headline scene
+
+At the worker count the shipped binary resolves to, the headline scene's
+near-sorted build is **3.338 and 3.459 ms** across the two runs, against risk 2's
+`~4.5 ms` line and against 5.741 and 5.712 ms serial in the same runs. The line
+is met. The dense scene comes to 2.179 and 2.153 ms.
+
+The first frame moves further in absolute terms and less in ratio: 21.086 to
+11.103 ms and 23.963 to 11.445 ms at `g = 512`. That frame is still four times
+over the 16.67 ms budget on its own, and nothing here changes that - the
+acceptance in #125 discards 600 warm-up frames, so the headline claim is not
+exposed to it, and a run's first frame still is.
+
+**The build does not use the whole pool, and that is the result rather than a
+detail.** Measured before the bound existed, with every worker taking part, the
+headline scene at `T = 16` ran 0.75x and 1.03x across two runs - at or below
+break-even, and slower than the serial build it replaces on one of them. The
+mechanism is the one the section above predicted: a worker whose slice holds
+fewer particles than the cell array holds buckets spends more time walking
+buckets than particles. So `pool_build` splits the build across
+`W = clamp(n / (g*g), 1, T)` workers and leaves the rest parked, while the pass
+continues to use all of them.
+
+That bound is derived from the two work terms rather than fitted, and it lands on
+the measured optimum at both dimensions independently: `W = 4` at `g = 512`, where
+the un-bounded sweep peaks at `T = 4`, and `W = 16` at `g = 256`, where it peaks
+at the top. It is a rule about one machine's measured optimum only to the extent
+that both dimensions agreeing is evidence; a third dimension has not been
+measured, and no claim is made beyond the two rows above.
+
+**What the sweep above therefore is.** With the bound in place, `T` is the pool
+size and not the number of workers the build uses, so the `g = 512` rows from
+`T = 4` upward are all running `W = 4` and their differences are host noise, not
+scaling. The spread across those rows - 3.087 to 4.085 ms for the same work - is
+the size of that noise on an unquiesced host, and it is larger than several of
+the steps in the tables above.
+
+**One figure to carry forward rather than settle here.** `docs/BENCHMARKS.md`
+records the 1M threaded frame at 15.535 ms worst-run, of which the build was
+7.232 ms. These runs put the same build between 3.3 and 3.5 ms with a serial
+column of 5.7, which is neither the 7.232 nor the 7.049 of the probe. The
+instrument, the host state and the day differ; the frame figure has not been
+re-taken with this change in it, and until it is, subtracting one from the other
+would be a claim rather than a measurement.
+
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 
 Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and
