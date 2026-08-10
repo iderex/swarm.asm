@@ -870,7 +870,11 @@ $s = $ms | Sort-Object
 The dump is a 40-byte header - `'SWRMFRM1'`, then `qpc_freq`, `count`, `n`,
 `flags`, `seed` - followed by `count` little-endian `u64` tick deltas. The
 scene the samples belong to is inside the file, so a dump cannot be quoted
-against a run it did not come from.
+against a run it did not come from. `flags` carries the plot mode as well as
+the spatial one, so it is what separates a 1-pixel capture from a `-splat` one.
+
+**Plot mode: 1 pixel per particle** for the rows below, taken before the 2x2
+raster existed.
 
 ### Reading the M1 numbers - 8,192 @ 60 fps reached
 
@@ -919,6 +923,12 @@ of each frame only (step plus plot plus blit, never the pacing wait), 3600
 samples written to `swarm-frames.bin`, recomputed with the snippet printed
 there. The budget is one frame at 60 fps, 16.67 ms, on p99.
 
+**Plot mode: 1 pixel per particle.** The commands above carry no `-splat`, and
+the plot is inside the timed window, so the mode is part of what these rows
+measure and a preset path does not state it. Decision 9's amendment requires it
+beside the row for that reason. No 2x2 row exists here; that raster's cost has
+not been measured.
+
 ### `presets/headline.txt` - 1M, rmax = 0.001953, g = 512, k = 12.6
 
 | run | mean ms | p50 ms  | p99 ms  | max ms  |
@@ -944,7 +954,9 @@ there. The budget is one frame at 60 fps, 16.67 ms, on p99.
   `n = 1048576`, 4 species, seed `0x9E3779B97F4A7C15`, `FLAG_GRID` applied by
   the exe, and only `rmax` differing between them. Each dump's own header
   repeats `n = 1048576`, `flags = 0x1` and `seed = 0x9E3779B97F4A7C15`, so a
-  file cannot be quoted against a run it did not come from.
+  file cannot be quoted against a run it did not come from. `flags = 0x1` is
+  `FLAG_GRID` alone, so the header also settles the plot mode: a `-splat` run
+  records `0x3` and is not one of these.
 - **Commit**: `33047f3` for `src/`, which the capture build is byte-for-byte,
   plus the two preset files added by this change. **Date**: 2026-08-08.
 - Every run is 3600 consecutive frames from process start with **no warm-up

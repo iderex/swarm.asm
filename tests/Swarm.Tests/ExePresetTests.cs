@@ -32,6 +32,51 @@ public sealed class ExePresetTests
     }
 
     /// <summary>
+    /// The `-splat` carrier sits in a two-sided window and nothing else sees
+    /// it. `preset_apply` replaces the whole params struct, so the flag has to
+    /// be applied after it or a preset run silently loses the mode; and
+    /// `plot_core` reads the flag out of the arena copy the header carries, so
+    /// it has to be applied before `sim_init` fills that header or the mode
+    /// never reaches the raster at all. Both failures are silent: the exe
+    /// runs, exits 0, and draws single pixels.
+    ///
+    /// This is a source-order check because there is no cheaper observation.
+    /// The exe's only terminating modes are `-smoke`, which draws and says
+    /// nothing about what it drew, and `-capture`, which is 3600 paced frames.
+    /// </summary>
+    [Fact]
+    public void SplatFlagIsAppliedInsideItsWindow()
+    {
+        var src = File.ReadAllLines(Path.Combine(Build.RepoRoot, "src", "swarm.asm"));
+
+        int IndexOf(string needle, int from = 0)
+        {
+            for (int i = from; i < src.Length; i++)
+            {
+                if (src[i].Contains(needle, StringComparison.Ordinal)) return i;
+            }
+            return -1;
+        }
+
+        int presetApply = IndexOf("call    preset_apply");
+        int splatOr = IndexOf("or      dword [sim_params+SP_FLAGS], FLAG_SPLAT");
+        int simInit = IndexOf("call    sim_init");
+
+        Assert.True(presetApply >= 0, "src/swarm.asm no longer calls preset_apply");
+        Assert.True(splatOr >= 0, "src/swarm.asm no longer ORs FLAG_SPLAT into sim_params");
+        Assert.True(simInit >= 0, "src/swarm.asm no longer calls sim_init");
+
+        Assert.True(
+            presetApply < splatOr,
+            $"FLAG_SPLAT is applied at line {splatOr + 1}, before preset_apply at line "
+                + $"{presetApply + 1}; a preset run would replace the struct and drop the mode");
+        Assert.True(
+            splatOr < simInit,
+            $"FLAG_SPLAT is applied at line {splatOr + 1}, after sim_init at line "
+                + $"{simInit + 1}; the arena header plot_core reads would never carry it");
+    }
+
+    /// <summary>
     /// The must-catch half. The assertions above are worth exactly what they
     /// refuse, so each drift is built as bytes, pushed through the same
     /// extraction, and required to fail.
@@ -82,8 +127,11 @@ public static class ExePreset
     /// <summary>src/kernel/abi.inc FLAG_GRID.</summary>
     public const uint FlagGrid = 1;
 
+    /// <summary>src/kernel/abi.inc FLAG_SPLAT.</summary>
+    public const uint FlagSplat = 2;
+
     /// <summary>src/kernel/abi.inc SP_FLAGS_VALID - the whole accepted mask.</summary>
-    private const uint FlagsValid = FlagGrid;
+    private const uint FlagsValid = FlagGrid | FlagSplat;
 
     /// <summary>src/kernel/abi.inc SP_SIZE.</summary>
     public static readonly int Size = Marshal.SizeOf<SwarmParams>();

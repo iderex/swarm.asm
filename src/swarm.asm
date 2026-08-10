@@ -109,7 +109,8 @@ start:
         invoke  GetModuleHandle, 0
         mov     [wc.hInstance], rax
 
-        ; -smoke selects the terminating CI mode, -capture the measurement run.
+        ; -smoke selects the terminating CI mode, -capture the measurement run,
+        ; -splat the 2x2 raster.
         invoke  GetCommandLine
         mov     [cmd_line], rax
         mov     rcx, rax
@@ -133,6 +134,12 @@ start:
         jz      .fail
         mov     [capture_buf], rax
   .args_done:
+        ; Scanned after the capture block on purpose: that block reads the
+        ; capture flag out of eax, so another scan may not land between them.
+        mov     rcx, [cmd_line]
+        lea     rdx, [splat_needle]
+        call    scan_arg_flag
+        mov     [splat_mode], eax
 
         ; A preset named on the command line replaces the built-in one before
         ; anything is sized from it. Deliberately ahead of the window and the
@@ -145,6 +152,15 @@ start:
         mov     rcx, rax
         call    preset_apply            ; returns only on a clean parse
   .preset_done:
+
+        ; The plot mode is the exe's decision for the same reason grid mode is:
+        ; decision 10's grammar has no key for it, and decision 9's amendment
+        ; puts the carrier on the command line. Applied after the preset, which
+        ; replaces the whole struct when one is given.
+        cmp     dword [splat_mode], 0
+        je      .splat_done
+        or      dword [sim_params+SP_FLAGS], FLAG_SPLAT
+  .splat_done:
 
         invoke  LoadCursor, 0, IDC_ARROW
         mov     [wc.hCursor], rax
@@ -1302,6 +1318,7 @@ section '.data' data readable writeable
   _class         TCHAR 'SWARM', 0
   smoke_needle   db '-smoke', 0
   capture_needle db '-capture', 0
+  splat_needle   db '-splat', 0
   cap_path       du 'swarm-frames.bin', 0    ; CreateFileW takes UTF-16
 
   ; Preset failure text. Every cap that appears in a message is formatted from
@@ -1340,6 +1357,7 @@ section '.data' data readable writeable
   win_h       dd ?
   frame_count dd 0
   smoke_mode  dd 0
+  splat_mode  dd 0                      ; -splat: the 2x2 plot mode
 
   ; -capture state. capture_buf stays 0 outside capture mode - the buffer is
   ; committed at startup only when the flag is present, so the shipped image
