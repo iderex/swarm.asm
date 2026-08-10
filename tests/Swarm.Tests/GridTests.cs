@@ -408,12 +408,15 @@ public sealed unsafe class GridTests
         return result;
     }
 
-    // FLAG_GRID (bit 0) is accepted; every other flag bit is reserved and
-    // rejected fail-closed (init leaves the arena untouched).
+    // FLAG_GRID (bit 0) and FLAG_SPLAT (bit 1) are accepted; every other flag
+    // bit is reserved and rejected fail-closed (init leaves the arena
+    // untouched).
     [Theory]
     [InlineData(1u, true)] // FLAG_GRID
     [InlineData(0u, true)] // brute
-    [InlineData(2u, false)] // reserved bit
+    [InlineData(2u, true)] // FLAG_SPLAT
+    [InlineData(3u, true)] // both
+    [InlineData(4u, false)] // reserved bit
     [InlineData(0x80000000u, false)] // high reserved bit
     public void ReservedFlagBitsAreRejected(uint flags, bool valid)
     {

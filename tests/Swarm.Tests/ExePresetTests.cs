@@ -82,8 +82,11 @@ public static class ExePreset
     /// <summary>src/kernel/abi.inc FLAG_GRID.</summary>
     public const uint FlagGrid = 1;
 
+    /// <summary>src/kernel/abi.inc FLAG_SPLAT.</summary>
+    public const uint FlagSplat = 2;
+
     /// <summary>src/kernel/abi.inc SP_FLAGS_VALID - the whole accepted mask.</summary>
-    private const uint FlagsValid = FlagGrid;
+    private const uint FlagsValid = FlagGrid | FlagSplat;
 
     /// <summary>src/kernel/abi.inc SP_SIZE.</summary>
     public static readonly int Size = Marshal.SizeOf<SwarmParams>();

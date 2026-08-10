@@ -28,8 +28,13 @@ SP_SIZE        = 304
 
 ; SwarmParams.flags bits. Grid mode selects the counting-sort build + (later)
 ; the neighborhood force; its absence is the brute-force path (decision 3).
+; Splat mode selects the 2x2 raster in plot.inc; its absence is the 1-pixel
+; raster. Both are platform choices the grammar has no key for (decision 9's
+; amendment, decision 10): the parser leaves the field zero and the exe sets
+; the bits it wants.
 FLAG_GRID      = 1
-SP_FLAGS_VALID = FLAG_GRID               ; mask of accepted flag bits (fail-closed)
+FLAG_SPLAT     = 2
+SP_FLAGS_VALID = FLAG_GRID or FLAG_SPLAT ; mask of accepted flag bits (fail-closed)
 
 ; swarm_parse_preset error encoding: success = 0; failure =
 ;   (i32)(0x80000000 or (code shl 20) or min(line, 0xFFFFF)).
