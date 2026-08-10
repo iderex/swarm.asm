@@ -21,9 +21,12 @@
 ; anchor's own two-sided belts are untouched, so the splat can only ever grow
 ; from a pixel already in range.
 ;
-; Both statements hold for w >= 1 and h >= 1. At w = 0 or h = 0 the anchor
-; itself already lands outside a zero-word buffer, which predates the splat
-; and is not repaired here (#265); the splat widens that overrun by one word.
+; A zero dimension is the one case the belts cannot express, because there is
+; no in-range pixel for them to clamp to: at h = 0 the high side is h-1 = -1
+; and the low side rescues py to 0, placing the anchor in a buffer with no
+; words. That is refused at the top of the routine rather than clamped, so the
+; belts below only ever run on w >= 1 and h >= 1 and both statements above hold
+; without an exception.
 ;
 ; Framebuffer is 32-bit little-endian 0x00RRGGBB (the exe's BI_RGB DIB). No API
 ; calls: the caller owns the pixel buffer.
@@ -38,13 +41,27 @@ PLOT_BG = 0x001A1A22                     ; background (matches the exe clear)
 ;   out:      bgra cleared to PLOT_BG, then one coloured pixel per particle.
 ;             Under FLAG_SPLAT, up to a 2x2 block per particle: 1x2 on the
 ;             last column, 2x1 on the last row, and one pixel at (w-1, h-1),
-;             because the block is clipped by collapsing onto the anchor
+;             because the block is clipped by collapsing onto the anchor.
+;             w = 0 or h = 0 writes nothing at all - the buffer has no words
 ;   clobbers: rax, rcx, rdx, r10, r11, rbx, rsi, rdi, r12-r15, xmm0-1,
 ;             xmm3-4, flags (kernel tier; the seam saved them). r8d/r9d stay
 ;             the w/h inputs and are read only; xmm2 is never touched.
 ;   MXCSR:    assumes the pinned seam MXCSR (deterministic x*w)
 ; ------------------------------------------------------------------
 plot_core:
+        ; A zero dimension means a framebuffer with no words, so there is no
+        ; pixel to clamp into and the only correct raster is none. Refused
+        ; here, before anything is derived, because every later belt assumes a
+        ; last column and a last row exist: at h = 0 the high side computes
+        ; h-1 = -1, the low side rescues py to 0, and the anchor is written at
+        ; an index the caller never allocated. Each dimension is tested on its
+        ; own rather than the w*h product, so the condition refused is exactly
+        ; the one stated and no other input changes behaviour.
+        test    r8d, r8d
+        jz      .done
+        test    r9d, r9d
+        jz      .done
+
         ; extract everything derived from the arena FIRST: the clear's rep
         ; stosd clobbers rcx, so reading [rcx+...] afterward would fault.
         lea     rbx, [rcx+AH_SIZE]     ; bank base
@@ -125,10 +142,10 @@ plot_core:
         ; Written that way there is nothing left to clamp - at the far edge the
         ; offset is zero and the write lands on the anchor again, which is the
         ; pixel the two-sided belts above already placed inside the buffer. The
-        ; highest index reachable is (h-2)*w + (w-2) + 1 + w = w*h - 1, so for
-        ; w >= 1 and h >= 1 no write here leaves the buffer or crosses into a
-        ; row it did not compute. The degenerate w = 0 / h = 0 case is the
-        ; anchor's, not the splat's, and is #265.
+        ; highest index reachable is (h-2)*w + (w-2) + 1 + w = w*h - 1, so no
+        ; write here leaves the buffer or crosses into a row it did not
+        ; compute. w >= 1 and h >= 1 is not an assumption at this point: the
+        ; routine returned at the top if either was zero.
   .splat:
         lea     ecx, [r8d-1]           ; w-1 (ecx is the loop's zero, restored
         cmp     eax, ecx               ;   at the end of this block)
