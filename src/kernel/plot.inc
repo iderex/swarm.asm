@@ -13,11 +13,17 @@
 ; FLAG_SPLAT in the params selects a 2x2 splat instead of the single pixel
 ; (decision 9's amendment: the toggle is platform-side, the grammar has no key
 ; for it). The splat writes the anchor pixel and its right / below / diagonal
-; neighbours, each held inside the buffer by a min against w-1 / h-1. It does
-; NOT relax the belts above: the anchor is still clamped from both sides
-; first, so the splat can only ever start from a pixel already in range, and
-; at the last column or row the neighbour collapses back onto the anchor
-; rather than wrapping onto the next row or past the end of the buffer.
+; neighbours. The neighbours are reached as OFFSETS from the anchor's index
+; rather than as coordinates of their own: +1 unless px is already the last
+; column, +w unless py is already the last row. So there is no second clamp
+; here and no second coordinate to clamp - a neighbour outside the buffer
+; becomes an offset of zero, and the write lands on the anchor again. The
+; anchor's own two-sided belts are untouched, so the splat can only ever grow
+; from a pixel already in range.
+;
+; Both statements hold for w >= 1 and h >= 1. At w = 0 or h = 0 the anchor
+; itself already lands outside a zero-word buffer, which predates the splat
+; and is not repaired here (#265); the splat widens that overrun by one word.
 ;
 ; Framebuffer is 32-bit little-endian 0x00RRGGBB (the exe's BI_RGB DIB). No API
 ; calls: the caller owns the pixel buffer.
@@ -26,10 +32,13 @@ PLOT_BG = 0x001A1A22                     ; background (matches the exe clear)
 
 ; ------------------------------------------------------------------
 ; plot_core - raster the state into a w*h BGRA buffer.
-;   in:       rcx = arena, rdx = bgra (w*h u32), r8d = w, r9d = h
-;   out:      bgra cleared to PLOT_BG, then one coloured pixel per particle,
-;             or a 2x2 block per particle when the arena's params carry
-;             FLAG_SPLAT
+;   in:       rcx = arena, rdx = bgra (w*h u32), r8d = w, r9d = h. The plot
+;             mode is a second input and arrives in the arena: FLAG_SPLAT in
+;             the params copy the header carries
+;   out:      bgra cleared to PLOT_BG, then one coloured pixel per particle.
+;             Under FLAG_SPLAT, up to a 2x2 block per particle: 1x2 on the
+;             last column, 2x1 on the last row, and one pixel at (w-1, h-1),
+;             because the block is clipped by collapsing onto the anchor
 ;   clobbers: rax, rcx, rdx, r10, r11, rbx, rsi, rdi, r12-r15, xmm0-1,
 ;             xmm3-4, flags (kernel tier; the seam saved them). r8d/r9d stay
 ;             the w/h inputs and are read only; xmm2 is never touched.
@@ -56,9 +65,10 @@ plot_core:
         cld
         rep     stosd
 
-        ; The plot mode has to be read AFTER the clear, because the clear owns
-        ; rdi and rcx. rbx survives it, and arena = bank base - header is the
-        ; same route step.inc takes to the params.
+        ; Read after the clear because rdi, the register the mode lives in for
+        ; the rest of the routine, is the clear's destination. rcx is no
+        ; obstacle: rbx survives, and arena = bank base - header is the same
+        ; route step.inc takes to the params.
         mov     edi, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]
         and     edi, FLAG_SPLAT        ; 0 = one pixel, non-zero = 2x2
 
@@ -112,10 +122,13 @@ plot_core:
         ; The 2x2 splat, as two offsets rather than two more clamped
         ; coordinates: the right neighbour is +1 unless px is already the last
         ; column, and the row below is +w unless py is already the last row.
-        ; Written that way the min against w-1 / h-1 IS the belt - at the far
-        ; edge the offset is zero and the write lands on the anchor again,
-        ; which is the pixel the two-sided clamp above already proved is inside
-        ; the buffer. No write here can reach a row it did not compute.
+        ; Written that way there is nothing left to clamp - at the far edge the
+        ; offset is zero and the write lands on the anchor again, which is the
+        ; pixel the two-sided belts above already placed inside the buffer. The
+        ; highest index reachable is (h-2)*w + (w-2) + 1 + w = w*h - 1, so for
+        ; w >= 1 and h >= 1 no write here leaves the buffer or crosses into a
+        ; row it did not compute. The degenerate w = 0 / h = 0 case is the
+        ; anchor's, not the splat's, and is #265.
   .splat:
         lea     ecx, [r8d-1]           ; w-1 (ecx is the loop's zero, restored
         cmp     eax, ecx               ;   at the end of this block)

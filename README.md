@@ -155,9 +155,15 @@ and `-splat` can be given alongside one. A path that itself starts with `-` is
 not reachable, which is the trade every argument reader makes.
 
 `-splat` draws each particle as a 2x2 block. On a dense display a 1-pixel
-particle nearly vanishes at large counts, and four pixels cost one extra column
-and row write each. It changes what you see and nothing the simulation
-computes, so a capture taken with it carries the same numbers as one without.
+particle nearly vanishes at large counts.
+
+It changes nothing the simulation computes, and it does change what `-capture`
+records. The plot is inside the timed work window and the dump header carries
+the flags word, so a capture taken with `-splat` is a different measurement of
+a different raster, not the same one. Its cost has not been measured, so no
+number for it is stated here or in [docs/BENCHMARKS.md](docs/BENCHMARKS.md);
+every row recorded there so far is the 1-pixel raster, and each one now says
+so.
 
 [presets/](presets/) holds the committed scenes and describes each one:
 `headline.txt` and `dense.txt` are the two the numbers in

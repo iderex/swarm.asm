@@ -16,6 +16,13 @@ or refused. Grid mode is not a key: the exe applies `FLAG_GRID` to every
 loaded preset, because which spatial structure runs is a platform decision and
 not part of the scene.
 
+Neither is the plot mode. `-splat` draws each particle as a 2x2 block instead
+of one pixel, and it is switched on the command line, so a preset does not
+fully describe how its scene looks. That matters wherever a file is cited as
+the whole of a measurement: the plot is inside the timed window, so a published
+number has to say which raster produced it, and every row in
+`docs/BENCHMARKS.md` does.
+
 ## The benchmark pair
 
 `docs/MASTERPLAN.md` decision 12 pins two scenes, and every published
