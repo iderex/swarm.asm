@@ -21,6 +21,13 @@ public sealed unsafe class PlotTests
     [DllImport("swarm.kernel.dll")]
     private static extern void swarm_plot(void* arena, uint[] bgra, uint w, uint h);
 
+    /// <summary>
+    /// The same export, taking the framebuffer as a pointer so a test can hand
+    /// the kernel a buffer that starts part-way into an allocation it owns.
+    /// </summary>
+    [DllImport("swarm.kernel.dll", EntryPoint = "swarm_plot")]
+    private static extern void swarm_plot_at(void* arena, uint* bgra, uint w, uint h);
+
     private const uint Bg = 0x001A1A22;
 
     /// <summary>src/kernel/abi.inc FLAG_SPLAT - the 2x2 raster.</summary>
@@ -73,6 +80,48 @@ public sealed unsafe class PlotTests
             var bgra = new uint[w * h + Guard];
             swarm_plot(arena, bgra, w, h);
             return bgra;
+        }
+        finally
+        {
+            NativeMemory.AlignedFree(arena);
+        }
+    }
+
+    /// <summary>
+    /// Plots one particle at (x, y) into a w*h framebuffer fenced by a guard
+    /// region on BOTH sides, and returns the three parts separately. The
+    /// leading guard is what a write at a negative index lands in, which the
+    /// trailing guard of <see cref="PlotOne"/> cannot see. The pointer
+    /// signature is what makes it possible: the array is pinned and the
+    /// framebuffer the kernel is handed starts <see cref="Guard"/> words in.
+    /// </summary>
+    private static (uint[] before, uint[] fb, uint[] after) PlotOneFenced(
+        float x, float y, uint w, uint h, uint flags)
+    {
+        _ = NativeKernel.Handle;
+        var p = Params(1, 1, flags);
+        ulong size = swarm_layout_bytes(in p);
+        Assert.NotEqual(0ul, size);
+        void* arena = NativeMemory.AlignedAlloc((nuint)size, 64);
+        try
+        {
+            Assert.Equal(0, swarm_init(arena, size, in p));
+            uint padded = *(uint*)((byte*)arena + 32);
+            long stride = padded * 4L;
+            *(float*)((byte*)arena + 512) = x;
+            *(float*)((byte*)arena + 512 + stride) = y;
+            *(uint*)((byte*)arena + 512 + 4 * stride) = 0;
+
+            int pixels = (int)(w * h);
+            var fenced = new uint[Guard + pixels + Guard];
+            fixed (uint* pf = fenced)
+            {
+                swarm_plot_at(arena, pf + Guard, w, h);
+            }
+
+            return (fenced[..Guard],
+                    fenced[Guard..(Guard + pixels)],
+                    fenced[(Guard + pixels)..]);
         }
         finally
         {
@@ -307,5 +356,28 @@ public sealed unsafe class PlotTests
         var b = PlotOne(0.375f, 0.625f, 8, 8, flags);
 
         Assert.Equal(a, b);
+    }
+
+    [Theory]
+    [InlineData(8u, 0u, 0u)]
+    [InlineData(8u, 0u, FlagSplat)]
+    [InlineData(0u, 8u, 0u)]
+    [InlineData(0u, 8u, FlagSplat)]
+    [InlineData(0u, 0u, 0u)]
+    [InlineData(0u, 0u, FlagSplat)]
+    public void AZeroDimensionFramebufferIsNotWrittenAtAll(uint w, uint h, uint flags)
+    {
+        // w*h is zero, so the framebuffer has no words and every word of the
+        // fence is one nothing may touch. The two belts cannot express this on
+        // their own: at h = 0 the high side is w-1 = -1 and the low side
+        // rescues py back to 0, so the anchor is placed at an index the buffer
+        // does not have. The fence is on both sides because a belt that failed
+        // downward would write behind the buffer, where a trailing guard sees
+        // nothing.
+        var (before, fb, after) = PlotOneFenced(0.5f, 0.5f, w, h, flags);
+
+        Assert.Empty(fb);
+        Assert.All(before, word => Assert.Equal(0u, word));
+        Assert.All(after, word => Assert.Equal(0u, word));
     }
 }
