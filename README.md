@@ -151,8 +151,9 @@ dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
 
 With no filename the exe runs the preset compiled into it. The first argument
 that does not start with `-` is read as a preset path, so `-smoke`, `-capture`
-and `-splat` can be given alongside one. A path that itself starts with `-` is
-not reachable, which is the trade every argument reader makes.
+and `-splat` can be given alongside one. A bare path that starts with `-` reads
+as a flag and is skipped; quote it and it loads, because the quote is what the
+scan dispatches on.
 
 `-splat` draws each particle as a 2x2 block. On a dense display a 1-pixel
 particle nearly vanishes at large counts.

@@ -442,13 +442,17 @@ scan_arg_flag:
 ;   MXCSR:    untouched
 ;   note:     a token starting with '-' is a flag and is skipped, so -smoke
 ;             and -capture never read as a filename and a future flag needs
-;             no change here. The cost is that a path beginning with '-' is
-;             unreachable, which is the same trade every argv taker makes and
-;             is written into the README rather than worked around.
+;             no change here. The cost falls on a BARE path beginning with
+;             '-', which reads as a flag and is skipped
 ;   note:     a quoted token yields the bytes between the quotes, so a path
 ;             with spaces arrives whole. An unterminated quote yields the rest
 ;             of the line, which then fails to open - fail-closed, and one
 ;             branch rather than a second error path
+;   note:     the dispatch below tests '-' before '"', so a quoted token is
+;             taken by the quote branch and its first inner byte is never
+;             examined. A path beginning with '-' is therefore reachable by
+;             quoting it, and the two notes above are the whole of the rule:
+;             bare is skipped, quoted is taken
 ; ------------------------------------------------------------------
 scan_arg_path:
         cmp     byte [rcx], '"'
