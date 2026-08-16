@@ -8,7 +8,7 @@ and dropped because a measurement refused them.
 Every number below is quoted from [BENCHMARKS.md](BENCHMARKS.md) and names the
 section it comes from, so a figure here can always be checked against the run
 that produced it. Nothing is claimed that the repository cannot reproduce. Where
-a thing is a goal rather than a result, it says so.
+a thing is still a goal, it says so.
 
 The design authority is [MASTERPLAN.md](MASTERPLAN.md), which carries the twelve
 architecture decisions with their rationale and their rejected alternatives.
@@ -28,19 +28,19 @@ imports nothing but `kernel32`, `user32` and `gdi32`. No CRT, no runtime, no
 framework, no GPU. The question the project is asking is what a CPU actually
 does when nothing sits between the algorithm and the instruction stream.
 
-That premise only means something if it is enforced rather than asserted, so it
-is. A conformance test parses the built executable's import table and fails the
-build when anything outside the allowlist appears. Another refuses a CRT
+That premise only means something if it is enforced, so it is. A conformance
+test parses the built executable's import table and fails the build when
+anything outside the allowlist appears. Another refuses a CRT
 startup. Another walks `src/kernel/` and refuses an API call there. Another
 holds the executable to a 64 KB size budget. The constraints table in
 [MASTERPLAN.md](MASTERPLAN.md) lists them, and each row is a test rather than a
 promise.
 
 The cost of the premise is worth naming too. There is no portability layer, and
-a Linux or macOS build would be a second platform layer rather than an
-abstraction the kernel pays for. There is no scripting surface and no plugin
-loader. The engine never touches the network. Those are choices recorded as
-non-goals, not gaps waiting to be filled.
+a Linux or macOS build would mean writing a second one, which is not an
+abstraction the kernel pays for today. There is no scripting surface and no
+plugin loader. The engine never touches the network. Those are choices
+recorded as non-goals, not gaps waiting to be filled.
 
 ## The rules of the world
 
@@ -55,8 +55,8 @@ timestep.
 The clamp is not cosmetic. It pins the per-step displacement at or below `rmax`,
 which is at or below 0.25, which is under half the torus, and that is what makes
 a single wrap correction and the minimum-image convention valid every time. A
-few of the decisions in this engine exist to keep an invariant like that true
-rather than to make anything faster.
+few of the decisions in this engine buy no speed at all. They exist to keep an
+invariant like that true.
 
 Two rules in the force evaluation are worth reading even if the rest of the
 physics is familiar.
@@ -76,15 +76,15 @@ accumulator on the first frame. Padding elements hold pinned finite zeros for
 the same reason: NaN padding would poison the accumulator through the
 multiply-add rather than being masked out of it.
 
-Determinism is a contract rather than a side effect. The same seed produces the
+Determinism is a contract here. The same seed produces the
 same state, bit for bit, on a given code path, and the harness asserts it. The
 RNG is splitmix64, owned and seeded in the repository, so nothing about the
 initial state depends on a library. MXCSR is pinned to `0x9FC0`, which is
 flush-to-zero, denormals-are-zero, all exceptions masked and round-to-nearest,
 at every DLL export prologue, at exe init and at every worker thread entry. The
-export prologue saves and restores the caller's MXCSR rather than leaving the
-pin behind, because poisoning a host runtime's floating-point state would be a
-rude thing for a library to do.
+export prologue saves the caller's MXCSR and restores it on the way out, so the
+pin does not outlive the call. Poisoning a host runtime's floating-point state
+would be a rude thing for a library to do.
 
 ## The architecture, in the order it matters
 
@@ -95,10 +95,10 @@ magic value, the ABI version, a validated copy of the parameters, the RNG state,
 the frame counter, the cached padded count and grid dimension, and the selected
 code path. Everything else is the particle arrays. There are no globals in the
 kernel at all, which is what makes two arenas stepped in an interleaved order
-equivalent to two runs in isolation. The absence is scanned for rather than
-reviewed for: `KernelSourcePurityScan` walks the kernel sources and refuses an
-OS seam, a writable data section, a nondeterministic source such as `rdtsc` or
-`rdrand`, the x87 stack, and the approximate-reciprocal instructions.
+equivalent to two runs in isolation. A scan enforces the absence, so no reviewer
+has to notice it: `KernelSourcePurityScan` walks the kernel sources and refuses
+an OS seam, a writable data section, a nondeterministic source such as `rdtsc`
+or `rdrand`, the x87 stack, and the approximate-reciprocal instructions.
 
 `swarm_layout_bytes(params)` is a pure size function, so the caller allocates
 and the kernel never does. The executable takes one `VirtualAlloc`; the test
@@ -140,7 +140,7 @@ smaller radius gives a finer grid and sparser cells. A stable counting sort
 reorders the population into cell order, and the force pass then reads only the
 3x3 cell neighbourhood around each particle.
 
-Power-of-two is load-bearing rather than tidy. The wrap at the grid edge is an
+Power-of-two is load-bearing. The wrap at the grid edge is an
 AND with `g - 1`, and the binning is an exact truncation of the scaled
 coordinate; both rely on it.
 
@@ -168,7 +168,7 @@ which is one 64-byte line of f32, so no output array is falsely shared between
 workers.
 
 The result is bit-identical to the serial pass at every worker count, on both
-the vector and the scalar path. That is asserted rather than assumed, and the
+the vector and the scalar path. The harness asserts that, and the
 per-thread MXCSR pin is part of why it holds.
 
 ### The two force paths
@@ -189,7 +189,7 @@ instruction the CPU does not have.
 
 The raster is one 32-bit top-down DIB section and a `BitBlt`. The plot stays
 pure and serial, which keeps it golden-testable, and clamping at the framebuffer
-edge is treated as a correctness belt rather than a rounding convenience.
+edge is treated as a correctness belt.
 
 The window is keyboard-driven and applies every edit at a step boundary, so an
 interactive change can never land in the middle of a frame's arithmetic. Space
@@ -201,7 +201,7 @@ session is by definition a deterministic replay of its own edit log.
 Pacing waits on a high-resolution timer to the next frame deadline and skips the
 wait when it is already past. There is no vsync, because GDI has none and the
 libraries that would provide one are outside the import allowlist, so tearing is
-accepted and disclosed rather than worked around. If the machine falls behind,
+accepted and disclosed here. If the machine falls behind,
 the animation slows down and the state sequence does not change: the state after
 k frames is a function of the seed, the parameters and k, and of nothing else.
 
@@ -263,9 +263,9 @@ because the brute-force frame at those counts is not something anyone runs.
 Two later refinements are recorded separately so their contributions stay
 attributable. Resolving the 3x3 neighbour run set once per cell instead of once
 per particle took about 12% off the 500,000-particle pass at the finer grid
-(BENCHMARKS, "Grid pass after resolving the run set once per cell"), and copying
-only the pad tail rather than the whole bank took 15% to 31% off the build
-(BENCHMARKS, "Grid build after the pad-only copy"). Both are recorded with
+(BENCHMARKS, "Grid pass after resolving the run set once per cell"), and
+narrowing the copy from the whole bank to the pad tail took 15% to 31% off the
+build (BENCHMARKS, "Grid build after the pad-only copy"). Both are recorded with
 whole-arena hash comparisons showing the output did not move.
 
 ### Threading closed 500,000 particles
@@ -274,7 +274,7 @@ The pass across the pool scales 1.93x, 3.93x and 7.71x at two, four and eight
 workers, and 12.61x at sixteen (BENCHMARKS, "The M3 worker pool"). At sixteen
 workers the pass is 4.979 ms and the frame, carrying the worst-case build, is
 15.487 ms. That is 64.6 fps inside a 16.67 ms budget, so 500,000 particles at
-60 fps is a measured result rather than a projection.
+60 fps is a measured result.
 
 Scaling to eight cores is close to ideal and then tapers. The ninth through
 sixteenth cores turn 7.71x into 12.61x, because the working set starts crossing
@@ -294,7 +294,7 @@ own scene description in the header.
 Across six captures the worst p99 is 6.100 ms against the 16.67 ms budget, and
 the worst single frame anywhere in the six is 14.244 ms, still inside one frame
 period (BENCHMARKS, "The M1 live frame at 8,192"). The claim is stated on the
-worst reading rather than the best, and the host was not quiesced, which is
+worst of the six readings, and the host was not quiesced, which is
 visible in a factor-of-two spread between runs of an identical binary on an
 identical scene.
 
@@ -315,7 +315,7 @@ baseline"). On the headline scene, serial on one core, three runs of the harness
 report frames of 71.700, 80.814 and 80.575 ms. Across sixteen workers the same
 three runs report 13.815, 15.410 and 15.535 ms, against a 16.67 ms budget. On
 the denser scene the worst is 30.033 ms, which is roughly 1.8x over. Three whole
-runs are printed rather than one because the spread between them is wider than
+runs are printed because the spread between them is wider than
 several of the differences a reader would otherwise draw, and every reading is
 taken on the worst of the three.
 
@@ -359,7 +359,7 @@ optimistic at the top of its range. The lever was declined.
 The honest caveat travels with it: that split rests on published throughput
 tables rather than on a per-port measurement, and isolating it properly would
 need hardware counters or a stubbed-out kernel variant. It is recorded as
-unconfirmed and pointing optimistic rather than as settled.
+unconfirmed and pointing optimistic, and nothing here treats it as settled.
 
 ### Software-pipelining the force groups
 
@@ -378,18 +378,18 @@ part worth copying.
 
 ### Two risks probed, one triggered
 
-The design recorded a set of risks to check empirically rather than to argue
-about, and two of them have been probed at a million particles.
+The design recorded a set of risks to check empirically, and two of them have
+been probed at a million particles.
 
 The serial grid build was estimated at 8 to 12 cycles per particle on
 near-sorted input, with anything materially above 4.5 ms called an erosion of
 the frame margin. Measured, it is 7.049 ms and about 32.9 cycles per particle,
 which misses in both currencies, and the growth from 500,000 to 1,048,576 is
-worse than linear at a fixed grid dimension, so the scatter rather than the
-grid-sized part is what grows (BENCHMARKS, "The serial grid build at 1M"). That
+worse than linear at a fixed grid dimension, so it is the scatter that grows and
+not the grid-sized part (BENCHMARKS, "The serial grid build at 1M"). That
 risk's contingency, a parallel scatter with per-thread per-bucket cursors, is
-therefore authorised by the number that triggered it rather than by anybody's
-preference.
+therefore authorised by the number that triggered it. Nobody's preference
+entered into it.
 
 The neighbouring risk said an energetic scene would degrade the scatter's write
 locality, and its probe compared a calm scene, the usual one, and an adversarial
@@ -399,12 +399,12 @@ the hostile scene is genuinely hostile. The predicted degradation does not
 appear: the worst adversarial build is below the worst build of either other
 scene, and every difference between scenes is smaller than the calm scene's own
 run-to-run spread (BENCHMARKS, "Scatter locality under an energetic scene").
-That contingency is not authorised, and the document says so rather than keeping
+That contingency is not authorised, and the document says so instead of keeping
 it warm.
 
 A hypothesis for why the hostile scene is the steadiest one, offered as a
 hypothesis: clustering concentrates the writes into fewer distinct cells, which
-is better locality rather than worse. The probe did not measure per-cell
+is better locality and not worse. The probe did not measure per-cell
 occupancy, so that is where the sentence stops.
 
 ## Reproducing any of this
