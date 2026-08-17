@@ -87,8 +87,8 @@ determinism contract - is recorded with rationale in the masterplan. Progress:
 | M0 - Foundation  | done   | Design, pinned toolchain, CI, test harness                                       |
 | M1 - First light | done   | Brute-force AVX2 kernel + live window; 8,192 live, acceptance measured at 60 fps |
 | M2 - Scale       | active | Spatial grid; 50k and 500k particles at 60 fps                                   |
-| M3 - One million | -      | Multithreading + AVX-512 path, 1M particles at 60 fps                            |
-| M4 - Launch      | -      | Benchmark suite vs. existing ports, presets, write-up                            |
+| M3 - One million | active | Multithreading + AVX-512 path, 1M particles at 60 fps                            |
+| M4 - Launch      | active | Benchmark suite vs. existing ports, presets, write-up                            |
 
 What works today: the deterministic RNG, a fail-closed preset grammar, CPU
 feature detection, arena allocation and seeded init, the scalar and AVX2
