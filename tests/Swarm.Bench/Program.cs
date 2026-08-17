@@ -69,6 +69,16 @@ if (args.Contains("--buildmt"))
     return 0;
 }
 
+// The plot phase (#125), behind an argument for the first of those reasons and
+// one of its own: it is the only section here that allocates a framebuffer as
+// well as an arena, and at 1M it settles a scene with swarm_step first, which
+// takes seconds of work none of the other sections want in front of them.
+if (args.Contains("--plot"))
+{
+    PlotPhase();
+    return 0;
+}
+
 int[] ns = [1024, 2048, 4096, 8192, 16384];
 const uint Scalar = 3, Avx2 = 1;
 
@@ -1145,7 +1155,189 @@ static unsafe void BuildSplit()
     Console.WriteLine("min-of-rounds, as every figure in this harness; ms is the clock-free primitive.");
 }
 
+// The plot phase (#125). Decision 11's acceptance asks for a frame broken into
+// build / pass / plot / blit, and plot is the one of the four that no figure in
+// docs/BENCHMARKS.md covers at any count.
+//
+// plot_core is two pieces of different shape. The clear is a rep stosd over w*h
+// pixels and does not depend on n at all; the raster is one scattered dword
+// store per particle and depends both on n and on where the particles are. They
+// are separated here the way the build's two halves are (#243), by fitting the
+// bottom rungs of an n ladder back to n = 0, because the grammar accepts no n
+// small enough to time a clear on its own.
+//
+// w and h are the shipped exe's framebuffer, FRAME_W = FRAME_H = 1024 in
+// src/swarm.asm, so the number is the one the live loop pays rather than one
+// for a buffer nothing draws. FLAG_SPLAT is off in every row, which is the
+// 1-pixel raster the rest of this document publishes.
+static unsafe void PlotPhase()
+{
+    const uint W = 1024, H = 1024; // FRAME_W / FRAME_H, src/swarm.asm
+    const uint N = 1_048_576;
+    const int Warmup = 600; // the warm-up decision 11's acceptance discards
+    const float Headline = 1f / 512f, Dense = 1f / 256f;
+
+    Console.WriteLine();
+    Console.WriteLine($"The plot phase at the shipped framebuffer ({W}x{H}, 1-pixel raster; #125)");
+    Console.WriteLine();
+
+    uint[] ladder = [1024, 2048, 4096, 8192, 16384, 65536, 262144, 500_000, 1_048_576];
+
+    Console.WriteLine($"n ladder at rmax = {Headline:0.000000} (g = {GridDim(Headline)}), OUT cell-ordered");
+    Console.WriteLine($"{"n",9} {"plot ms",9} {"lit px %",9}");
+    Console.WriteLine(new string('-', 29));
+
+    var ms = new double[ladder.Length];
+    for (int i = 0; i < ladder.Length; i++)
+    {
+        (ms[i], double litPct) = TimePlot(ladder[i], Headline, PlotState.Ordered, W, H);
+        Console.WriteLine($"{ladder[i],9} {ms[i],9:0.000} {litPct,9:0.0}");
+    }
+
+    // Four rungs rather than two, for the reason the build split gives: at the
+    // bottom the whole quantity is the clear plus a few thousand stores, and a
+    // two-point slope there is drawn through the host's noise. It is an
+    // extrapolation and is printed beside the rung it starts from.
+    int fit = 4;
+    double mx = 0, my = 0;
+    for (int i = 0; i < fit; i++)
+    {
+        mx += ladder[i];
+        my += ms[i];
+    }
+    mx /= fit;
+    my /= fit;
+    double sxy = 0, sxx = 0;
+    for (int i = 0; i < fit; i++)
+    {
+        sxy += (ladder[i] - mx) * (ms[i] - my);
+        sxx += (ladder[i] - mx) * (ladder[i] - mx);
+    }
+    double clear = my - sxy / sxx * mx;
+    double top = ms[^1];
+
+    Console.WriteLine();
+    Console.WriteLine($"  {$"clear, w*h-bound (bottom {fit} rungs fitted back to n = 0)",-54} : {clear,6:0.000} ms");
+    Console.WriteLine($"  {$"plot at n = {ladder[^1]}",-54} : {top,6:0.000} ms");
+    Console.WriteLine(
+        $"  {"raster there",-54} : {top - clear,6:0.000} ms"
+        + $"  ({(top - clear) / top * 100:0.0}% of the plot)"
+    );
+    Console.WriteLine();
+
+    // The state of bank OUT is the whole measurement on the raster side, so it
+    // is a parameter rather than an accident of call order, exactly as the
+    // build's input state is. Ordered and id-order are the same three banks in
+    // two orders; settled is a different scene, and the lit-pixel share is what
+    // says so without anybody having to look at it.
+    Console.WriteLine($"OUT state at n = {N}, at each of the two rmax values the committed scenes pin");
+    Console.WriteLine($"{"rmax",9} {"g",4} {"state",10} {"plot ms",9} {"lit px %",9}");
+    Console.WriteLine(new string('-', 45));
+
+    foreach (float rmax in new[] { Headline, Dense })
+    {
+        foreach (
+            (string label, PlotState state, int steps) in new[]
+            {
+                ("ordered", PlotState.Ordered, 0),
+                ("id-order", PlotState.IdOrder, 0),
+                ("settled", PlotState.Settled, Warmup),
+            }
+        )
+        {
+            (double plotMs, double litPct) = TimePlot(N, rmax, state, W, H, steps);
+            Console.WriteLine(
+                $"{rmax,9:0.000000} {GridDim(rmax),4} {label,10} {plotMs,9:0.000} {litPct,9:0.0}"
+            );
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("rmax     = the two values presets/headline.txt and presets/dense.txt pin. ONLY rmax is taken");
+    Console.WriteLine("           from them: the seed, species count, matrix and force scale are this harness's own");
+    Console.WriteLine("           standard set, as in every other section here, so no row is a committed scene.");
+    Console.WriteLine("ordered  = build then pass, so OUT sits at cell-ordered indices: every frame after the first.");
+    Console.WriteLine("id-order = the initial draw, never built: the first frame only.");
+    Console.WriteLine($"settled  = swarm_step run {Warmup} times first, the warm-up decision 11's acceptance discards.");
+    Console.WriteLine("lit px % = share of the framebuffer left non-background, so a clustered scene reads as a low one.");
+    Console.WriteLine("min-of-rounds, as every figure in this harness; the host was not quiesced unless said so.");
+}
+
+// One swarm_plot into a caller-owned w*h framebuffer, plus the share of that
+// buffer the raster left non-background. The lit share is measured rather than
+// described because it is what separates two rows that differ only in where the
+// particles are: 1M single pixels thrown at 1M pixels light about 63% of them
+// when the draw is uniform, and progressively fewer as the scene clusters and
+// the stores fall repeatedly on the same lines.
+static unsafe (double Ms, double LitPct) TimePlot(
+    uint n,
+    float rmax,
+    PlotState state,
+    uint w,
+    uint h,
+    int steps = 0
+)
+{
+    SwarmParams p = MakeGridParams(n, rmax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException($"layout rejected n={n} rmax={rmax}");
+
+    // PLOT_BG in src/kernel/plot.inc, mirrored the way PlotTests.cs mirrors it;
+    // that suite asserts an untouched pixel equals this value, so a drift here
+    // reds a test rather than quietly moving a number in this table.
+    const uint PlotBackground = 0x001A1A22;
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    uint* fb = (uint*)NativeMemory.AlignedAlloc((nuint)w * h * sizeof(uint), 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException($"init failed n={n} rmax={rmax}");
+
+        switch (state)
+        {
+            case PlotState.Ordered:
+                Native.swarm_build(arena); // IN becomes cell-ordered ...
+                Native.swarm_pass(arena, 0, n); // ... and the pass carries that order into OUT
+                break;
+            case PlotState.IdOrder:
+                break; // the initial draw, never built
+            case PlotState.Settled:
+                Native.swarm_step(arena, (uint)steps);
+                break;
+        }
+
+        for (int i = 0; i < 3; i++)
+            Native.swarm_plot(arena, fb, w, h);
+        double best = MinOfRounds(() => Native.swarm_plot(arena, fb, w, h));
+
+        // Counted off the buffer the timed calls left behind, so it describes
+        // the raster that was measured and not a second one taken for the count.
+        long lit = 0;
+        for (long i = 0; i < (long)w * h; i++)
+            if (fb[i] != PlotBackground)
+                lit++;
+
+        return (best, lit * 100.0 / ((double)w * h));
+    }
+    finally
+    {
+        NativeMemory.AlignedFree(fb);
+        NativeMemory.AlignedFree(arena);
+    }
+}
+
 // --- native surface + the ABI-mirrored params struct -----------------------
+
+// Which bank OUT the plot is timed over. Named rather than boolean because
+// there are three of them and two are not each other's negation.
+internal enum PlotState
+{
+    Ordered,
+    IdOrder,
+    Settled,
+}
 
 internal static unsafe class Native
 {
@@ -1163,6 +1355,11 @@ internal static unsafe class Native
 
     [DllImport("swarm.kernel.dll")]
     internal static extern int swarm_cpu_paths();
+
+    // Rasterizes bank OUT into a w*h BGRA buffer (decision 9). The caller owns
+    // the pixels, so the buffer is a parameter and not part of the arena.
+    [DllImport("swarm.kernel.dll")]
+    internal static extern void swarm_plot(void* arena, uint* bgra, uint w, uint h);
 
     // M3 worker pool (issue #68). swarm_pool_init(0) auto-detects physical cores
     // and returns the actual worker count; swarm_pass_mt fans the pass over the
