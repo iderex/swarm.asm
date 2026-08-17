@@ -59,9 +59,12 @@ AVX2 CPUs and verified to match the scalar result within the oracle's epsilon.
 The measured speedup and its honest caveats live in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md): the brute-force AVX2 pass is ~1.85×
 the scalar reference on Zen 3 (the vector loop is divider-bound; the scalar
-path cheaply skips the out-of-range pairs the vector path still computes), and
-the larger SIMD win waits on the M2 cell-sorted layout that shrinks the
-candidate set from n² to the in-range neighbours.
+path cheaply skips the out-of-range pairs the vector path still computes). A
+larger SIMD win was predicted from the M2 cell-sorted layout, which shrinks the
+candidate set from n² to the in-range neighbours and so removes that cheap
+skip advantage. The layout has since landed, and the ratio under it has not
+been measured, so no figure for it is stated here or in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 **It's interactive.** The window is keyboard-driven - **Space** pauses,
 **R** reseeds the world, **M** rerolls the attraction matrix, **H** shows or
