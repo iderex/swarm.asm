@@ -187,10 +187,20 @@ if (haveAvx2)
 // a pass before it times the build; the first frame's build is the unsorted
 // column of the #177 table below and is several times this one.
 //
-// The threaded rows fan only the pass. The build fans out across W = clamp(n/(g*g), 1, T) workers (#243), which is
-// what risk 2 and its contingency are about, so it is added back unchanged into
-// every threaded frame. A frame counting only the part that scaled would answer
-// a question nobody asked.
+// The threaded rows fan both halves. The pass fans over the particle range and
+// the build fans across W = clamp(n/(g*g), 1, T) workers (#243), and the frame
+// column is the two measured at the same T in the same run, never one taken
+// here and one carried in from another section. Risk 2 and its contingency are
+// about that build, so it is timed rather than assumed: a frame counting only
+// the part that scaled would answer a question nobody asked, and a frame
+// carrying a serial build the shipped binary no longer runs would answer a
+// question nobody has any more.
+//
+// The serial-build column stays beside it. The rows recorded in
+// docs/BENCHMARKS.md under "The 1M baseline" were taken before the parallel
+// build existed and add the serial build back, so printing both is what lets a
+// reader tell the two generations of row apart instead of subtracting across
+// runs.
 if (haveAvx2)
 {
     const uint n1M = 1_048_576; // the ABI's maximum n, and decision 3's headline count
@@ -217,30 +227,38 @@ if (haveAvx2)
     Console.WriteLine("build = near-sorted (every frame after the first); pass = 3x3 neighbourhood over frozen sorted IN.");
 
     Console.WriteLine();
-    Console.WriteLine($"The 1M baseline (#176): threaded pass at n={n1M}, serial build added back");
+    Console.WriteLine($"The 1M threaded frame (#125): parallel build and threaded pass at n={n1M}");
     Console.WriteLine();
-    Console.WriteLine($"{"scene",9} {"T",5} {"pass ms",10} {"frame ms",10} {"fps",8} {"pass x",8}");
-    Console.WriteLine(new string('-', 54));
+    Console.WriteLine(
+        $"{"scene",9} {"T",5} {"build ms",10} {"pass ms",10} {"frame ms",10} {"fps",8} {"build x",8} {"pass x",8} {"serial-build frame ms",22}");
+    Console.WriteLine(new string('-', 96));
     foreach (var (name, rmax) in scenes)
     {
-        (double buildMs, double serialPassMs) = serialFrame[name];
+        (double serialBuildMs, double serialPassMs) = serialFrame[name];
         foreach (int t in new[] { 1, 2, 4, 8, 0 })
         {
             int actual = Native.swarm_pool_init(t);
+            if (actual < 1)
+                throw new InvalidOperationException($"pool_init({t}) failed");
             try
             {
                 double passMs = TimeGridPassMt(n1M, rmax);
+                double buildMs = TimeGridBuildMt(n1M, rmax, nearSorted: true);
                 double frameMs = buildMs + passMs;
                 string label = t == 0 ? $"{actual}*" : actual.ToString();
                 Console.WriteLine(
-                    $"{name,9} {label,5} {passMs,10:0.000} {frameMs,10:0.000} " +
-                    $"{1000.0 / frameMs,8:0.0} {serialPassMs / passMs,7:0.00}x");
+                    $"{name,9} {label,5} {buildMs,10:0.000} {passMs,10:0.000} {frameMs,10:0.000} " +
+                    $"{1000.0 / frameMs,8:0.0} {serialBuildMs / buildMs,7:0.00}x {serialPassMs / passMs,7:0.00}x " +
+                    $"{serialBuildMs + passMs,22:0.000}");
             }
             finally { Native.swarm_pool_shutdown(); }
         }
     }
     Console.WriteLine();
-    Console.WriteLine("frame = serial build + threaded pass; pass x = serial pass / threaded pass.");
+    Console.WriteLine("frame = parallel build + threaded pass, both at that T and both from this run.");
+    Console.WriteLine("build/pass x = serial ms / parallel ms at that T; build is near-sorted, i.e. every frame after the first.");
+    Console.WriteLine("serial-build frame ms = the same threaded pass with the serial build added back, the shape the");
+    Console.WriteLine("  recorded 'The 1M baseline' rows carry; printed so the two generations are not subtracted across runs.");
     Console.WriteLine("* = physical-core count (auto). 60 fps needs frame <= 16.67 ms.");
 }
 
