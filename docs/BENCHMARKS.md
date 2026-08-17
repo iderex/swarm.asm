@@ -434,6 +434,11 @@ Serial at 500k it was under a third. Risk 2's contingency, the parallel scatter,
 is already triggered on the #177 measurement below; this is what triggering it
 is worth, and it is the single largest remaining item in the threaded frame.
 
+The contingency has since been built, and the rows in this section predate it:
+their frame column carries a serial build. "The 1M threaded frame with the
+parallel build in it" further down is the same frame measured with it, and it is
+the row to read for the current binary rather than this one.
+
 ## The serial grid build at 1M (risk 2's probe; #177)
 
 Masterplan open-risk 2 estimates the counting sort's histogram chain at **8-12
@@ -717,9 +722,104 @@ the steps in the tables above.
 records the 1M threaded frame at 15.535 ms worst-run, of which the build was
 7.232 ms. These runs put the same build between 3.3 and 3.5 ms with a serial
 column of 5.7, which is neither the 7.232 nor the 7.049 of the probe. The
-instrument, the host state and the day differ; the frame figure has not been
-re-taken with this change in it, and until it is, subtracting one from the other
-would be a claim rather than a measurement.
+instrument, the host state and the day differ; subtracting one from the other
+would be a claim rather than a measurement. The frame re-taken with this change
+in it is the section below.
+
+## The 1M threaded frame with the parallel build in it (#125)
+
+The section above ends by refusing a subtraction: the build got faster and the
+frame figure it belongs to was measured before that, on another day and another
+host state. This is that frame re-taken, so the two halves come from one run of
+one instrument.
+
+The harness change is that the threaded rows now time the parallel build at the
+same `T` as the pass and add that, instead of carrying the serial build in from
+the section above. The serial-build column is printed beside it, because the
+recorded rows under "The 1M baseline" carry that shape and a reader has to be
+able to tell the two generations apart without arithmetic across runs.
+
+**Three whole runs**, as that section takes them, and every reading below is on
+the worst of the three.
+
+```
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release
+```
+
+### Serial, one core, in the same three runs
+
+| run | scene    | build ms | pass ms | frame ms |
+| --- | -------- | -------: | ------: | -------: |
+| 1   | headline |    6.609 |  61.213 |   67.822 |
+| 2   | headline |    7.829 |  69.666 |   77.495 |
+| 3   | headline |    7.534 |  61.320 |   68.854 |
+| 1   | dense    |    8.120 | 180.521 |  188.642 |
+| 2   | dense    |    8.779 | 158.941 |  167.720 |
+| 3   | dense    |    7.779 | 193.182 |  200.961 |
+
+### Parallel build and threaded pass
+
+`T = 16*` is the pool's auto-detected physical-core count. `serial-build frame`
+is the same threaded pass with the serial build of that run added back, i.e. the
+shape the recorded 1M rows carry.
+
+| run | scene    |    T | build ms | pass ms | frame ms |  fps | serial-build frame ms |
+| --- | -------- | ---: | -------: | ------: | -------: | ---: | --------------------: |
+| 1   | headline |    8 |    4.638 |  13.393 |   18.032 | 55.5 |                20.003 |
+| 2   | headline |    8 |    4.185 |  13.291 |   17.475 | 57.2 |                21.120 |
+| 3   | headline |    8 |    3.653 |  13.062 |   16.714 | 59.8 |                20.595 |
+| 1   | headline | 16\* |    3.607 |   7.291 |   10.898 | 91.8 |                13.901 |
+| 2   | headline | 16\* |    4.200 |   7.148 |   11.348 | 88.1 |                14.977 |
+| 3   | headline | 16\* |    4.423 |   7.471 |   11.894 | 84.1 |                15.005 |
+| 1   | dense    | 16\* |    2.690 |  18.391 |   21.081 | 47.4 |                26.511 |
+| 2   | dense    | 16\* |    2.416 |  17.659 |   20.075 | 49.8 |                26.438 |
+| 3   | dense    | 16\* |    3.232 |  20.408 |   23.640 | 42.3 |                28.188 |
+
+The full `T` sweep (1, 2, 4, 8, auto) is in the harness output; the rows above
+are the ones that carry the reading.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200, 32 logical processors. **Feature path**: `swarm_cpu_paths`
+  reports `0x1`, so AVX2 and no AVX-512.
+- **Scenes**: `n = 1,048,576`, 6 species, seed `0x5EED`, `beta = 0.3`,
+  `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, `FLAG_GRID`, and the
+  harness's deterministic `sin`-filled matrix. Headline is `rmax = 1/512` so
+  `g` is 512; dense is `rmax = 1/256` so `g` is 256.
+- **build** is near-sorted in both columns, i.e. every frame after the first.
+- **Kernel commit**: `cfac27b`, unchanged by this measurement; the harness edit
+  that prints these columns lands with this section. **Date**: 2026-08-17.
+- **The host was not quiesced.** The serial headline frame moves 9.7 ms across
+  the three runs, on a figure of ~70, which is the same spread the earlier 1M
+  section recorded and is larger than several of the steps below.
+
+### Reading it
+
+**The threaded headline frame at the seam is 11.894 ms worst-run**, against the
+16.67 ms budget, and 10.898 ms on the best. The dense scene is 23.640 ms worst
+and 20.075 ms best, so it stays about 1.4x over.
+
+**What the parallel build is worth in the frame is now a subtraction inside one
+run** rather than across two. On the worst headline run it is 15.005 - 11.894 =
+3.111 ms; on the best, 13.901 - 10.898 = 3.003 ms. That is the figure the
+section above declined to state, and it can be stated here only because both
+columns came out of the same process on the same host state.
+
+**The build's share of the threaded frame has roughly halved.** The earlier
+section reads the serial build as 7.232 of 15.535 ms, about 47%. Here it is
+4.423 of 11.894 ms on the worst run, about 37%, and the pass is what is left to
+attack.
+
+**At `T = 1` the parallel build is level with the serial one**, within the
+run-to-run spread: `build x` comes out 0.81, 1.04 and 1.02 across the three
+runs. The contingency neither costs nor buys anything at one worker, which is
+what the `W = clamp(n/(g*g), 1, T)` bound predicts.
+
+**This is not a frame-rate claim, and it is not #125's acceptance.** Every
+figure here is a minimum over nine rounds at the P/Invoke seam. Plot and blit
+are not in it, no percentile is in it, and the live capture rows further down
+this document - worst p99 150.849 ms on `presets/headline.txt` - are the frame a
+user actually waits for and are untouched by this. What this section changes is
+the size of the kernel-seam half of the gap, not the gap.
 
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 
