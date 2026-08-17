@@ -821,6 +821,124 @@ this document - worst p99 150.849 ms on `presets/headline.txt` - are the frame a
 user actually waits for and are untouched by this. What this section changes is
 the size of the kernel-seam half of the gap, not the gap.
 
+## The plot phase at 1M (#125)
+
+Decision 11's acceptance asks for the frame broken into build, pass, plot and
+blit. The two sections above cover build and pass. Plot had no figure anywhere
+in this document at any count, so the only thing known about it was that it sat
+somewhere inside the undivided work window the live rows record.
+
+`plot_core` is two pieces of different shape. The clear is a `rep stosd` over
+`w * h` pixels and does not depend on `n` at all; the raster is one scattered
+dword store per particle and depends on `n` and on where the particles are.
+They are separated here the way the build's two halves are (#243), by fitting
+the bottom four rungs of an `n` ladder back to `n = 0`, because the grammar
+accepts no `n` small enough to time a clear on its own.
+
+`w` and `h` are the shipped executable's framebuffer, `FRAME_W = FRAME_H = 1024`
+at `src/swarm.asm:36-37`, so this is the buffer the live loop actually rasters
+into. `FLAG_SPLAT` is off in every row, which is the 1-pixel raster the rest of
+this document publishes.
+
+**Three whole runs.**
+
+```
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release -- --plot
+```
+
+### The n ladder, OUT cell-ordered, rmax = 1/512
+
+`lit px` is the share of the framebuffer the raster left non-background,
+counted off the buffer the timed calls left behind. It is a property of the
+state rather than of the clock, and it came out identical in all three runs.
+
+|         n | run 1 ms | run 2 ms | run 3 ms | lit px % |
+| --------: | -------: | -------: | -------: | -------: |
+|      1024 |    0.187 |    0.176 |    0.177 |      0.1 |
+|      2048 |    0.184 |    0.186 |    0.185 |      0.2 |
+|      4096 |    0.194 |    0.199 |    0.197 |      0.4 |
+|      8192 |    0.213 |    0.214 |    0.216 |      0.8 |
+|     16384 |    0.269 |    0.296 |    0.298 |      1.5 |
+|     65536 |    0.421 |    0.449 |    0.452 |      6.0 |
+|    262144 |    0.753 |    0.894 |    0.786 |     22.1 |
+|   500,000 |    1.220 |    1.297 |    1.213 |     38.0 |
+| 1,048,576 |    2.366 |    3.482 |    2.414 |     63.0 |
+
+| run | clear (fitted to n = 0) ms | plot at 1M ms | raster there ms | raster % |
+| --- | -------------------------: | ------------: | --------------: | -------: |
+| 1   |                      0.179 |         2.366 |           2.187 |     92.4 |
+| 2   |                      0.174 |         3.482 |           3.307 |     95.0 |
+| 3   |                      0.173 |         2.414 |           2.240 |     92.8 |
+
+The clear is an extrapolation and is printed beside the rung it starts from:
+the bottom rung is 0.176 to 0.187 ms and the fit moves it by hundredths.
+
+### The state of bank OUT at n = 1,048,576
+
+`ordered` is build then pass, so OUT sits at cell-ordered indices, which is
+every frame after the first. `id-order` is the initial draw, never built, which
+is the first frame only. `settled` is `swarm_step` run 600 times first, the
+warm-up decision 11's acceptance discards.
+
+|     rmax |   g | state    | run 1 ms | run 2 ms | run 3 ms | lit px % |
+| -------: | --: | -------- | -------: | -------: | -------: | -------: |
+| 0.001953 | 512 | ordered  |    2.410 |    2.374 |    2.337 |     63.0 |
+| 0.001953 | 512 | id-order |    2.996 |    3.869 |    2.840 |     63.3 |
+| 0.001953 | 512 | settled  |    2.594 |    2.354 |    2.903 |     62.1 |
+| 0.003906 | 256 | ordered  |    2.502 |    2.523 |    3.566 |     62.0 |
+| 0.003906 | 256 | id-order |    4.054 |    3.289 |    3.573 |     63.3 |
+| 0.003906 | 256 | settled  |    2.390 |    2.462 |    3.527 |     60.8 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200, 32 logical processors. **Feature path**: `swarm_cpu_paths`
+  reports `0x1`, so AVX2 and no AVX-512.
+- **Params**: 6 species, seed `0x5EED`, `beta = 0.3`, `dt = 0.02`,
+  `friction = 0.71`, `force_scale = 10`, `FLAG_GRID`, and the harness's
+  deterministic `sin`-filled matrix. **Only `rmax` is taken from the committed
+  scenes**; every other field is this harness's standard set, so no row here is
+  `presets/headline.txt` or `presets/dense.txt`.
+- **Kernel commit**: `4e04539`, unchanged by this measurement; the harness
+  section that prints these tables lands with this text. **Date**: 2026-08-17.
+- **The host was not quiesced.** The spread is the reading below rather than a
+  footnote to it.
+
+### Reading it - the plot is small, and its input state does not move it here
+
+**The whole plot at 1M is 2.3 to 4.1 ms**, taking every row and every run
+together. The largest figure anywhere above is 4.054 ms and the smallest 2.337.
+
+**It is the raster and not the clear.** The clear comes out 0.173 to 0.179 ms
+across three runs, one of the steadiest quantities in this document, and the
+raster is 92 to 95% of the plot at 1M. So the phase scales with the particle
+count and not with the window, and a larger framebuffer would not move it much
+at this `n`.
+
+**The three OUT states do not separate.** The temptation is to read cell-ordered
+as the cheap one, and the rows refuse it: `ordered` at `g = 256` reaches 3.566,
+above `id-order`'s best of 2.840 and `settled`'s best of 2.390, and the spread
+_within_ one row reaches 1.49x (2.390 to 3.527). Nothing here supports an
+ordering claim in either direction. The likely reason is that the framebuffer is
+1024 \* 1024 \* 4 = 4 MiB and fits this part's L3 several times over, so the
+scatter never reaches memory and locality has little left to buy.
+
+**The settled rows are not evidence about a clustered scene.** For `n` balls in
+`n` bins an independent uniform draw fills `1 - 1/e` = 63.2% of them, and the
+`id-order` rows measure 63.3%. After 600 steps the settled rows read 62.1% and
+60.8%, so at pixel resolution these scenes are still very nearly uniform. A
+scene that genuinely clustered would show a much lower lit share, and none here
+does; whether such a scene rasters differently is not answered by these rows.
+
+**What this does to #125's gap, and what it does not.** The live capture rows
+further down record a worst p99 of 150.849 ms on `presets/headline.txt`, and the
+threaded seam frame above is 11.894 ms worst-run. The plot phase is bounded at
+about 4 ms across everything measured here, which is 2.7% of that p99, so **plot
+is not where the difference sits**. That is a bound and not a subtraction, for
+two reasons that both have to be said: every figure above is a minimum over nine
+rounds, so it describes the phase's floor and not its tail, and the params are
+this harness's rather than the committed scene's. What is left unattributed is
+the blit and whatever the live pass costs on an evolved scene, and separating
+those needs the per-phase instrument, which is #152.
+
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 
 Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and
