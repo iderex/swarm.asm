@@ -28,9 +28,10 @@ dropped.
 > Candidate, and M4 with `v1.0.0` tagged is Full Release. M1 is closed on a
 > measurement ([docs/MASTERPLAN.md](docs/MASTERPLAN.md), "M1 closing note"), so
 > the stage is Alpha. Nothing has been released even so: there is no tag and no
-> published binary, and a per-cell matrix editor, presets loaded from a file and
-> the benchmark suite are all still open. Build it from source or read the code;
-> do not depend on it.
+> published binary, and the benchmark suite is still open - no comparison
+> against any other engine exists here or in
+> [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Build it from source or read the
+> code; do not depend on it.
 
 ## What
 
@@ -100,8 +101,9 @@ neighbours) is in the kernel, cross-checked against brute force, and measured at
 50k / 500k ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)); the live window runs on
 it, across the M3 worker pool, at the M1 acceptance count. `swarm.exe -capture`
 is the instrument that measured that: it dumps the raw per-frame samples the
-recorded figure is recomputed from. A per-cell live matrix editor is still
-open.
+recorded figure is recomputed from. The 1,000,000-particle line at the top of
+this file is still a goal rather than a measured claim; the count recorded at
+60 fps is the 8,192 one above.
 
 (M1 was originally 50k; brute force at 50k is arithmetically impossible at
 60 fps - the reasoning lives in [docs/MASTERPLAN.md](docs/MASTERPLAN.md),
