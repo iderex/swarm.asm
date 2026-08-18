@@ -1,0 +1,40 @@
+<Project>
+
+    <PropertyGroup>
+        <!-- The graph is watched, not only recorded. NuGet checks the restored graph
+             against the advisory database and NU1901 to NU1904 are raised to errors, so
+             a known-vulnerable package fails the restore. Left as warnings they would be
+             true and green, printed into a log nobody reads.
+
+             This repository is assembly with two .NET projects under tests/, and it had
+             a lockfile and no audit. Eleven boards of this fleet were in that state on
+             2026-08-18; jellyfin-plugin-watchlist was the twelfth, and switching this on
+             there found a critical advisory that Scorecard had never reported.
+
+             Mode all rather than direct, because both of those arrived as transitive
+             packages that no project file referenced.
+
+             Nothing is pinned here. Measured with the audit forced on from the command
+             line, both projects report no advisory today. This is the detector.
+
+             An XML comment may not contain two hyphens in a row, which is why the flags
+             are named in prose. A draft elsewhere in this fleet spelled one out, left the
+             file malformed, and the build failed on a property defined further down. -->
+        <NuGetAudit>true</NuGetAudit>
+        <NuGetAuditMode>all</NuGetAuditMode>
+        <NuGetAuditLevel>low</NuGetAuditLevel>
+        <WarningsAsErrors>$(WarningsAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsAsErrors>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <!-- A committed lockfile per project. Swarm.Tests had one and said so in its own
+             project file; Swarm.Bench had neither, so two runs of the same commit could
+             benchmark different code and neither would say so.
+
+             It sits here rather than in the two project files precisely because of that:
+             a project added under tests/ later is locked from its first restore instead
+             of from the day somebody notices it is not. -->
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    </PropertyGroup>
+
+</Project>
