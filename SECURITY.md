@@ -16,7 +16,7 @@ posture is correspondingly narrow but taken seriously:
 
 Please report vulnerabilities (e.g. a crafted preset file causing memory
 corruption) privately via
-[GitHub private vulnerability reporting](../../security/advisories/new)
+[GitHub private vulnerability reporting](https://github.com/iderex/swarm.asm/security/advisories/new)
 rather than a public issue. Reports are usually answered within a week.
 
 ## How dependencies reach this repository
