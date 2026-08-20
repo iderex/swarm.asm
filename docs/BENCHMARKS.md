@@ -215,9 +215,12 @@ build, which is the scale of the noise on this machine.
   **single-threaded**, AVX2 + FMA, `FLAG_GRID`, seed `0x5EED`, 6 species, the
   initial uniform-random frame. Same bench binary and DLL slot throughout;
   only the kernel DLL was swapped, alternating between the two builds.
-- **Date**: 2026-08-06. Output is bit-identical across the change: whole-arena
-  hashes match for 216 configurations, including split passes, recorded on the
-  pull request that closed #87.
+- **Commit**: `0bccc12` · **Date**: 2026-08-06. The change these numbers
+  measure lands with this section, so the per-cell column is that commit's
+  `src/kernel/step.inc` and the per-particle column is its parent `129600b`.
+  Output is bit-identical across the change: whole-arena hashes match for 216
+  configurations, including split passes, recorded on the pull request that
+  closed #87.
 
 ### Grid build after the pad-only copy (#77)
 
@@ -244,9 +247,12 @@ taken before that change; the build column moves and nothing else does.
   against 44.33 / 44.30 before at `n = 500,000, rmax = 1/256`, and 24.01 /
   23.77 against 23.99 / 23.89 at `rmax = 1/512`. The change touches the build
   and nothing the pass reads.
-- **Date**: 2026-08-06. Bit-exactness is not inferred from these numbers: the
-  whole arena hashes identically across the change for 84 configurations, which
-  is recorded on the pull request that closed #77.
+- **Commit**: `a647ac7` · **Date**: 2026-08-06. The change these numbers
+  measure lands with this section, so the after column is that commit's
+  `src/kernel/step.inc` and the before column is its parent `96189c2`.
+  Bit-exactness is not inferred from these numbers: the whole arena hashes
+  identically across the change for 84 configurations, which is recorded on the
+  pull request that closed #77.
 
 ### Reading the M2 numbers
 
@@ -647,9 +653,11 @@ unsorted first frame and on the near-sorted steady state.
 Reference machine: AMD Ryzen 9 5950X (Zen 3), 16 physical / 32 logical cores,
 Windows 11, AVX2 (`swarm_cpu_paths = 0x1`). `n = 1,048,576`, both grid dimensions
 the 1M scenes use, seed and matrix as every other grid row here. Each figure is
-the best of nine rounds. **The host was not quiesced.** Both runs were taken at
-commit `49fba06` plus this change, with the serial column re-measured inside the
-same run so the two columns are subtractable.
+the best of nine rounds. **The host was not quiesced.** The serial column is
+re-measured inside the same run, so the two columns are subtractable.
+
+- **Commit**: `49fba06` plus this change, which landed as `c5e6ce0` ·
+  **Date**: 2026-08-09.
 
 ### The two runs
 
