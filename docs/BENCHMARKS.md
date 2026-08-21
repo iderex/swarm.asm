@@ -1039,6 +1039,29 @@ of each frame - step plus plot plus blit, never the pacing wait - then writes
 window on purpose: a paced loop measured wall to wall reports 16.67 ms by
 construction and would say nothing about how much room is left.
 
+The run also reduces those samples itself and writes `swarm-frames.txt` beside
+the dump, so a reading of the capture does not depend on anyone remembering to
+apply the snippet further down. The dump stays the artifact a figure is
+recomputed from, and it stays in recorded order; the reduction runs after it has
+landed. Both files come from the same run, so a figure in one belongs to the
+samples in the other.
+
+What the file looks like, from a **separate run made to show its shape**. It is
+not one of the six rows tabulated below and is not recorded as a baseline:
+
+```
+swarm.asm frame-time capture
+samples=3600  n=8192  species=4  flags=0x00000001  seed=0x9E3779B97F4A7C15  cpu_paths=0x1  qpc_freq=10000000
+mean=1.604 ms  p50=1.566 ms  p99=2.466 ms  max=18.178 ms
+```
+
+The figure line carries the same four names in the same order the snippet
+prints, and by the same definition: `FrameStatsTests` asserts the exe's
+reduction against that definition across the P/Invoke seam, and
+`CaptureReportTests` runs a real capture and checks the report against the dump
+beside it. Hardware, OS and the rest of the disclosure stay here rather than in
+the file, because the exe cannot read them within kernel32/user32/gdi32.
+
 The budget is one frame at 60 fps, 16.67 ms, on p99.
 
 ### rmax = 0.05, the shipped acceptance preset (g = 16)

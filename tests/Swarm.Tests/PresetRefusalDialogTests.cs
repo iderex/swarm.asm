@@ -137,7 +137,13 @@ internal sealed class HiddenDesktop : IDisposable
         return new HiddenDesktop(h, @"WinSta0\" + name);
     }
 
-    public ChildProcess Launch(string commandLine)
+    /// <summary>
+    /// Starts the exe on this desktop. <paramref name="workingDirectory"/>
+    /// defaults to the repository root, which is right for a run that writes
+    /// nothing; a run that drops files beside itself passes a directory of its
+    /// own so the tree stays clean.
+    /// </summary>
+    public ChildProcess Launch(string commandLine, string? workingDirectory = null)
     {
         var si = new Win32.STARTUPINFOW
         {
@@ -151,7 +157,7 @@ internal sealed class HiddenDesktop : IDisposable
 
         if (!Win32.CreateProcessW(
                 null, mutable, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
-                Build.RepoRoot, ref si, out var pi))
+                workingDirectory ?? Build.RepoRoot, ref si, out var pi))
         {
             var err = Marshal.GetLastWin32Error();
 

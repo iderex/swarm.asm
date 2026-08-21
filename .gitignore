@@ -14,9 +14,11 @@ obj/
 CLAUDE.md
 docs/internal/
 
-# swarm.exe -capture writes its raw work-window samples into the working
-# directory; a run started from the repo root must not offer them for commit.
+# swarm.exe -capture writes its raw work-window samples and the report it
+# reduces them to into the working directory; a run started from the repo root
+# must not offer either of them for commit.
 swarm-frames.bin
+swarm-frames.txt
 
 # Editor litter.
 .vs/
