@@ -7,6 +7,24 @@ A Particle Life engine written entirely in hand-written x64 assembly.
 **Goal: 1,000,000 interacting particles at 60 fps - no GPU, no dependencies,
 one small `.exe`.**
 
+![8,192 particles in four species settling into coloured cells on a dark background: seventy-two frames of the scene the executable ships with.](docs/media/swarm-loop.gif)
+
+The loop above and the [full-resolution still](docs/media/swarm-still.png) are
+drawn by the kernel rather than captured off a screen. `swarm_plot` fills a
+framebuffer from the world state and the harness encodes it, so the picture is
+reproducible from this repository alone:
+
+```
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release -- --asset
+```
+
+The scene is the default preset assembled into `swarm.exe`: n = 8,192, 4
+species, seed `0x9E3779B97F4A7C15`, rmax = 0.05, `FLAG_GRID`, read after 600
+steps. Two fields are pinned for the picture and left alone in the executable -
+`force_path = 1` (AVX2), where the image auto-detects, and `FLAG_SPLAT`, which
+draws a particle as a 2x2 block so it survives being looked at. The loop is 384
+x 384 at 72 frames; the still is the shipped 1024 x 1024 framebuffer.
+
 New here? [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) is the one document that
 covers it end to end: why the kernel is assembly, how the engine is built, what
 the measurements say, and which two popular optimisations were measured and
