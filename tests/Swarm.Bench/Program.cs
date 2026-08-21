@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
@@ -76,6 +78,17 @@ if (args.Contains("--buildmt"))
 if (args.Contains("--plot"))
 {
     PlotPhase();
+    return 0;
+}
+
+// The README assets (#131), behind an argument because it is the only mode
+// here that writes files into the tree and measures nothing at all. It renders
+// the shipped executable's own scene through swarm_plot and encodes the
+// framebuffer, so the picture in the README is the kernel's raster rather than
+// a screenshot of one.
+if (args.Contains("--asset"))
+{
+    ReadmeAssets();
     return 0;
 }
 
@@ -810,19 +823,17 @@ static SwarmParams MakeGridParams(uint n, float rmax)
 
 // Assemble the kernel exactly as build.ps1 does, so the benchmarked binary is
 // the shipping binary. Returns the absolute DLL path.
+static string RepoRoot()
+{
+    for (string? d = AppContext.BaseDirectory; d is not null; d = Path.GetDirectoryName(d))
+        if (File.Exists(Path.Combine(d, "build.ps1")))
+            return d;
+    throw new InvalidOperationException("repo root (the directory holding build.ps1) not found");
+}
+
 static string EnsureBuilt()
 {
-    string? root = null;
-    for (string? d = AppContext.BaseDirectory; d is not null; d = Path.GetDirectoryName(d))
-    {
-        if (File.Exists(Path.Combine(d, "build.ps1")))
-        {
-            root = d;
-            break;
-        }
-    }
-    if (root is null)
-        throw new InvalidOperationException("repo root (the directory holding build.ps1) not found");
+    string root = RepoRoot();
 
     var psi = new ProcessStartInfo("powershell")
     {
@@ -1328,6 +1339,366 @@ static unsafe (double Ms, double LitPct) TimePlot(
     }
 }
 
+// --- the README assets (#131) ----------------------------------------------
+
+// One still and one short loop of the scene the shipped executable runs, both
+// rendered by the kernel rather than captured off a screen. `swarm_plot` fills
+// a BGRA framebuffer from bank OUT, so the same params give the same pixels on
+// any machine that has the path the scene names, and the caption beside the
+// picture can therefore say what produced it.
+//
+// WHY THE ENCODERS ARE HERE AND NOT IN A PACKAGE. The raster's whole colour
+// range is the background plus the eight-entry species palette in
+// src/kernel/plot.inc, nine colours by construction, so the expensive half of
+// a GIF encoder - reducing an arbitrary image to 256 colours - is work this
+// picture does not need. What is left is a global colour table copied straight
+// out of that palette and an LZW coder. PNG is the same story: ZLibStream in
+// System.IO.Compression is the compressor, and the chunk framing around it is
+// a header, a CRC and one filter byte per row. Neither adds a dependency to a
+// repository whose pitch is one executable and none.
+static unsafe void ReadmeAssets()
+{
+    const uint StillW = 1024, StillH = 1024; // FRAME_W/FRAME_H, src/swarm.asm
+    const uint LoopW = 384, LoopH = 384;
+    const uint Warm = 600; // steps before either asset is taken
+    const int LoopFrames = 72;
+    const uint StepsPerFrame = 2;
+    const int DelayCs = 4; // hundredths of a second between frames
+
+    string root = RepoRoot();
+    string dir = Path.Combine(root, "docs", "media");
+    Directory.CreateDirectory(dir);
+
+    SwarmParams p = ShippedScene();
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException("layout rejected the shipped scene");
+
+    Console.WriteLine("swarm.asm README assets (#131)");
+    Console.WriteLine(
+        $"  scene   : n={p.N}, {p.SpeciesN} species, seed 0x{p.Seed:X}, rmax={p.RMax}, "
+            + $"force_path={p.ForcePath}, flags=0x{p.Flags:X}");
+    Console.WriteLine($"  warm-up : {Warm} steps");
+    Console.WriteLine();
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException("init failed on the shipped scene");
+        Native.swarm_step(arena, Warm);
+
+        uint* fb = (uint*)NativeMemory.AlignedAlloc((nuint)StillW * StillH * sizeof(uint), 64);
+        try
+        {
+            Native.swarm_plot(arena, fb, StillW, StillH);
+            byte[] png = EncodePng(fb, StillW, StillH);
+            string stillPath = Path.Combine(dir, "swarm-still.png");
+            File.WriteAllBytes(stillPath, png);
+            Console.WriteLine(
+                $"  {Rel(root, stillPath)}  {StillW}x{StillH}  {png.Length} bytes");
+        }
+        finally
+        {
+            NativeMemory.AlignedFree(fb);
+        }
+
+        uint* lfb = (uint*)NativeMemory.AlignedAlloc((nuint)LoopW * LoopH * sizeof(uint), 64);
+        try
+        {
+            var frames = new byte[LoopFrames][];
+            for (int i = 0; i < LoopFrames; i++)
+            {
+                Native.swarm_plot(arena, lfb, LoopW, LoopH);
+                frames[i] = IndexFrame(lfb, LoopW, LoopH);
+                Native.swarm_step(arena, StepsPerFrame);
+            }
+            byte[] gif = EncodeGif(frames, LoopW, LoopH, DelayCs);
+            string loopPath = Path.Combine(dir, "swarm-loop.gif");
+            File.WriteAllBytes(loopPath, gif);
+            Console.WriteLine(
+                $"  {Rel(root, loopPath)}  {LoopW}x{LoopH}  {LoopFrames} frames  "
+                    + $"{DelayCs}cs  {StepsPerFrame} steps/frame  {gif.Length} bytes");
+        }
+        finally
+        {
+            NativeMemory.AlignedFree(lfb);
+        }
+    }
+    finally
+    {
+        NativeMemory.AlignedFree(arena);
+    }
+}
+
+static string Rel(string root, string path) =>
+    Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+
+// The default preset assembled into swarm.exe (src/swarm.asm, `sim_params`),
+// field for field, except for two the picture has to pin. force_path is AVX2
+// where the image leaves it on auto, because auto resolves per host and an
+// asset committed to the repository has to name the path that produced it;
+// PATH_AVX2 is the baseline every supported machine carries. FLAG_SPLAT is set
+// where the image leaves it to the `-splat` toggle, because 8,192 single
+// pixels in a million-pixel frame survive neither a README's display width nor
+// a reader's screen. Both are stated in the caption beside the asset.
+static SwarmParams ShippedScene()
+{
+    var p = new SwarmParams
+    {
+        Version = 1,
+        N = 8192,
+        SpeciesN = 4,
+        Seed = 0x9E3779B97F4A7C15,
+        RMax = 0.05f,
+        Beta = 0.3f,
+        Dt = 0.02f,
+        Friction = 0.71f,
+        ForceScale = 10f,
+        ForcePath = 1, // PATH_AVX2, where the image says 0 (auto)
+        Flags = 1 | 2, // FLAG_GRID | FLAG_SPLAT
+    };
+    float[] m =
+    [
+        0.5f, -0.2f, 0.3f, -0.5f,
+        -0.3f, 0.6f, -0.4f, 0.2f,
+        0.2f, 0.3f, -0.6f, 0.4f,
+        -0.4f, 0.1f, 0.5f, 0.3f,
+    ];
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++)
+            p.Matrix[r * 8 + c] = m[r * 4 + c];
+    return p;
+}
+
+// One byte per pixel, the index into Asset.Colours. Fail-closed: a colour the
+// palette does not hold means the buffer did not come from swarm_plot, and
+// guessing a nearest match would hide exactly that.
+static unsafe byte[] IndexFrame(uint* bgra, uint w, uint h)
+{
+    var ix = new byte[(long)w * h];
+    for (long i = 0; i < ix.LongLength; i++)
+    {
+        uint c = bgra[i] & 0x00FFFFFF;
+        int k = Array.IndexOf(Asset.Colours, c);
+        if (k < 0)
+            throw new InvalidOperationException(
+                $"pixel {i} is 0x{c:X6}, outside the plot palette");
+        ix[i] = (byte)k;
+    }
+    return ix;
+}
+
+// --- PNG (RFC 2083, colour type 2, filter type 0) ---------------------------
+
+static unsafe byte[] EncodePng(uint* bgra, uint w, uint h)
+{
+    // Filter byte + one RGB triple per pixel, per row. Filter 0 (None) is the
+    // honest choice for this image: the raster is isolated pixels on a flat
+    // background, so a predictor has nothing to predict and deflate handles
+    // the background runs.
+    var raw = new byte[(long)h * (1 + (long)w * 3)];
+    long o = 0;
+    for (uint y = 0; y < h; y++)
+    {
+        raw[o++] = 0;
+        for (uint x = 0; x < w; x++)
+        {
+            uint c = bgra[(long)y * w + x];
+            raw[o++] = (byte)(c >> 16);
+            raw[o++] = (byte)(c >> 8);
+            raw[o++] = (byte)c;
+        }
+    }
+
+    byte[] idat;
+    using (var ms = new MemoryStream())
+    {
+        using (var z = new ZLibStream(ms, CompressionLevel.SmallestSize, leaveOpen: true))
+            z.Write(raw, 0, raw.Length);
+        idat = ms.ToArray();
+    }
+
+    var png = new MemoryStream();
+    png.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    var ihdr = new byte[13];
+    BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(0), w);
+    BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(4), h);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 2; // colour type: truecolour
+    PngChunk(png, "IHDR", ihdr);
+    PngChunk(png, "IDAT", idat);
+    PngChunk(png, "IEND", []);
+    return png.ToArray();
+}
+
+static void PngChunk(Stream s, string type, byte[] data)
+{
+    Span<byte> len = stackalloc byte[4];
+    BinaryPrimitives.WriteUInt32BigEndian(len, (uint)data.Length);
+    s.Write(len);
+    byte[] tag = System.Text.Encoding.ASCII.GetBytes(type);
+    s.Write(tag);
+    s.Write(data);
+    Span<byte> crc = stackalloc byte[4];
+    BinaryPrimitives.WriteUInt32BigEndian(crc, Crc32(tag, data));
+    s.Write(crc);
+}
+
+static uint Crc32(byte[] a, byte[] b)
+{
+    uint[] table = Asset.Crc32Table;
+    uint c = 0xFFFFFFFF;
+    foreach (byte x in a)
+        c = table[(c ^ x) & 0xFF] ^ (c >> 8);
+    foreach (byte x in b)
+        c = table[(c ^ x) & 0xFF] ^ (c >> 8);
+    return c ^ 0xFFFFFFFF;
+}
+
+// --- GIF89a -----------------------------------------------------------------
+
+// A looping animation over a 16-entry global colour table. The table is
+// Asset.Colours padded with black: GIF sizes its table by a power of two, and
+// nine colours round up to sixteen. Padding entries are never indexed, which
+// the frame indexer guarantees by refusing any colour outside the palette.
+static byte[] EncodeGif(byte[][] frames, uint w, uint h, int delayCs)
+{
+    var g = new MemoryStream();
+    g.Write(System.Text.Encoding.ASCII.GetBytes("GIF89a"));
+    WriteLe16(g, (ushort)w);
+    WriteLe16(g, (ushort)h);
+    g.WriteByte(0xF3); // global table present, 8-bit source, 2^(3+1) entries
+    g.WriteByte(0x00); // background colour index
+    g.WriteByte(0x00); // no pixel aspect ratio
+    for (int i = 0; i < 16; i++)
+    {
+        uint c = i < Asset.Colours.Length ? Asset.Colours[i] : 0u;
+        g.WriteByte((byte)(c >> 16));
+        g.WriteByte((byte)(c >> 8));
+        g.WriteByte((byte)c);
+    }
+
+    // NETSCAPE2.0 application extension: loop forever. Without it a viewer
+    // plays the animation once, which for a README asset is a defect.
+    g.Write([0x21, 0xFF, 0x0B]);
+    g.Write(System.Text.Encoding.ASCII.GetBytes("NETSCAPE2.0"));
+    g.Write([0x03, 0x01]);
+    WriteLe16(g, 0); // 0 = forever
+    g.WriteByte(0x00);
+
+    foreach (byte[] frame in frames)
+    {
+        g.Write([0x21, 0xF9, 0x04, 0x04]); // graphic control, disposal 1, opaque
+        WriteLe16(g, (ushort)delayCs);
+        g.Write([0x00, 0x00]);
+        g.WriteByte(0x2C); // image descriptor
+        WriteLe16(g, 0);
+        WriteLe16(g, 0);
+        WriteLe16(g, (ushort)w);
+        WriteLe16(g, (ushort)h);
+        g.WriteByte(0x00); // no local table, not interlaced
+        LzwCompress(g, frame, 4);
+    }
+
+    g.WriteByte(0x3B); // trailer
+    return g.ToArray();
+}
+
+static void WriteLe16(Stream s, ushort v)
+{
+    s.WriteByte((byte)v);
+    s.WriteByte((byte)(v >> 8));
+}
+
+// GIF's variable-width LZW, emitted into sub-blocks of at most 255 bytes. The
+// dictionary is reset with a clear code when it fills, which keeps the code
+// width inside the 12 bits the format allows.
+static void LzwCompress(Stream s, byte[] indices, int minCodeSize)
+{
+    int clear = 1 << minCodeSize;
+    int eoi = clear + 1;
+    int codeSize = minCodeSize + 1;
+    int next = eoi + 1;
+    var dict = new Dictionary<(int Prefix, byte Suffix), int>();
+
+    // The image data opens with the initial code width, before the first
+    // sub-block; a decoder reads this byte as the width of everything after it.
+    s.WriteByte((byte)minCodeSize);
+
+    var block = new byte[255];
+    int blockLen = 0;
+    int bitBuf = 0,
+        bitCount = 0;
+
+    void Flush()
+    {
+        if (blockLen == 0)
+            return;
+        s.WriteByte((byte)blockLen);
+        s.Write(block, 0, blockLen);
+        blockLen = 0;
+    }
+
+    void Emit(int code)
+    {
+        bitBuf |= code << bitCount;
+        bitCount += codeSize;
+        while (bitCount >= 8)
+        {
+            block[blockLen++] = (byte)bitBuf;
+            bitBuf >>= 8;
+            bitCount -= 8;
+            if (blockLen == 255)
+                Flush();
+        }
+    }
+
+    Emit(clear);
+    int prefix = indices[0];
+    for (int i = 1; i < indices.Length; i++)
+    {
+        byte k = indices[i];
+        if (dict.TryGetValue((prefix, k), out int found))
+        {
+            prefix = found;
+            continue;
+        }
+        Emit(prefix);
+        // The width is checked BEFORE this entry is added, not after, because
+        // the decoder builds the same table one code behind the encoder: it
+        // learns an entry from the code that follows the one that created it.
+        // Growing on the encoder's own count runs a code ahead of the reader
+        // and every code after it is misread.
+        if (next > (1 << codeSize) - 1 && codeSize < 12)
+            codeSize++;
+        if (next < 1 << 12)
+        {
+            dict[(prefix, k)] = next++;
+        }
+        else
+        {
+            // The table is full: reset both sides at the current width, which
+            // is what the clear code tells the decoder to do.
+            Emit(clear);
+            dict.Clear();
+            codeSize = minCodeSize + 1;
+            next = eoi + 1;
+        }
+        prefix = k;
+    }
+    Emit(prefix);
+    Emit(eoi);
+    if (bitCount > 0)
+    {
+        block[blockLen++] = (byte)bitBuf;
+        if (blockLen == 255)
+            Flush();
+    }
+    Flush();
+    s.WriteByte(0x00); // block terminator
+}
+
 // --- native surface + the ABI-mirrored params struct -----------------------
 
 // Which bank OUT the plot is timed over. Named rather than boolean because
@@ -1414,4 +1785,41 @@ internal struct SwarmParams
 internal struct Matrix64
 {
     private float _e0;
+}
+
+// The plot's whole colour range, and the CRC table the PNG chunks are stamped
+// with. Both live on a type because a top-level program has statements and
+// local functions and no fields, and Colours is read once per pixel.
+internal static class Asset
+{
+    // PLOT_BG at index 0, then swarm_palette in its own order
+    // (src/kernel/plot.inc). Index 0 is the GIF's background index too, so a
+    // frame that is mostly background codes as one long run.
+    internal static readonly uint[] Colours =
+    [
+        0x001A1A22,
+        0x00FF4040,
+        0x0040FF40,
+        0x004080FF,
+        0x00FFD040,
+        0x00FF40FF,
+        0x0040FFFF,
+        0x00FF8020,
+        0x00A060FF,
+    ];
+
+    internal static readonly uint[] Crc32Table = BuildCrc32Table();
+
+    private static uint[] BuildCrc32Table()
+    {
+        var t = new uint[256];
+        for (uint n = 0; n < 256; n++)
+        {
+            uint c = n;
+            for (int k = 0; k < 8; k++)
+                c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
+            t[n] = c;
+        }
+        return t;
+    }
 }
