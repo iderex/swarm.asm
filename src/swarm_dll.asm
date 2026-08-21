@@ -68,6 +68,13 @@ include 'kernel/plot.inc'
 ; kernel32, so the exe allowlist holds regardless).
 include 'platform/pool.inc'
 
+; The capture reduction (platform layer, pure integer, no imports of its own).
+; It is included here so the harness can call the very routine swarm.exe
+; reports its frame times with. Left in the exe alone it would sit behind a
+; process nothing can P/Invoke, and the one thing it can get wrong - which
+; sorted element a percentile names - would be asserted by nothing.
+include 'platform/frametime.inc'
+
 ; ------------------------------------------------------------------
 ; swarm_plot - seam wrapper over plot_core (FP: x*w needs the pinned MXCSR).
 ;   in:       rcx arena, rdx bgra, r8d w, r9d h
@@ -321,6 +328,12 @@ section '.edata' export data readable
   ; determinism gates can compare several thread counts against the serial
   ; path. The serial swarm_step / swarm_pass stay intact - no
   ; threading crosses the P/Invoke boundary; the pool is an in-DLL concern.
+  ;
+  ; swarm_frame_stats exports the capture reduction. It is integer-only and
+  ; preserves every nonvolatile it touches, so it wears no seam. It is here for
+  ; the reason swarm_mxcsr is: the shipped exe is its only other caller, and a
+  ; figure that exe publishes has to be checkable against the definition
+  ; docs/BENCHMARKS.md states rather than against itself.
   export 'swarm.kernel.dll',\
          swarm_version,      'swarm_version',\
          rng_fill_core,      'swarm_rng_fill',\
@@ -339,7 +352,8 @@ section '.edata' export data readable
          pool_step,          'swarm_step_mt',\
          pool_pass_all,      'swarm_pass_mt',\
          pool_build,         'swarm_build_mt',\
-         pool_shutdown,      'swarm_pool_shutdown'
+         pool_shutdown,      'swarm_pool_shutdown',\
+         frame_stats_core,   'swarm_frame_stats'
 
 section '.data' data readable writeable
 

@@ -12,10 +12,19 @@
 ; WORK WINDOW of every frame (step + plot + blit, never the pacing wait) and
 ; dumping the raw QPC deltas to swarm-frames.bin before exiting. A paced loop
 ; measured wall-to-wall reports the frame period by construction and proves
-; nothing, which is why the wait is outside the window. Raw u64 samples rather
-; than in-exe statistics: no sort, no formatting, no CRT-shaped number printing,
-; and an artifact anyone can recompute from. It takes precedence over `-smoke`
-; when both are given.
+; nothing, which is why the wait is outside the window. The dump stays raw: every
+; sample in recorded order, so any statistic is recoverable from it and every
+; published figure keeps an artifact a reader can recompute from. It takes
+; precedence over `-smoke` when both are given.
+;
+; The run then reports. swarm-frames.txt carries the four figures
+; docs/BENCHMARKS.md publishes - mean, p50, p99 and max - beside the scene they
+; belong to. A mean hides exactly the stalls a particle simulation is judged on,
+; so the instrument states percentiles itself rather than leaving the reading to
+; whoever remembers to reduce the dump. The reduction is
+; src/platform/frametime.inc, shared with the test DLL so the definition can be
+; checked against the document's rather than against itself; the sort it needs
+; runs once, after the dump has landed, and touches no frame.
 ;
 ; `swarm.exe <preset.txt>` is the platform half of decision 10. The grammar and
 ; its two-phase commit are kernel code (parse.inc); reading a file is not, so
@@ -853,6 +862,12 @@ include 'kernel/plot.inc'
 ; within kernel32/user32/gdi32.
 include 'platform/pool.inc'
 
+; The capture reduction (platform layer). Pure integer arithmetic with no
+; imports of its own, and the same file the test DLL exports as
+; swarm_frame_stats, so the figures capture_report writes are produced by a
+; routine the harness can call directly.
+include 'platform/frametime.inc'
+
 ; Seam wrappers: each pins MXCSR to 0x9FC0, saves the Win64 nonvolatiles, and
 ; lands the kernel core at rsp = 0 mod 32 - the same contract the DLL exports
 ; carry, so the exe drives the identical, gate-verified code paths. Each wrapper
@@ -1257,6 +1272,7 @@ capture_frame:
         cmp     ecx, CAPTURE_FRAMES
         jb      .more
         call    capture_write           ; never returns unless the dump landed
+        call    capture_report          ; nor unless the report landed after it
   .complete:
         mov     eax, 1
         add     rsp, 8
@@ -1316,6 +1332,85 @@ capture_write:
   .fail:
         invoke  ExitProcess, 1
 
+; ------------------------------------------------------------------
+; capture_report - the run's four published figures, in a file beside the dump.
+;   in:       [capture_buf], [capture_count], [qpc_freq], [sim_params]
+;   out:      nothing on success; exits the process with code 1 on any failure
+;   clobbers: caller-saved, flags
+;   MXCSR:    untouched (integer only)
+;   note:     the call order behind capture_write is load-bearing. The
+;             reduction sorts the sample buffer in place, so swarm-frames.bin
+;             has to hold the samples in recorded order before this runs -
+;             which is also why the dump stays the artifact a figure is
+;             recomputed from and this file is only the reading.
+;   note:     fail-closed on the same paths the dump is, plus the reduction's
+;             own refusal: a run that could not produce the figures writes no
+;             file rather than an empty or partial one, so an exit code of 0
+;             means both artifacts are complete.
+;   bound:    the whole-millisecond part of a figure is printed from a u32, so
+;             a single frame past ~1193 hours would wrap it. The dump carries
+;             the ticks either way.
+; ------------------------------------------------------------------
+capture_report:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        mov     rcx, [capture_buf]
+        mov     edx, [capture_count]
+        mov     r8,  [qpc_freq]
+        lea     r9,  [cap_stats]
+        call    frame_stats_core
+        test    eax, eax
+        jnz     .fail                   ; no figures: publish nothing
+        call    cpu_paths_core          ; the feature path the run resolved on
+        mov     [cap_paths], eax
+        ; n, the flags and the seed are already staged in the dump header that
+        ; capture_write laid out a moment ago, so they are read from there
+        ; rather than a second time out of sim_params: the report and the dump
+        ; cannot then disagree about the scene they describe.
+        mov     eax, [sim_params+SP_SPECIES_N]
+        mov     [cap_species], eax
+        mov     eax, dword [cap_seed+4]
+        mov     [cap_seed_hi], eax      ; the seed as two dwords: %08X%08X
+        mov     eax, dword [cap_seed]
+        mov     [cap_seed_lo], eax
+        xor     ecx, ecx                ; microseconds -> a %u.%03u pair, so
+  .split:                               ;   the text needs no float formatter
+        mov     rax, [cap_stats+rcx*8]
+        xor     edx, edx
+        mov     r8d, 1000
+        div     r8
+        mov     [cap_ms+rcx*8], eax
+        mov     [cap_ms+rcx*8+4], edx
+        inc     ecx
+        cmp     ecx, 4
+        jb      .split
+        invoke  wsprintfA, rep_buf, fmt_report, \
+                [cap_samples], [cap_n], [cap_species], \
+                [cap_flags], [cap_seed_hi], [cap_seed_lo], \
+                [cap_paths], [cap_freq], \
+                [cap_ms], [cap_ms+4], [cap_ms+8], [cap_ms+12], \
+                [cap_ms+16], [cap_ms+20], [cap_ms+24], [cap_ms+28]
+        test    eax, eax
+        jle     .fail                   ; nothing formatted is not a report
+        mov     [rep_len], eax
+        invoke  CreateFileW, rep_path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, \
+                FILE_ATTRIBUTE_NORMAL, 0
+        cmp     rax, INVALID_HANDLE_VALUE
+        je      .fail
+        mov     [cap_file], rax
+        invoke  WriteFile, [cap_file], rep_buf, [rep_len], cap_written, 0
+        test    eax, eax
+        jz      .fail_close
+        mov     eax, [cap_written]
+        cmp     eax, [rep_len]
+        jne     .fail_close             ; a short report is not a report
+        invoke  CloseHandle, [cap_file]
+        add     rsp, 8
+        ret
+  .fail_close:
+        invoke  CloseHandle, [cap_file]
+  .fail:
+        invoke  ExitProcess, 1
+
 section '.data' data readable writeable
 
   _title         TCHAR 'swarm.asm', 0
@@ -1324,6 +1419,20 @@ section '.data' data readable writeable
   capture_needle db '-capture', 0
   splat_needle   db '-splat', 0
   cap_path       du 'swarm-frames.bin', 0    ; CreateFileW takes UTF-16
+  rep_path       du 'swarm-frames.txt', 0    ; the reading of that dump
+
+  ; The report. The figure line is deliberately the same shape the recompute
+  ; snippet in docs/BENCHMARKS.md prints, so a reader can put the two side by
+  ; side without translating one into the other. Milliseconds to three decimals
+  ; is a whole part and a zero-padded remainder, which is why no float reaches
+  ; this file. Hardware and OS are not here: the exe can read neither within
+  ; kernel32/user32/gdi32 honestly, and the disclosure rule in BENCHMARKS.md
+  ; carries them beside every published row.
+  fmt_report    db 'swarm.asm frame-time capture', 13, 10, \
+                   'samples=%u  n=%u  species=%u  flags=0x%08X  ', \
+                   'seed=0x%08X%08X  cpu_paths=0x%X  qpc_freq=%u', 13, 10, \
+                   'mean=%u.%03u ms  p50=%u.%03u ms  p99=%u.%03u ms  ', \
+                   'max=%u.%03u ms', 13, 10, 0
 
   ; Preset failure text. Every cap that appears in a message is formatted from
   ; the constant that enforces it, so the sentence a reader sees cannot drift
@@ -1390,6 +1499,23 @@ section '.data' data readable writeable
   if $ - cap_header <> CAP_HEADER_BYTES
         err     ; the header fields and CAP_HEADER_BYTES disagree
   end if
+
+  ; swarm-frames.txt state. cap_stats holds the reduction's four microsecond
+  ; figures in its own order - mean, p50, p99, max - and cap_ms is each of them
+  ; split into the whole-millisecond and three-digit-remainder pair the format
+  ; string prints. REP_MAX is far above the ~150 characters the report reaches;
+  ; wsprintfA's own 1024-character limit is the tighter of the two.
+  REP_MAX = 512
+  align 8
+  cap_stats   dq 4 dup (?)              ; mean, p50, p99, max, microseconds
+  cap_ms      dd 8 dup (?)              ; (whole ms, remainder us) per figure
+  cap_paths   dd ?                      ; swarm_cpu_paths of the capturing run
+  cap_species dd ?                      ; species count, the one scene field
+                                        ;   the dump header does not carry
+  cap_seed_hi dd ?                      ; the world seed, high dword
+  cap_seed_lo dd ?                      ;   and low, printed as %08X%08X
+  rep_len     dd ?                      ; characters wsprintfA produced
+  rep_buf     db REP_MAX dup (?)
 
   ; -preset state. All of it is startup-only: nothing here is read once the
   ; render loop begins, and preset_buf is released as soon as the parse commits.
