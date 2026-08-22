@@ -28,6 +28,11 @@ namespace Swarm.Tests;
 /// no framebuffer and loads nothing native, so it runs on a machine that
 /// cannot execute the DLL.
 ///
+/// <see cref="ReadmeAssetRasterTests"/> is where that half lives. It produces
+/// the raster and compares every pixel of the still against it, and it loads
+/// the DLL to do so, which is why it is a class of its own rather than a test
+/// here.
+///
 /// The GIF is decoded rather than sniffed for a second reason. An animation
 /// that a viewer plays once, or at a speed of its own choosing, is a defect in
 /// a README asset and not a rough edge, so the loop extension and the per-frame
@@ -57,7 +62,7 @@ public sealed class ReadmeAssetTests
     /// </summary>
     private const long MediaBudgetBytes = 2 * 1024 * 1024;
 
-    private static string Abs(string rel) =>
+    internal static string Abs(string rel) =>
         Path.Combine(Build.RepoRoot, rel.Replace('/', Path.DirectorySeparatorChar));
 
     /// <summary>
@@ -257,7 +262,7 @@ public sealed class ReadmeAssetTests
     /// than handled, because a picture in this repository that needed a wider
     /// decoder did not come from the encoder that is supposed to have made it.
     /// </summary>
-    private static (uint W, uint H, byte[] Rgb) DecodePng(byte[] d)
+    internal static (uint W, uint H, byte[] Rgb) DecodePng(byte[] d)
     {
         Assert.Equal<byte[]>([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], d[..8]);
 
