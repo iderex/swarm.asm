@@ -1084,7 +1084,9 @@ ladder starts where the recorded rows sit and leaves them behind.
 
 **The scene clusters, and the raster is the witness.** The lit share of the
 framebuffer falls from 63.4% to 12.6% while `n` never changes, so a million
-particles end up in an eighth of the pixels they started in. The plot section
+particles end up in an eighth of the pixels they started in. Whether that follows
+the count or the parameters is not answerable from this ladder alone, which moves
+both; the section after it holds each still in turn and answers it. The plot section
 above measures three OUT states and finds none of them below 60.8% lit, and notes
 that a genuinely clustered scene would show a much lower share and that whether
 one exists was not answered there. This is that scene, and it does.
@@ -1122,6 +1124,94 @@ a floor over nine rounds and the live acceptance is a p99. And it never touches
 the blit, which is `BitBlt` behind the platform boundary the seam does not
 reach - so three of decision 11's four phases are now measured at this scene and
 the fourth is still not.
+
+## The same ladder on the harness scene, at both counts (#5)
+
+The section above changed two things at once. It moved from this harness's params
+to `presets/headline.txt` **and** it walked a settle depth no seam row had walked,
+and it is the settle that its reading attributes the clustering to. That leaves
+the obvious question unanswered: is the clustering a property of a million
+particles, or of that particular scene?
+
+It also leaves a published claim standing on ground worth re-examining. The M3
+pool section reads its table as 500,000 particles clearing 60 fps, and it makes
+that reading by taking the threaded pass off an **unstepped** bank and the build
+off the **settled** distribution, in the same sentence. Each half is the cheaper
+of the two states available to it, and no single frame is ever in both.
+
+This runs the same ladder on the harness's own scene at both counts. Against the
+section above it holds the count still and moves only the params; between its own
+two counts it holds the params still and moves only the count.
+
+```powershell
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release -- --m3settle
+```
+
+### The scene does not cluster, at either count
+
+`cand/p` and `lit %` were identical across all three runs at each count, so they
+are carried once.
+
+| steps | cand/p @ 500k | lit % @ 500k | cand/p @ 1M | lit % @ 1M |
+| ----: | ------------: | -----------: | ----------: | ---------: |
+|     0 |          18.2 |         38.0 |        37.0 |       63.0 |
+|   600 |          18.4 |         37.7 |        37.5 |       62.2 |
+|  1800 |          18.4 |         37.7 |        37.4 |       62.1 |
+|  3600 |          18.4 |         37.7 |        37.5 |       62.1 |
+
+Threaded frame (`mt build + mt pass + plot`), over all seven rungs of all three
+runs at each count:
+
+| scene              | frame ms, lowest | frame ms, highest |
+| ------------------ | ---------------: | ----------------: |
+| harness, 500,000   |            7.307 |             9.062 |
+| harness, 1,048,576 |           13.587 |            16.975 |
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200, 32 logical processors. **Feature path**: `swarm_cpu_paths` reports
+  `0x1`, so AVX2 and no AVX-512; `force_path = 0` resolves to `PATH_AVX2`.
+- **Scene**: this harness's standard set - 6 species, seed `0x5EED`, the
+  deterministic `sin`-filled matrix, `beta = 0.3`, `dt = 0.02`,
+  `friction = 0.71`, `force_scale = 10`, `FLAG_GRID`, `rmax = 1/512` so `g` is
+  512 at both counts. It is the scene the M3 pool table and the 1M baseline rows
+  were taken on, which is why it and not another one is here.
+- **Framebuffer**: 1024 x 1024, `FLAG_SPLAT` off, as above.
+- **Kernel commit**: `3ac0bb6`, unchanged by this measurement. **Date**:
+  2026-08-22.
+- Every figure is a minimum over nine rounds. The rung offset the section above
+  prices applies here unchanged: a rung leaves the scene two steps further on.
+- **The host was not quiesced.** The full tables are in the harness output; the
+  four rungs above are the ones the reading rests on.
+
+### Reading it - the clustering is the scene, and the 500k claim holds
+
+**Nothing clusters here.** Over the depth that took the committed headline scene
+from 37.0 candidates per particle to 1092.0, this scene moves from 37.0 to 37.5,
+and its lit share of the framebuffer from 63.0% to 62.1%. The settle is not a
+force that clusters a scene; it is time, and what a scene does with time is a
+property of its matrix and its species count.
+
+**The two 1M scenes start identically and end a factor of 29 apart.** Both report
+37.0 candidates per particle at step 0, which is what `n / g²` over a 3x3
+neighbourhood gives and is a check that the two ladders are measuring the same
+grid. What separates them is entirely what the parameters do to the scene
+afterwards. So the gap the section above attributes to settle depth is a property
+of `presets/headline.txt`, not of the particle count, and no lever inside the
+kernel is what stands between the two numbers.
+
+**"500k @ 60 fps reached" survives this.** The threaded frame stays between 7.307
+and 9.062 ms at every depth in every run, with the plot inside it, against a
+16.67 ms budget. The reading being examined arrives at 15.487 ms by pairing the
+worst-case build with the unstepped pass, and the measured settled frame is
+better than that, not worse. The asymmetry in how it was assembled is real and
+worth not repeating; the conclusion it reached is correct on this scene.
+
+**1M on this scene straddles the budget rather than clearing it.** 13.587 to
+16.975 ms across 21 rows, against 16.67. That is consistent with the recorded
+threaded 1M row of 11.894 ms once this section's plot column, 2.5 to 3.7 ms, is
+added to it - those rows carry build plus pass and no raster. Neither figure is a
+frame rate: the blit is not in either, and both are floors over nine rounds
+rather than the p99 the acceptance asks for.
 
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 

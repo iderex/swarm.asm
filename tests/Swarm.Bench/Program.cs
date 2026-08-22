@@ -91,6 +91,15 @@ if (args.Contains("--scene"))
     return 0;
 }
 
+// The 500k claim re-examined at settle depth (#5), behind an argument for the
+// same reasons as the scene mode above; it is that mode's instrument pointed at
+// a different count and a different scene.
+if (args.Contains("--m3settle"))
+{
+    M3Settle();
+    return 0;
+}
+
 // The README assets (#131), behind an argument because it is the only mode
 // here that writes files into the tree and measures nothing at all. It renders
 // the shipped executable's own scene through swarm_plot and encodes the
@@ -1602,6 +1611,80 @@ static SwarmParams HeadlinePreset()
         for (int c = 0; c < 4; c++)
             p.Matrix[r * 8 + c] = m[r * 4 + c];
     return p;
+}
+
+// --- does "500k @ 60 fps reached" survive the settle (#5) --------------------
+//
+// The M3 pool section reads its own table as 500,000 particles clearing 60 fps,
+// and the README's third acceptance clause on #5 is that every claim it makes is
+// reproducible from the repository alone. The 1M ladder above gives a reason to
+// re-examine the ground that reading stands on rather than the arithmetic in it.
+//
+// The reading takes the threaded pass off an unstepped bank and the build off
+// the settled distribution, in the same sentence. Each half is the cheaper of
+// the two states available to it, and no single frame is ever in both: a frame
+// whose build is cheap because the scene has clustered has a pass that has
+// clustered too. The 1M ladder measures what that costs there. This asks the
+// same question at the count and the params the 500k claim is made on.
+//
+// Same ladder, same instrument, same disclosure. The scene is this harness's own
+// - 6 species, seed 0x5EED, the sin-filled matrix, rmax = 1/512 - because that
+// is what the row being examined was taken on, and a different scene would
+// answer a different question.
+//
+// It runs at BOTH counts on that one scene, and the second count is what keeps
+// the answer honest. The 1M ladder above moved the count and the params
+// together, so by itself it cannot say which of the two the clustering follows.
+// 1M here holds the params still and moves only the count; against the ladder
+// above it holds the count still and moves only the params.
+static unsafe void M3Settle()
+{
+    Console.WriteLine();
+    Console.WriteLine("The harness scene along its settle depth, at both counts (#5)");
+    Console.WriteLine();
+
+    const float RMax = 1f / 512f;
+    int[] depths = [0, 600, 1200, 1800, 2400, 3000, 3600];
+    const uint FrameW = 1024,
+        FrameH = 1024;
+
+    // Both counts, on ONE set of params. The 1M ladder above changed the count
+    // and the scene at the same time, so on its own it cannot say which of the
+    // two the clustering follows. Holding the params fixed and moving only the
+    // count answers that half; the other half is that ladder against the 1M row
+    // here, which moves only the scene.
+    Console.WriteLine("the row under examination: T = 16, pass 4.979 ms, frame 15.487 ms, 64.6 fps");
+
+    foreach (uint n in new uint[] { 500_000, 1_048_576 })
+    {
+        SwarmParams p = MakeGridParams(n, RMax);
+        p.ForcePath = 0; // auto, as a shipped run would resolve it
+        int g = GridDim(RMax);
+        if (Native.swarm_layout_bytes(in p) == 0)
+            throw new InvalidOperationException($"layout rejected n={n} rmax={RMax}");
+
+        Console.WriteLine();
+        Console.WriteLine(
+            $"harness scene: n = {p.N}, species {p.SpeciesN}, rmax = 1/512, g = {g}, "
+            + $"seed 0x{p.Seed:X4}, sin-filled matrix"
+        );
+
+        for (int run = 1; run <= 3; run++)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"n = {p.N}, run {run}");
+            Console.WriteLine(
+                $"{"steps",6} {"cand/p",8} {"lit %",7} {"build ms",9} {"pass ms",10} {"plot ms",8} "
+                + $"{"frame ms",9} {"mt build",9} {"mt pass",9} {"mt frame",9} {"fps",6} {"T",4}"
+            );
+            Console.WriteLine(new string('-', 110));
+            SceneLadder(p, g, depths, FrameW, FrameH);
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Columns and caveats are the 1M ladder's; the rung offset it prices applies here too.");
+    Console.WriteLine("frame = build + pass + plot. THE BLIT IS NOT IN IT; the seam does not reach it.");
 }
 
 // --- the README assets (#131) ----------------------------------------------
