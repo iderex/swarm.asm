@@ -944,8 +944,184 @@ is not where the difference sits**. That is a bound and not a subtraction, for
 two reasons that both have to be said: every figure above is a minimum over nine
 rounds, so it describes the phase's floor and not its tail, and the params are
 this harness's rather than the committed scene's. What is left unattributed is
-the blit and whatever the live pass costs on an evolved scene, and separating
-those needs the per-phase instrument, which is #152.
+the blit and whatever the live pass costs on an evolved scene.
+
+That last sentence named #152 as what would separate them. It is the wrong
+pointer twice over. #152 landed as the percentile report inside `-capture`, not
+as a per-phase split, so the live instrument still times one undivided window;
+and the evolved-scene half needed no new instrument at all. The section below
+takes it at the seam by settling the committed scene first, and finds that half
+is the whole of it.
+
+## The committed headline scene along its settle depth (#125)
+
+The three sections above measure build, pass and plot at 1M and leave a hole in
+the middle of the document. They are taken on this harness's params, on a bank
+that has never been stepped, and they add up to a threaded frame of 11.894 ms
+worst-run. The live capture rows further down are taken on
+`presets/headline.txt` over 3600 frames and record a worst p99 of 150.849 ms.
+Nothing here explained the factor between them, and the plot section says so.
+
+This section is the missing variable measured rather than argued about: the
+**settle depth**. It runs the seam on the committed scene's own params, at the
+depths a capture walks through - the field `swarm_init` leaves, decision 11's
+600 discarded warm-up frames, and on to 3600, which is one capture.
+
+```powershell
+dotnet run --project tests/Swarm.Bench/Swarm.Bench.csproj -c Release -- --scene
+```
+
+The candidate count travels with every row because it is the mechanism a
+clustering scene would work through: the force loop walks the 3x3 cell
+neighbourhood, so the same `n` costs whatever the occupancy of those nine cells
+is. A count that did not move would rule that mechanism out rather than leave it
+as a story told about the timings.
+
+### What a rung costs the scene it measures
+
+One arena carries a whole run of the ladder, and a rung does not leave the world
+where it found it: `build_core` is OUT to IN and `pass_core` is IN to OUT, so the
+timing rounds advance the scene. The offset is priced rather than argued for, on
+a fresh arena advanced by `swarm_step_mt` with nothing else touching it. The
+candidate count is the probe because it is a property of the state alone, with no
+clock in it.
+
+| settle | cand/particle |
+| -----: | ------------: |
+|    600 |         220.3 |
+|    601 |         219.3 |
+|    602 |         221.0 |
+|    603 |         219.9 |
+
+The ladder's 600 rung reports 221.0, which is the 602 row. So a rung leaves the
+scene exactly two steps further on, the `steps` column below is the settle alone,
+and the deepest rung sits at 3612 rather than 3600 - four tenths of a percent of
+the depth, against a quantity that moves by a factor of 29 across the table.
+
+The 600 row is also the serial stepper's answer. `swarm_step(arena, 600)` on the
+same params reports the same 220.3, which is `pool_step`'s bit-identity contract
+holding on this scene rather than being taken on trust.
+
+### The ladder, three whole runs
+
+`cand/p` and `lit %` came out identical in all three runs, to every digit
+printed, so they are carried once.
+
+| steps | cand/p | lit % |
+| ----: | -----: | ----: |
+|     0 |   37.0 |  63.4 |
+|   600 |  221.0 |  39.8 |
+|  1200 |  543.4 |  28.2 |
+|  1800 |  824.8 |  19.5 |
+|  2400 |  983.0 |  15.1 |
+|  3000 | 1057.5 |  13.1 |
+|  3600 | 1092.0 |  12.6 |
+
+Serial, one core:
+
+| steps | build ms |  pass ms | plot ms | frame ms |
+| ----: | -------: | -------: | ------: | -------: |
+|     0 |    6.202 |   57.866 |   2.405 |   66.473 |
+|     0 |    5.988 |   55.856 |   2.269 |   64.113 |
+|     0 |    8.170 |   73.327 |   3.741 |   85.239 |
+|   600 |    5.832 |  192.708 |   2.374 |  200.915 |
+|   600 |    5.775 |  193.195 |   2.246 |  201.215 |
+|   600 |    6.595 |  214.470 |   2.610 |  223.674 |
+|  1800 |    5.766 |  657.530 |   2.237 |  665.534 |
+|  1800 |    5.657 |  666.169 |   2.337 |  674.162 |
+|  1800 |    6.165 |  847.771 |   3.697 |  857.633 |
+|  3600 |    5.255 |  837.395 |   2.317 |  844.967 |
+|  3600 |    7.747 |  944.669 |   2.839 |  955.255 |
+|  3600 |    6.755 | 1060.635 |   2.931 | 1070.321 |
+
+Threaded, `T = 16` (the pool's auto-detected physical-core count), with the plot
+column repeated from the serial table because the raster is not fanned out:
+
+| steps | mt build ms | mt pass ms | mt frame ms |  fps |
+| ----: | ----------: | ---------: | ----------: | ---: |
+|     0 |       3.008 |      6.417 |      11.831 | 84.5 |
+|     0 |       2.929 |      6.410 |      11.608 | 86.1 |
+|     0 |       3.751 |      8.904 |      16.396 | 61.0 |
+|   600 |       3.050 |     22.729 |      28.153 | 35.5 |
+|   600 |       2.870 |     23.378 |      28.493 | 35.1 |
+|   600 |       4.849 |     34.275 |      41.733 | 24.0 |
+|  1800 |       2.964 |     69.034 |      74.236 | 13.5 |
+|  1800 |       3.029 |     59.588 |      64.954 | 15.4 |
+|  1800 |       3.873 |     91.343 |      98.912 | 10.1 |
+|  3600 |       2.876 |     84.659 |      89.852 | 11.1 |
+|  3600 |       4.761 |    205.538 |     213.138 |  4.7 |
+|  3600 |       4.221 |    120.670 |     127.822 |  7.8 |
+
+The 1200, 2400 and 3000 rungs are in the harness output; the four above are the
+ones the reading rests on.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200, 32 logical processors. **Feature path**: `swarm_cpu_paths` reports
+  `0x1`, so AVX2 and no AVX-512; the scene names no path, so `force_path = 0`
+  resolves to `PATH_AVX2`.
+- **Scene**: `presets/headline.txt`, field for field - `n = 1,048,576`, 4
+  species, seed `0x9E3779B97F4A7C15`, `rmax = 0.001953` so `g` is 512,
+  `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, `force_scale = 10`, and the
+  matrix the file carries. `FLAG_GRID` is applied, which is what the exe does
+  with a preset. This is the first seam section in this document taken on a
+  committed scene rather than on the harness's own params.
+- **Framebuffer**: 1024 x 1024, the shipped executable's, `FLAG_SPLAT` off.
+- **Kernel commit**: `47434aa`, unchanged by this measurement; the harness mode
+  that prints these tables lands with this text. **Date**: 2026-08-22.
+- Every figure is a minimum over nine rounds, as everywhere in this harness.
+- **The host was not quiesced, and it shows more here than anywhere above.** The
+  threaded 3600 rung spans 89.852 to 213.138 ms across the three runs. The
+  readings below therefore take the FASTEST run wherever a figure is used to
+  argue that the frame is too large, because the fast run is the conservative
+  direction for that claim.
+
+### Reading it - the gap is the scene, and it is the pass
+
+**The neighbourhood the force loop walks grows by a factor of 29.5 over one
+capture**, 37.0 candidates per particle at step 0 and 1092.0 at 3600. The 37.0 is
+the figure this document already records for the uniform headline scene, so the
+ladder starts where the recorded rows sit and leaves them behind.
+
+**The scene clusters, and the raster is the witness.** The lit share of the
+framebuffer falls from 63.4% to 12.6% while `n` never changes, so a million
+particles end up in an eighth of the pixels they started in. The plot section
+above measures three OUT states and finds none of them below 60.8% lit, and notes
+that a genuinely clustered scene would show a much lower share and that whether
+one exists was not answered there. This is that scene, and it does.
+
+**All of the growth is the pass.** Across the whole ladder the build stays
+between 5.255 and 8.170 ms serial and 2.870 and 4.849 ms threaded, and the plot
+between 2.237 and 3.741 ms. Neither has a trend in it. The threaded pass goes
+from 6.417 ms to 84.659 ms on the fastest run, a factor of 13.2.
+
+**It is sublinear in the candidate count**, 13.2x of pass against 29.5x of
+candidates, so the per-candidate cost falls as the scene clusters. Nothing here
+measures why; a denser cell's candidates being contiguous is the obvious guess
+and it stays a guess.
+
+**This closes the hole the two sections above left open.** The recorded live
+capture on this scene reports a mean of 91.030 ms and a p50 of 103.353 ms. The
+threaded seam frame at 3600 steps is 89.852 ms on the fastest run, and it does
+not include the blit. The live frame and the seam frame are the same frame once
+the seam is measured at the depth the live run is measured at, so the factor of
+roughly nine between them was never the instrument, the blit, or anything
+unmeasured: it is the settle. What is left over for the blit and for the
+distribution's tail is small beside it, and neither is separated here.
+
+**What it does to the lever order.** #125's step 2 lists the M3 kernel levers
+against a frame whose pass was 7.291 ms threaded. On the committed scene at
+capture depth the pass is 84.659 ms on the fastest run, so the levers on that
+list move a percentage of a figure that is itself twelve times larger than the
+whole 16.67 ms budget. The build was 37% of the frame in the section above and is
+3.2% here. Any route to the headline goes through what the pass costs once the
+scene has clustered, and this document holds no measurement of that quantity
+other than the tables above.
+
+**Two things this section does not do.** It states no percentile: every figure is
+a floor over nine rounds and the live acceptance is a p99. And it never touches
+the blit, which is `BitBlt` behind the platform boundary the seam does not
+reach - so three of decision 11's four phases are now measured at this scene and
+the fourth is still not.
 
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 

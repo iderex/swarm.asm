@@ -81,6 +81,16 @@ if (args.Contains("--plot"))
     return 0;
 }
 
+// The committed headline scene at the seam (#125), behind an argument for the
+// same two reasons as the plot mode above and one of its own: it settles a 1M
+// scene 600 steps at a time before it times anything, which is minutes of work
+// that belongs in front of nothing else.
+if (args.Contains("--scene"))
+{
+    SceneFrame();
+    return 0;
+}
+
 // The README assets (#131), behind an argument because it is the only mode
 // here that writes files into the tree and measures nothing at all. It renders
 // the shipped executable's own scene through swarm_plot and encodes the
@@ -1339,6 +1349,261 @@ static unsafe (double Ms, double LitPct) TimePlot(
     }
 }
 
+// --- the committed headline scene at the seam (#125) ------------------------
+//
+// Every seam figure in docs/BENCHMARKS.md is taken on this harness's own params
+// - 6 species, seed 0x5EED, a deterministic sin-filled matrix - and on a bank
+// that has never been stepped. The live capture rows are taken on
+// presets/headline.txt over 3600 consecutive frames from process start. Those
+// are two different worlds, and the document says so: it bounds the plot, reads
+// the threaded seam frame as 11.894 ms worst-run, and then records a worst p99
+// of 150.849 ms for the live frame while naming "whatever the live pass costs
+// on an evolved scene" as unattributed.
+//
+// This measures the seam on the committed scene's own params, along the settle
+// depth the live run actually walks: the uniform opening field, decision 11's
+// 600 discarded warm-up frames, and on to 3600, which is the length of a
+// capture. One arena per run carries the whole ladder, so a row is the same
+// world the row above it left behind rather than a fresh scene stepped further.
+//
+// The candidate count is carried beside every timing because it is the
+// mechanism a clustering scene would work through: the force loop walks the 3x3
+// cell neighbourhood, so the same n costs whatever the occupancy of those nine
+// cells is. A count that did not move would rule that mechanism out instead of
+// leaving it as a story told about the timings.
+//
+// The settle uses swarm_step_mt, whose contract states it is bit-identical to
+// swarm_step for any T, so the scene a row measures is the scene the serial
+// stepper would have reached. Nothing is timed while the pool is up except the
+// two mt columns, and the pool is shut down around every serial figure, because
+// idle workers are not free.
+//
+// The blit is NOT here and cannot be. BitBlt is platform code the seam does not
+// reach, so this mode covers three of the four phases decision 11 asks for and
+// says nothing about the fourth.
+static unsafe void SceneFrame()
+{
+    Console.WriteLine();
+    Console.WriteLine("The committed headline scene at the seam (#125): the frame along the settle depth");
+    Console.WriteLine();
+
+    int[] depths = [0, 600, 1200, 1800, 2400, 3000, 3600];
+    const uint FrameW = 1024,
+        FrameH = 1024; // src/swarm.asm FRAME_W / FRAME_H
+
+    SwarmParams p = HeadlinePreset();
+    int g = GridDim(p.RMax);
+    if (Native.swarm_layout_bytes(in p) == 0)
+        throw new InvalidOperationException("layout rejected the committed headline scene");
+
+    Console.WriteLine(
+        $"presets/headline.txt: n = {p.N}, species {p.SpeciesN}, rmax = {p.RMax:0.000000}, "
+        + $"g = {g}, seed 0x{p.Seed:X16}"
+    );
+    Console.WriteLine(
+        $"framebuffer {FrameW}x{FrameH}, FLAG_GRID, force_path = {p.ForcePath} (auto); "
+        + $"600 is decision 11's warm-up and 3600 is one capture"
+    );
+
+    // WHAT A RUNG COSTS THE SCENE IT MEASURES, measured rather than reasoned
+    // about. build_core is OUT -> IN and pass_core is IN -> OUT, so a rung's
+    // timing rounds do not leave the world where they found it: they advance
+    // it, and the ladder's later rungs therefore sit slightly past the label in
+    // their first column. This control settles a FRESH arena to nearby depths
+    // with nothing else touching it, so a reader can see which of them the
+    // ladder's 600 rung reproduces and read the offset off the table instead of
+    // taking a number on trust. The candidate count is the right probe for it:
+    // it is a property of the state alone, with no clock in it.
+    Console.WriteLine();
+    Console.WriteLine("drift control: cand/p on a fresh arena advanced by swarm_step_mt and nothing else");
+    foreach (int steps in new[] { 600, 601, 602, 603 })
+        Console.WriteLine($"  {steps,4} steps : cand/p = {SettleOnlyCandidates(p, g, steps),8:0.0}");
+
+    for (int run = 1; run <= 3; run++)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"run {run}");
+        Console.WriteLine(
+            $"{"steps",6} {"cand/p",8} {"lit %",7} {"build ms",9} {"pass ms",10} {"plot ms",8} "
+            + $"{"frame ms",9} {"mt build",9} {"mt pass",9} {"mt frame",9} {"fps",6} {"T",4}"
+        );
+        Console.WriteLine(new string('-', 110));
+        SceneLadder(p, g, depths, FrameW, FrameH);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("steps = swarm_step_mt calls the arena has taken; 0 is the field swarm_init leaves.");
+    Console.WriteLine("cand/p = mean candidates per particle over the 3x3 cell neighbourhood the force loop walks.");
+    Console.WriteLine("lit % = share of the framebuffer the raster left non-background, off the timed buffer.");
+    Console.WriteLine("mt columns run on the pool at its auto-detected physical-core count, printed as T.");
+    Console.WriteLine("ms = best of 9 rounds, as every figure in this harness.");
+    Console.WriteLine("frame = build + pass + plot. THE BLIT IS NOT IN IT; the seam does not reach it.");
+}
+
+// One arena walked up the ladder, printing a row per depth as it goes, because
+// a run takes minutes and a reader watching it should not have to wait for the
+// last rung to see the first.
+//
+// The rounds are not neutral and the control above is what prices that. Repeated
+// passes over one IN bank all produce the same OUT, so a round adds nothing to
+// the round beside it; what does move the world is the pair, because build_core
+// is OUT -> IN and pass_core is IN -> OUT. Each rung therefore leaves the scene
+// a small fixed number of steps further on than it found it, and the label in
+// the first column is the settle alone.
+static unsafe void SceneLadder(SwarmParams p, int g, int[] depths, uint w, uint h)
+{
+    const uint PlotBackground = 0x001A1A22; // PLOT_BG, src/kernel/plot.inc
+
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    uint* fb = (uint*)NativeMemory.AlignedAlloc((nuint)w * h * sizeof(uint), 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException("init failed on the committed headline scene");
+
+        int taken = 0;
+        foreach (int depth in depths)
+        {
+            if (depth > taken)
+            {
+                if (Native.swarm_pool_init(0) < 1)
+                    throw new InvalidOperationException("pool_init(0) failed for the settle");
+                try
+                {
+                    Native.swarm_step_mt(arena, (uint)(depth - taken));
+                }
+                finally
+                {
+                    Native.swarm_pool_shutdown();
+                }
+                taken = depth;
+            }
+
+            double candidates = MeanCandidatesPerParticle(arena, p.N, g);
+
+            Native.swarm_build(arena);
+            for (int i = 0; i < 3; i++)
+                Native.swarm_pass(arena, 0, p.N);
+            double passMs = MinOfRounds(() => Native.swarm_pass(arena, 0, p.N));
+
+            for (int i = 0; i < 3; i++)
+                Native.swarm_build(arena);
+            double buildMs = MinOfRounds(() => Native.swarm_build(arena));
+
+            for (int i = 0; i < 3; i++)
+                Native.swarm_plot(arena, fb, w, h);
+            double plotMs = MinOfRounds(() => Native.swarm_plot(arena, fb, w, h));
+
+            // Counted off the buffer the timed calls left behind, so it
+            // describes the raster that was measured and not a second one taken
+            // for the count.
+            long lit = 0;
+            for (long i = 0; i < (long)w * h; i++)
+                if (fb[i] != PlotBackground)
+                    lit++;
+
+            int workers = Native.swarm_pool_init(0);
+            if (workers < 1)
+                throw new InvalidOperationException("pool_init(0) failed");
+            double buildMtMs,
+                passMtMs;
+            try
+            {
+                Native.swarm_build_mt(arena);
+                for (int i = 0; i < 3; i++)
+                    Native.swarm_pass_mt(arena);
+                passMtMs = MinOfRounds(() => Native.swarm_pass_mt(arena));
+
+                for (int i = 0; i < 3; i++)
+                    Native.swarm_build_mt(arena);
+                buildMtMs = MinOfRounds(() => Native.swarm_build_mt(arena));
+            }
+            finally
+            {
+                Native.swarm_pool_shutdown();
+            }
+
+            double frame = buildMs + passMs + plotMs;
+            double mtFrame = buildMtMs + passMtMs + plotMs;
+            Console.WriteLine(
+                $"{depth,6} {candidates,8:0.0} {lit * 100.0 / ((double)w * h),7:0.0} "
+                + $"{buildMs,9:0.000} {passMs,10:0.000} {plotMs,8:0.000} {frame,9:0.000} "
+                + $"{buildMtMs,9:0.000} {passMtMs,9:0.000} {mtFrame,9:0.000} "
+                + $"{1000.0 / mtFrame,6:0.0} {workers,4}"
+            );
+        }
+    }
+    finally
+    {
+        NativeMemory.AlignedFree(fb);
+        NativeMemory.AlignedFree(arena);
+    }
+}
+
+// A fresh arena advanced and then read, with no timed work anywhere near it.
+// This is the control the ladder is compared against; it exists to price the
+// ladder's own footprint, so it must not carry one of its own.
+static unsafe double SettleOnlyCandidates(SwarmParams p, int g, int steps)
+{
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException("init failed on the committed headline scene");
+        if (Native.swarm_pool_init(0) < 1)
+            throw new InvalidOperationException("pool_init(0) failed for the control settle");
+        try
+        {
+            Native.swarm_step_mt(arena, (uint)steps);
+        }
+        finally
+        {
+            Native.swarm_pool_shutdown();
+        }
+        return MeanCandidatesPerParticle(arena, p.N, g);
+    }
+    finally
+    {
+        NativeMemory.AlignedFree(arena);
+    }
+}
+
+// presets/headline.txt, field for field. Typed out rather than parsed, because
+// the parser is kernel code reached through the exe and this project talks to
+// the DLL; a reader checks these nine values against the file. FLAG_GRID is
+// what the exe applies to a preset (decision 10), so it is here too, and
+// force_path stays 0 because the file names no path.
+static SwarmParams HeadlinePreset()
+{
+    var p = new SwarmParams
+    {
+        Version = 1,
+        N = 1_048_576,
+        SpeciesN = 4,
+        Seed = 0x9E3779B97F4A7C15,
+        RMax = 0.001953f,
+        Beta = 0.3f,
+        Dt = 0.02f,
+        Friction = 0.71f,
+        ForceScale = 10f,
+        ForcePath = 0,
+        Flags = 1, // FLAG_GRID
+    };
+    float[] m =
+    [
+        0.5f, -0.2f, 0.3f, -0.5f,
+        -0.3f, 0.6f, -0.4f, 0.2f,
+        0.2f, 0.3f, -0.6f, 0.4f,
+        -0.4f, 0.1f, 0.5f, 0.3f,
+    ];
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++)
+            p.Matrix[r * 8 + c] = m[r * 4 + c];
+    return p;
+}
+
 // --- the README assets (#131) ----------------------------------------------
 
 // One still and one short loop of the scene the shipped executable runs, both
@@ -1743,6 +2008,13 @@ internal static unsafe class Native
 
     [DllImport("swarm.kernel.dll")]
     internal static extern void swarm_build_mt(void* arena);
+
+    // The threaded frame loop: parallel build, parallel pass, advance. Its
+    // contract states it is bit-identical to swarm_step for any T, which is why
+    // it may stand in for the serial stepper when a scene has to be advanced
+    // thousands of frames before anything is timed.
+    [DllImport("swarm.kernel.dll")]
+    internal static extern void swarm_step_mt(void* arena, uint nSteps);
 
     [DllImport("swarm.kernel.dll")]
     internal static extern void swarm_pool_shutdown();
