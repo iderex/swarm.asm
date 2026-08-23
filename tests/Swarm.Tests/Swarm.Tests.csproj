@@ -38,4 +38,10 @@
     <Compile Include="../Swarm.Bench/ManagedBaseline.cs" Link="ManagedBaseline.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The reference implementation the kernel is checked against. Its own
+         project so the mutation run (#150) has a source assembly to mutate. -->
+    <ProjectReference Include="../Swarm.Oracle/Swarm.Oracle.csproj" />
+  </ItemGroup>
+
 </Project>
