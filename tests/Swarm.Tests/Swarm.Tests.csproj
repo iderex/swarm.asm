@@ -29,4 +29,13 @@
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The managed baseline (#153) is a benchmark subject, so it lives with
+         the benchmark; the parity test that keeps it honest lives here. Linked
+         rather than copied, because two copies of a force law are two force
+         laws, and the one this suite asserts about has to be the one the
+         published number was taken from. -->
+    <Compile Include="../Swarm.Bench/ManagedBaseline.cs" Link="ManagedBaseline.cs" />
+  </ItemGroup>
+
 </Project>

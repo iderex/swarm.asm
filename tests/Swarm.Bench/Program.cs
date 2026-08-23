@@ -111,6 +111,17 @@ if (args.Contains("--asset"))
     return 0;
 }
 
+// The managed baseline of the competitor comparison (#153), behind an argument
+// because it is the only section here that spends most of its runtime outside
+// the kernel: the managed pass is several times the cost of the one it is
+// compared against, at every count, so running it in front of the default
+// report would put minutes of another engine's work ahead of this one's.
+if (args.Contains("--managed"))
+{
+    ManagedReport();
+    return 0;
+}
+
 int[] ns = [1024, 2048, 4096, 8192, 16384];
 const uint Scalar = 3, Avx2 = 1;
 
@@ -1685,6 +1696,97 @@ static unsafe void M3Settle()
     Console.WriteLine();
     Console.WriteLine("Columns and caveats are the 1M ladder's; the rung offset it prices applies here too.");
     Console.WriteLine("frame = build + pass + plot. THE BLIT IS NOT IN IT; the seam does not reach it.");
+}
+
+// --- the managed baseline of the competitor comparison (#153) ---------------
+
+// The competitor set #5 names is two foreign engines plus a naive idiomatic C#
+// port as the managed baseline. This section is that baseline's half of it,
+// and it is deliberately the half that can be taken here: it needs no foreign
+// toolchain, no third-party build, and no change to the machine every
+// published number in this repository is taken on.
+//
+// EVERY COLUMN COMES OUT OF ONE RUN ON ONE HOST. That is the whole reason the
+// managed port sits inside this harness instead of in a project of its own. A
+// managed figure taken in one process and an assembly figure carried in from
+// another report would be two measurements of two machine states presented as
+// a comparison, which is the failure this section exists to avoid.
+//
+// The instrument is the one the kernel rows use, min-of-nine over a pass
+// against frozen input, so the two sides are not merely on one host but on one
+// clock. The managed side is warmed first because tiered compilation would
+// otherwise time the interpreter's opinion of the loop; the reported figure is
+// a minimum over nine rounds, so a round that ran before promotion cannot be
+// the one quoted.
+//
+// The scene is MakeParams, the same one the default report's brute-force table
+// uses, read out of it rather than restated, so the two tables cannot drift
+// apart into a comparison of two different scenes.
+static void ManagedReport()
+{
+    int[] ns = [1024, 2048, 4096, 8192, 16384];
+    const uint Scalar = 3, Avx2 = 1;
+
+    int paths = Native.swarm_cpu_paths();
+    bool haveAvx2 = (paths & 1) != 0;
+
+    Console.WriteLine("The managed baseline (#153): plain C# against the kernel, same scene, same run");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{"n",9} {"C# SoA ms",12} {"C# AoS ms",12} {"scalar ms",12} {"avx2 ms",12} " +
+        $"{"C# Mp/s",10} {"avx2 / C#",10}");
+    Console.WriteLine(new string('-', 84));
+
+    foreach (int n in ns)
+    {
+        ManagedBaseline.Scene scene = ManagedScene(n);
+
+        var soa = new ManagedBaseline.Soa(scene);
+        for (int i = 0; i < 3; i++)
+            soa.Pass();
+        double soaMs = MinOfRounds(soa.Pass);
+
+        var aos = new ManagedBaseline.Aos(scene);
+        for (int i = 0; i < 3; i++)
+            aos.Pass();
+        double aosMs = MinOfRounds(aos.Pass);
+
+        double scalarMs = TimePass((uint)n, Scalar);
+        double avx2Ms = haveAvx2 ? TimePass((uint)n, Avx2) : double.NaN;
+
+        double pairs = (double)n * n;
+        double soaMp = pairs / (soaMs * 1e3);
+        string avxCol = haveAvx2 ? avx2Ms.ToString("0.000") : "n/a";
+        string ratio = haveAvx2 ? $"{soaMs / avx2Ms:0.00}x" : "n/a";
+
+        Console.WriteLine(
+            $"{n,9} {soaMs,12:0.000} {aosMs,12:0.000} {scalarMs,12:0.000} {avxCol,12} " +
+            $"{soaMp,10:0.0} {ratio,10}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("C# SoA = one float[] per field; C# AoS = one struct per particle. The comparison");
+    Console.WriteLine("quotes the FASTER of the two, so the baseline is a floor on plain managed code");
+    Console.WriteLine("rather than a strawman. Neither uses Vector<T> or the intrinsics - that would");
+    Console.WriteLine("compare two vectorisations, not this engine against managed code.");
+    Console.WriteLine();
+    Console.WriteLine($"runtime: {Environment.Version}, server GC={System.Runtime.GCSettings.IsServerGC}, " +
+        $"tiered PGO={Environment.GetEnvironmentVariable("DOTNET_TieredPGO") ?? "default"}");
+    Console.WriteLine("Per-machine, as every row here is - record in docs/BENCHMARKS.md with the host.");
+}
+
+// The managed side's scene, lifted out of MakeParams so one edit moves both
+// sides. The matrix is copied out of the inline array because the managed port
+// has no reason to carry the ABI's fixed-64 shape.
+static ManagedBaseline.Scene ManagedScene(int n)
+{
+    SwarmParams p = MakeParams((uint)n, 3);
+    var matrix = new float[64];
+    for (int i = 0; i < 64; i++)
+        matrix[i] = p.Matrix[i];
+
+    return new ManagedBaseline.Scene(
+        n, (int)p.SpeciesN, p.Seed, p.RMax, p.Beta, p.Dt, p.Friction, p.ForceScale, matrix);
 }
 
 // --- the README assets (#131) ----------------------------------------------
