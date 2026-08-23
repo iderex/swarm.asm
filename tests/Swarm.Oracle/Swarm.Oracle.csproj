@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The scalar reference implementation, on its own so a mutation run has
+    something to mutate. Stryker mutates a project the test project
+    REFERENCES, never the test project itself; with the oracle compiled into
+    Swarm.Tests the tool refused to analyse at all, and pointing it at the test
+    project would have mutated the assertions alongside the reference, where a
+    mutated assertion cannot be killed by the suite that contains it (#150).
+
+    The boundary is the reference and nothing else. SwarmParams, PeImage and
+    the conformance scanners stay in the test project on purpose: a surviving
+    mutant in a scanner says nothing about the kernel's ground truth, and a
+    killed one says less. Namespace unchanged, so no call site moves.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Same lock-file discipline as the test project it is referenced by:
+         CI restores in locked mode, so every project in that graph carries a
+         committed lock file. This one has no packages, and that emptiness is
+         the point - it is asserted rather than assumed. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+</Project>

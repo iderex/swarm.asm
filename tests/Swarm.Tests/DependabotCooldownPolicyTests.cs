@@ -36,6 +36,7 @@ public sealed class DependabotCooldownPolicyTests
         ("github-actions", "/", [("default-days", 7)]),
         ("nuget", "/tests/Swarm.Tests", [("default-days", 7), ("semver-major-days", 14)]),
         ("nuget", "/tests/Swarm.Bench", [("default-days", 7), ("semver-major-days", 14)]),
+        ("nuget", "/tests/Swarm.Oracle", [("default-days", 7), ("semver-major-days", 14)]),
     ];
 
     [Fact]
@@ -322,6 +323,7 @@ public sealed class DependabotCooldownPolicyTests
         string? githubActions = null,
         string? nugetTests = null,
         string? nugetBench = null,
+        string? nugetOracle = null,
         string nugetTestsEcosystem = "nuget") =>
         "version: 2\n"
         + "updates:\n"
@@ -333,5 +335,8 @@ public sealed class DependabotCooldownPolicyTests
         + (nugetTests ?? "    cooldown:\n      default-days: 7\n      semver-major-days: 14\n")
         + "  - package-ecosystem: nuget\n"
         + "    directory: \"/tests/Swarm.Bench\"\n"
-        + (nugetBench ?? "    cooldown:\n      default-days: 7\n      semver-major-days: 14\n");
+        + (nugetBench ?? "    cooldown:\n      default-days: 7\n      semver-major-days: 14\n")
+        + "  - package-ecosystem: nuget\n"
+        + "    directory: \"/tests/Swarm.Oracle\"\n"
+        + (nugetOracle ?? "    cooldown:\n      default-days: 7\n      semver-major-days: 14\n");
 }

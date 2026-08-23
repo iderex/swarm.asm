@@ -85,3 +85,29 @@ updates:
         update-types:
           - minor
           - patch
+
+  # The reference oracle is a third manifest, compiled in the required `build`
+  # job through the harness that references it. Like the micro-bench above it
+  # carries no PackageReference and is meant to stay that way: the reference
+  # implementation has no business depending on anything. The entry is here for
+  # the day that changes, because an unwatched dependency arriving is silent in
+  # exactly the way a missing entry is (#198). Unlike the bench, this project
+  # does carry a lock file and is restored in locked mode with the harness, so
+  # a bump has to move the lock file as well as the manifest.
+  - package-ecosystem: nuget
+    directory: "/tests/Swarm.Oracle"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    # Same tiers as the harness: majors wait twice as long.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      oracle-minor-and-patch:
+        update-types:
+          - minor
+          - patch

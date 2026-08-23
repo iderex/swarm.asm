@@ -1,0 +1,98 @@
+# Mutation testing for the reference oracle, on a schedule and on demand.
+#
+# The oracle in tests/Swarm.Oracle is the ground truth every kernel correctness
+# claim is measured against, so the question this answers is whether the tests
+# AROUND that reference would notice it changing. A mutation run is the only
+# thing that asks it.
+#
+# NOT A PULL-REQUEST GATE, and it must not become one. The run drives the whole
+# harness once for the initial pass, once for coverage capture and then per
+# mutant, which is minutes; the issue that asked for this (#150) says in its
+# own scope that a mutation run is too slow and too noisy to gate a pull
+# request on. It also does not fail on a score: Stryker's break threshold is
+# left at its default of zero, so this job goes red for a tool or harness
+# failure and never for a survivor. Triaging survivors is #151 and is a
+# person's judgement, not a threshold.
+#
+# Internal only. Stryker.NET is a local tool restored from the pinned manifest
+# in .config/dotnet-tools.json; nothing is uploaded anywhere and no external
+# review or quality service is involved, which a conformance test refuses.
+#
+# THE RUNNER IS THE LOAD-BEARING SETTING. This harness runs on
+# Microsoft.Testing.Platform because VSTest spawns a freshly built
+# testhost.exe, which Device Guard blocks on the development machine.
+# Stryker's default runner is VSTest; tests/Swarm.Tests/stryker-config.json
+# selects the MTP runner instead. That runner is a preview in 4.16.0 and says
+# so on every run.
+
+name: Mutation test (oracle)
+
+on:
+  schedule:
+    # Weekly, Tuesday 04:43 UTC. Off the hour, and off the parser fuzz's day,
+    # so the two long jobs do not queue behind each other.
+    - cron: "43 4 * * 2"
+  workflow_dispatch:
+
+# Fail closed: no ambient token scope at the top level; the job re-grants the
+# minimum it needs.
+permissions: {}
+
+# One run at a time, and a new one never kills a run in flight - a mutation run
+# cancelled at 90% has told nobody anything.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  mutate:
+    name: mutate the oracle
+    runs-on: windows-latest
+    # The measured run on the reference machine is about five minutes. This
+    # bound is the runaway catch, not the expected duration.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # The native kernel must actually load. A test that skipped because the
+      # DLL was missing kills no mutant, and the survivor it leaves behind
+      # would read as a gap in the oracle's tests rather than as a skipped run.
+      SWARM_REQUIRE_NATIVE: "1"
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Bootstrap the pinned assembler (SHA-256-verified)
+        run: ./tools/get-fasm.ps1
+
+      - name: Assemble
+        run: ./build.ps1
+
+      - name: Restore the pinned mutation tool
+        run: dotnet tool restore
+
+      - name: Mutate the oracle
+        working-directory: tests/Swarm.Tests
+        run: |
+          dotnet dotnet-stryker --output "$env:GITHUB_WORKSPACE/build/mutation"
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet-stryker failed (exit $LASTEXITCODE) - this job fails on a tool or harness failure, never on a mutation score"
+          }
+
+      - name: Publish the report
+        # Always, because a red run's partial report is the thing a reader
+        # needs, and re-running to see it costs the same minutes again.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-report
+          path: build/mutation/reports/
+          if-no-files-found: error
+          retention-days: 90

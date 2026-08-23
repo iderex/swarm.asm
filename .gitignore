@@ -20,6 +20,10 @@ docs/internal/
 swarm-frames.bin
 swarm-frames.txt
 
+# Stryker's default output directory, for a run made by hand rather than
+# through tools/mutation-test.ps1, which writes under build/ instead.
+StrykerOutput/
+
 # Editor litter.
 .vs/
 *.user

@@ -1,0 +1,7 @@
+{
+  "stryker-config": {
+    "project": "Swarm.Oracle.csproj",
+    "test-runner": "MTP",
+    "reporters": ["ClearText", "Json", "Html"]
+  }
+}
