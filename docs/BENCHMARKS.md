@@ -1849,7 +1849,25 @@ own baseline makes the quoted ratio a conservative one for this engine, so the
 ### What is still owed on #153
 
 Two engines, `hunar4321/particle-life` and `tom-mohr/particle-life-app`, and
-the comparison table itself. The Java toolchain is absent from this machine, so
-standing one up is a change to the host every published number here is taken
-on. Nothing in this section is that comparison, and the README's M4 row still
-promises a suite this document does not yet carry.
+the comparison table itself. Nothing in this section is that comparison, and
+the README's M4 row still promises a suite this document does not yet carry.
+
+Both engines sit behind something outside this repository, and the two are not
+the same size. The Java one needs a runtime and a build tool, neither of which
+is on this machine, so standing one up is a change to the host every published
+number here is taken on. The C++ one is an openFrameworks application with a
+Visual Studio solution and no CMake input, so what it needs fetched is the
+openFrameworks release and its `ofxGui` addon; the MSVC toolset its project
+files ask for is already installed here. That repository also ships built
+binaries, and none of them may be measured: a figure taken from an executable
+this repository did not build is not reproducible from the repository alone.
+
+Neither toolchain is the larger obstacle. Read against the law pinned in
+`docs/MASTERPLAN.md`, the C++ engine does not express the same rules. It has no
+repulsion knee below `beta`, it carries a separate radius per ordered species
+pair, its boundary is a clamp rather than a wrap, and it integrates each
+particle once per partner group rather than once per frame against a frozen
+state. Which comparison is wanted, every engine measured as it stands with the
+deviations published beside its figure, or a rule set cut down to what all
+three can express, is open on #153, and no number is taken here before it is
+settled.
