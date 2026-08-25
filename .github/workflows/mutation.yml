@@ -50,6 +50,20 @@ jobs:
     runs-on: windows-latest
     # The measured run on the reference machine is about five minutes. This
     # bound is the runaway catch, not the expected duration.
+    #
+    # WHAT THE HOSTED RUNNER ACTUALLY SPENDS IS VARIABLE, AND THE SPREAD IS
+    # WIDER THAN THIS BOUND SUGGESTS (#295). The mutate step measured, on tree
+    # 8dbed8dd unless noted:
+    #
+    #   run 32667583739  14m47s  completed          (tree f3306e1e, pre #293)
+    #   run 32812099051  20m13s  completed
+    #   run 32805302524  44m18s  killed by this bound
+    #   run 32854516422   1m49s  aborted, initial test run over 50% failing
+    #
+    # The killed run and the 20m13s run are the same tree, two hours apart, so
+    # the bound is reachable by variance on this runner rather than only by a
+    # runaway. It is left at 45 because raising it would be guessing at how
+    # much longer the killed run needed, which no run measured.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -79,6 +93,7 @@ jobs:
         run: dotnet tool restore
 
       - name: Mutate the oracle
+        id: mutate
         working-directory: tests/Swarm.Tests
         run: |
           dotnet dotnet-stryker --output "$env:GITHUB_WORKSPACE/build/mutation"
@@ -86,10 +101,36 @@ jobs:
             throw "dotnet-stryker failed (exit $LASTEXITCODE) - this job fails on a tool or harness failure, never on a mutation score"
           }
 
-      - name: Publish the report
-        # Always, because a red run's partial report is the thing a reader
-        # needs, and re-running to see it costs the same minutes again.
+      - name: Account for the report
+        # THERE IS NO SUCH THING AS A PARTIAL REPORT HERE, and the step below
+        # used to promise one. Stryker writes its report when a run ENDS, so a
+        # run that did not finish mutating leaves the output directory empty:
+        # run 32805302524 was killed by the bound above and run 32854516422
+        # aborted on its initial test run, and both left nought artifacts with
+        # the upload step red on `if-no-files-found: error`. The absence is
+        # inevitable in that shape, so it is explained in the run's own output
+        # rather than reported as an upload failure.
+        #
+        # It still fails closed where the absence is a real defect: mutating
+        # reporting success and writing no report anyway, and an absence with
+        # no conclusion to explain it. Those two branches and this one were
+        # each made to fire before the script was trusted.
+        id: report
         if: always()
+        env:
+          MUTATE_CONCLUSION: ${{ steps.mutate.conclusion }}
+        run: >
+          ./tools/mutation-report-gate.ps1
+          -MutateConclusion "$env:MUTATE_CONCLUSION"
+          -ReportDir "$env:GITHUB_WORKSPACE/build/mutation/reports"
+
+      - name: Publish the report
+        # Always, because a run that finished mutating and then failed
+        # downstream still has a report a reader needs, and re-running to see
+        # it costs the same minutes again. The accounting step above is what
+        # decides whether one exists; `if-no-files-found: error` stays as the
+        # second half of that judgement rather than as the whole of it.
+        if: always() && steps.report.outputs.have == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutation-report
