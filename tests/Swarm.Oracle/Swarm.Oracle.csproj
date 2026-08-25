@@ -27,4 +27,17 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      Ftz is internal because it is the FP model rather than part of the
+      reference's surface, and it stays internal. The harness needs to reach it
+      anyway: the sign of a flushed zero is invisible in everything World.Step
+      writes, because every route out of it passes the value through an
+      addition and (-0) + (+0) is (+0). The mutation run says the same thing
+      from the other side, reporting that site as reached by no test at all
+      (#151). Asserting the documented sign therefore means calling the routine.
+    -->
+    <InternalsVisibleTo Include="Swarm.Tests" />
+  </ItemGroup>
+
 </Project>
