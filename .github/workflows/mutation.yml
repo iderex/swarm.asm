@@ -56,14 +56,22 @@ jobs:
     # 8dbed8dd unless noted:
     #
     #   run 32667583739  14m47s  completed          (tree f3306e1e, pre #293)
-    #   run 32812099051  20m13s  completed
+    #   run 32812099051  20m13s  completed          (schedule)
     #   run 32805302524  44m18s  killed by this bound
     #   run 32854516422   1m49s  aborted, initial test run over 50% failing
+    #   run 32858859974  44m49s  killed by this bound (dispatch on main)
     #
-    # The killed run and the 20m13s run are the same tree, two hours apart, so
-    # the bound is reachable by variance on this runner rather than only by a
-    # runaway. It is left at 45 because raising it would be guessing at how
-    # much longer the killed run needed, which no run measured.
+    # Four of those are the same tree, so no change in the work explains the
+    # spread: 20m13s and 44m49s are the same bytes. And the completion is the
+    # scheduled run, while two of the three dispatches died here, so a reader
+    # should not expect a dispatch to finish.
+    #
+    # It is left at 45 anyway, and this is a bound nobody has measured the
+    # right value for. Neither killed run says how much longer it needed, so
+    # raising it is a guess about cost rather than a size read off a number,
+    # and lowering it would kill the 20m13s shape as well. What would settle it
+    # is one run allowed past 45 minutes to completion, which is a decision
+    # about runner minutes rather than a change to this file (#295).
     timeout-minutes: 45
     permissions:
       contents: read
