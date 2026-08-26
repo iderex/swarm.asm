@@ -31,16 +31,23 @@ namespace Swarm.Tests;
 /// <c>long</c>, with the status Survived, and with a replacement that is not a
 /// widened shift at all; none of the three may be refused.
 ///
+/// BOTH ROUTES ARE ASSERTED TO REACH IT. The opt-in script is covered by
+/// <see cref="TheOptInMutationScriptInvokesTheVerdictCheck"/> and the hosted
+/// job by <see cref="TheMutationWorkflowInvokesTheVerdictCheck"/>. This
+/// paragraph said the hosted route's step was not added, because
+/// <c>.github/workflows/mutation.yml</c> was carried by an open pull request
+/// for a different issue and two edits to one file collide. That pull request
+/// merged and the step is in the file, so the hosted run no longer publishes
+/// verdicts nothing has read.
+///
 /// WHAT THIS DOES NOT COVER. It runs the check against fixtures, never against
-/// a mutation run, so nothing here says the hosted job invokes it. That
-/// invocation is asserted for the local route by
-/// <see cref="TheOptInMutationScriptInvokesTheVerdictCheck"/>, and the hosted
-/// route's step is not added, because <c>.github/workflows/mutation.yml</c> is
-/// carried by an open pull request for a different issue and two edits to one
-/// file collide. The type resolution reads the report's own source with a
-/// regular expression and decides only a simple identifier; a left operand
-/// that is an expression is left undecided by construction, which is why the
-/// recorded report's mutant 26 is neither refused nor counted.
+/// a mutation run, and it reads the workflow text rather than a run, so
+/// nothing here says what a hosted job does with a real report. The type
+/// resolution reads the report's own source with a regular expression and
+/// decides only a simple identifier; a left operand that is an expression is
+/// left undecided by construction, which is why the recorded report's mutant
+/// 26 is neither refused nor counted. The mechanism producing the false
+/// verdicts is not identified by anything here.
 /// </summary>
 public sealed class MutationVerdictTests
 {
@@ -174,6 +181,107 @@ public sealed class MutationVerdictTests
             invoked,
             $"tools/mutation-test.ps1 does not invoke tools/{CheckScript}, so a local run "
                 + "publishes its report without anything reading the verdicts in it (#294)");
+    }
+
+    /// <summary>
+    /// The same obligation on the hosted route. Until this landed the workflow
+    /// ran Stryker, accounted for the report and uploaded it without anything
+    /// reading a verdict, so the run that produced the report this issue is
+    /// about would have published the next one exactly as it published that
+    /// one. Deleting the step is one block, it reads like a saved few seconds
+    /// on a job measured between twenty and forty-five minutes, and nothing
+    /// else in the tree would notice.
+    ///
+    /// What this does NOT cover: it reads the workflow text, never a run.
+    /// </summary>
+    [Fact]
+    public void TheMutationWorkflowInvokesTheVerdictCheck()
+    {
+        var lines = ReadMutationWorkflow();
+
+        int check = IndexOfFirstCommand(lines, l => l.Contains(CheckScript, StringComparison.Ordinal));
+        int mutate = IndexOfFirstCommand(lines, l => l.Contains("dotnet-stryker", StringComparison.Ordinal));
+
+        Assert.True(
+            check >= 0,
+            $"no step in .github/workflows/mutation.yml invokes tools/{CheckScript}, so the "
+                + "hosted run publishes its report without anything reading the verdicts in "
+                + "it (#294)");
+        Assert.True(mutate >= 0, "expected mutation.yml to invoke dotnet-stryker at all");
+        Assert.True(
+            check > mutate,
+            $"the verdict check is at line {check + 1} and Stryker at line {mutate + 1}: a "
+                + "check that runs before the mutate step has no report to read");
+    }
+
+    /// <summary>
+    /// A refusal the job swallows is not a refusal. The step exists to turn an
+    /// impossible verdict into a red run, and <c>continue-on-error</c> would
+    /// leave it printing at nobody.
+    /// </summary>
+    [Fact]
+    public void TheVerdictCheckIsAllowedToFailTheJob()
+    {
+        var lines = ReadMutationWorkflow();
+
+        int check = IndexOfFirstCommand(lines, l => l.Contains(CheckScript, StringComparison.Ordinal));
+        Assert.True(check >= 0, $"no step in mutation.yml invokes tools/{CheckScript}");
+
+        var swallowed = LinesOfStepEndingAt(lines, check)
+            .Any(l => l.StartsWith("continue-on-error:", StringComparison.Ordinal)
+                      && !l.Contains("false", StringComparison.Ordinal));
+
+        Assert.False(
+            swallowed,
+            "the verdict check in mutation.yml carries continue-on-error, so a report holding "
+                + "a kill that cannot have happened would be published by a green run");
+    }
+
+    private static string[] ReadMutationWorkflow()
+    {
+        var path = Path.Combine(Build.RepoRoot, ".github", "workflows", "mutation.yml");
+        Assert.True(File.Exists(path), $"expected {path} to exist");
+        return File.ReadAllLines(path);
+    }
+
+    /// <summary>
+    /// First line carrying <paramref name="match"/> that is not a comment, so a
+    /// step described in prose above does not count as one that runs.
+    /// </summary>
+    private static int IndexOfFirstCommand(string[] lines, Func<string, bool> match)
+    {
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].TrimStart();
+            if (!trimmed.StartsWith('#') && match(trimmed))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// The trimmed lines of the step containing <paramref name="index"/>,
+    /// walking back to the <c>- </c> that opens it.
+    /// </summary>
+    private static List<string> LinesOfStepEndingAt(string[] lines, int index)
+    {
+        var collected = new List<string>();
+
+        for (int i = index; i >= 0; i--)
+        {
+            var trimmed = lines[i].TrimStart();
+            collected.Add(trimmed);
+
+            if (trimmed.StartsWith("- ", StringComparison.Ordinal))
+            {
+                break;
+            }
+        }
+
+        return collected;
     }
 
     /// <summary>
