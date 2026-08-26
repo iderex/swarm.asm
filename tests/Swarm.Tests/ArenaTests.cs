@@ -127,7 +127,16 @@ public sealed unsafe class ArenaTests
         uint want = (paths & CpuAvx512) == 0 ? 2u : 0u;
         if (want == 0)
         {
-            Assert.Skip("this machine supports AVX-512; no unsupported path to request");
+            // The skip states what goes uncovered rather than only why it is
+            // taken. On a host reporting AVX-512 no accepted force_path value
+            // reaches IERR_PATH at all: PATH_SCALAR is accepted against any
+            // CPU, PATH_AVX2 is always available there because cpu_paths_core
+            // cannot report CPU_AVX512 without CPU_AVX2, PATH_AVX512 is by
+            // assumption present, and PATH_AUTO resolves. Anything above
+            // PATH_SCALAR never reaches the dispatch - pp_validate_params
+            // refuses it first, which is IERR_PARAMS and is
+            // InitRefusesAPathIdOutsideTheDefinedSet below.
+            Assert.Skip("this host reports AVX-512, so swarm_init can return IERR_PATH for no accepted force_path value here and neither this rc nor the untouched-arena assertion beside it is exercised on it");
             return;
         }
         var p = Valid(forcePath: want);
@@ -137,6 +146,33 @@ public sealed unsafe class ArenaTests
             int rc = swarm_init((void*)arena, size, in p);
             Assert.Equal(IerrPath, rc);
             Assert.Equal(0xCDCDCDCDu, Read<uint>((void*)arena, 0));
+        });
+    }
+
+    // The other half of the force_path accept gate, and the half that runs on
+    // every host. pp_validate_params bounds the field to the PATH_* set
+    // (parse.inc: `cmp dword [r10+SP_FORCE_PATH], PATH_SCALAR` / `ja .bad`),
+    // so an id outside that set is refused as invalid params and never reaches
+    // init_core's path dispatch - the arm there that rejects "not a PATH_* id
+    // at all" is defence behind an already-bounded field, not the branch this
+    // covers. IERR_PARAMS is therefore the correct rc, not IERR_PATH, and the
+    // arena stays untouched for the same fail-closed reason.
+    [Theory]
+    [InlineData(4u)]           // one past PATH_SCALAR
+    [InlineData(0x80000000u)]  // the sign bit, which a signed compare would let through
+    [InlineData(uint.MaxValue)]
+    public void InitRefusesAPathIdOutsideTheDefinedSet(uint forcePath)
+    {
+        _ = NativeKernel.Handle;
+        var good = Valid();
+        WithArena(good, (arena, size) =>
+        {
+            var bad = good;
+            bad.ForcePath = forcePath;
+            new Span<byte>((void*)arena, (int)size).Fill(0xCD);
+            int rc = swarm_init((void*)arena, size, in bad);
+            Assert.Equal(IerrParams, rc);
+            Assert.Equal(0xCDCDCDCDu, Read<uint>((void*)arena, 0)); // arena untouched
         });
     }
 
