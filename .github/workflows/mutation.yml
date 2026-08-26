@@ -100,6 +100,27 @@ jobs:
       - name: Restore the pinned mutation tool
         run: dotnet tool restore
 
+      - name: Run the harness once, before Stryker drives it
+        # THE NAMES ARE THE POINT, and Stryker does not print them. Run
+        # 32854516422 aborted on "Initial testrun has more than 50% failing
+        # tests" and named exactly one test in the whole job log, while the
+        # class it named holds two of the suite's tests - so the printed name
+        # cannot be what tripped the threshold, and which tests did is
+        # recoverable from nothing. Stryker aborts before it writes a report,
+        # so there is no artifact to read either.
+        #
+        # This is the same suite the mutate step is about to drive, run by the
+        # test platform, which names every failure. It also separates the two
+        # candidates: green here and an abort below is Stryker's own build and
+        # sandbox, red here is the harness on this runner. Either reading is
+        # one this job could not produce before.
+        #
+        # It fails the job, deliberately. A mutation score measured against a
+        # red suite means nothing, so this is a harness failure in the sense
+        # the mutate step's own message already uses. The cost is about a
+        # minute against a mutate step measured between 20 and 45 (#295).
+        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+
       - name: Mutate the oracle
         id: mutate
         working-directory: tests/Swarm.Tests
