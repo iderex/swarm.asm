@@ -166,3 +166,39 @@ jobs:
           path: build/mutation/reports/
           if-no-files-found: error
           retention-days: 90
+
+      - name: Refuse the verdicts that cannot be true
+        # THIS REPORT PUBLISHES KILLS THAT CANNOT HAVE HAPPENED (#294). Run
+        # 32667583739 reports six `>>`-to-`>>>` mutants on `ulong` operands as
+        # Killed, each by the same 274 tests, while a seventh of exactly that
+        # shape one line away is reported Survived in the same run. For an
+        # unsigned operand the two operators are the same logical shift, so no
+        # program can distinguish them and no test can fail on one.
+        #
+        # tools/check-mutation-verdicts.ps1 refuses that half and prints what
+        # share of the report's killedBy ids resolve to a test the report
+        # declares. tools/mutation-test.ps1 has called it since #298 and this
+        # job did not, so the hosted route published unread verdicts while the
+        # opt-in route refused them. Both routes read the same report the same
+        # way now.
+        #
+        # IT RUNS AFTER THE UPLOAD, DELIBERATELY. What is refused is the run,
+        # not the evidence. The mechanism behind the false verdicts is still
+        # unidentified and every reading that got this far was made against a
+        # downloaded report, so the artifact is the one thing the next attempt
+        # has to work from. Ordering the refusal last means the artifact's
+        # survival does not depend on the publish step keeping `always()`. The
+        # opt-in route behaves the same way: it throws and leaves the report on
+        # disk.
+        #
+        # An absent JSON report under a present reports directory is a throw
+        # rather than a pass. Json is one of the three reporters
+        # tests/Swarm.Tests/stryker-config.json selects, so its absence beside
+        # other report files is the reporter having stopped writing, which is a
+        # tool failure and not an empty result.
+        if: always() && steps.report.outputs.have == 'true'
+        run: |
+          ./tools/check-mutation-verdicts.ps1 -ReportPath "$env:GITHUB_WORKSPACE/build/mutation/reports/mutation-report.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "the report carries a verdict that cannot be true (exit $LASTEXITCODE) - see the refusals above (#294)"
+          }
