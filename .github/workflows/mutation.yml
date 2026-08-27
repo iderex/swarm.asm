@@ -52,49 +52,56 @@ jobs:
     # bound is the runaway catch, not the expected duration.
     #
     # WHAT THE HOSTED RUNNER ACTUALLY SPENDS IS VARIABLE, AND THE SPREAD IS
-    # WIDER THAN THIS BOUND SUGGESTS (#295). The mutate step measured, on tree
-    # 8dbed8dd unless noted:
+    # WIDER THAN THIS BOUND SUGGESTS (#295). The mutate step measured, with
+    # the tree each row ran on:
     #
-    #   run 32667583739  14m47s  completed          (tree f3306e1e, pre #293)
-    #   run 32812099051  20m13s  completed          (schedule)
-    #   run 32805302524  44m18s  killed by this bound
-    #   run 32854516422   1m49s  aborted, initial test run over 50% failing
-    #   run 32858859974  44m49s  killed by this bound (dispatch on main)
+    #   run 32667583739  14m47s  completed   f3306e1e  (pre #293)
+    #   run 32812099051  20m13s  completed   8dbed8dd  (schedule)
+    #   run 32805302524  44m18s  killed by this bound   8dbed8dd
+    #   run 32854516422   1m49s  aborted, over 50% failing   8dbed8dd
+    #   run 32858859974  44m49s  killed by this bound   f5b28e56  (on main)
+    #   run 33062644118  21m43s  completed   0fd5cfb8  (on main)
     #
-    # Four of those are the same tree, so no change in the work explains the
-    # spread: 20m13s and 44m49s are the same bytes. And the completion is the
-    # scheduled run, while two of the three dispatches died here, so a reader
-    # should not expect a dispatch to finish.
+    # THE TREE COLUMN IS NEW AND IT CORRECTS THIS COMMENT. What stood here
+    # said all but the first row ran on 8dbed8dd and that "20m13s and 44m49s
+    # are the same bytes". Three of them did; 32858859974 ran on f5b28e56,
+    # which is 8dbed8dd plus two Dependabot bumps to scorecard.yml and
+    # zizmor.yml and nothing this job reads. So the substance survives and the
+    # pair proving it is a different one: 20m13s and 44m18s are the same
+    # bytes, and no change in the work explains the spread between them.
     #
-    # It is left at 45 anyway, and this is a bound nobody has measured the
-    # right value for. Neither killed run says how much longer it needed, so
-    # raising it is a guess about cost rather than a size read off a number,
-    # and lowering it would kill the 20m13s shape as well. What would settle it
-    # is one run allowed past 45 minutes to completion, which is a decision
-    # about runner minutes rather than a change to this file (#295).
+    #   gh api repos/iderex/swarm.asm/actions/runs/$r --jq .head_sha
+    #   git rev-parse $head_sha^{tree}
+    #
+    # A DISPATCH DOES FINISH, AND THIS COMMENT SAID A READER SHOULD NOT EXPECT
+    # ONE TO. The last row is a dispatch on main taken on 2026-08-27, the
+    # first since the harness run below was inserted. The job ran 23m44s of
+    # this 45 and ended on its own steps rather than on the bound; it tested
+    # 110 mutants, published its report, and went red on the verdict refusal
+    # (#294) rather than on time.
+    #
+    # The bound is still a number nobody has measured the right value for.
+    # Neither killed run says how much longer it needed, so raising it is a
+    # guess about cost rather than a size read off a number, and lowering it
+    # would kill the 20m13s shape as well. Three completions between 14m47s
+    # and 21m43s against two kills at 44m are two populations, and nothing
+    # here says which one the next run is drawn from.
     #
     # THE BOUND IS ON THE JOB AND EVERY FIGURE ABOVE IS ON ONE STEP, so the
     # step's budget is this number minus whatever runs before it. That was a
-    # rounding error when the rows were taken and it is not one now. The
-    # preamble in each of them, job start to the mutate step's start:
+    # rounding error when the first rows were taken and it is not one now. The
+    # preamble, job start to the mutate step's start:
     #
     #   gh api repos/iderex/swarm.asm/actions/runs/$r/jobs \
     #     --jq '.jobs[] | "\(.started_at)", (.steps[] | "\(.name) \(.started_at)")'
-    #   32667583739  38s   32812099051  37s   32805302524  49s   32858859974  26s
+    #   32667583739  38s   32812099051  37s   32805302524  49s
+    #   32858859974  26s   33062644118  115s
     #
-    # Since those runs a full harness run was inserted ahead of the mutate step
-    # (#297), and no mutation run has executed it yet: the last one was on
-    # 2026-08-25 and that step landed on 2026-08-26. Its cost is measured on the
-    # same command and the same runner image in ci.yml's "Test (conformance
-    # harness)", over the five most recent runs:
-    #
-    #   90s  88s  96s  104s  96s
-    #
-    # So the mutate step used to get 44m11s to 44m34s of this bound and now
-    # gets about a minute and a half less, and the two rows killed at 44m18s
-    # and 44m49s would be killed that much earlier today. Nothing here re-sizes
-    # the bound; it records that the number a re-sizing would start from is the
-    # step's budget rather than the 45 itself.
+    # The last of those is the only row carrying the full harness run inserted
+    # ahead of the mutate step (#297); the rows above it predate that step. It
+    # cost 93s of the 115s, inside the 88s to 104s ci.yml's "Test (conformance
+    # harness)" spends on the same command and the same runner image. So the
+    # mutate step gets about 43m of this bound today rather than 45.
     timeout-minutes: 45
     permissions:
       contents: read
