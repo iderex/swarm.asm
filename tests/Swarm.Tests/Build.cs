@@ -7,6 +7,16 @@ namespace Swarm.Tests;
 /// per test run - unconditionally, so the tested binaries always match the
 /// current sources and are exactly the ones <c>build.ps1</c> produces. The
 /// harness never assembles differently from the shipping build.
+///
+/// The lazy below is at its default <c>ExecutionAndPublication</c>, which
+/// CACHES a thrown exception and re-throws it to every later caller, so one
+/// failed assembly fails every test in this host that needs the binaries -
+/// 274 of 362 at the tree measured on #304. That is kept deliberately: a
+/// build that cannot be produced is a permanent condition for this process,
+/// and retrying it per test would run <c>build.ps1</c> hundreds of times to
+/// reach the same answer. What was repaired instead is the failure that had
+/// nothing to do with the sources - an output another live process holds
+/// mapped, which <c>build.ps1</c> now publishes through a rename (#305).
 /// </summary>
 public static class Build
 {

@@ -24,15 +24,47 @@ if (-not (Test-Path $Fasm)) {
 $BuildDir = Join-Path $Root 'build'
 New-Item -ItemType Directory -Force $BuildDir | Out-Null
 
+# Sweep the aside copies an earlier run could not delete because something
+# still held them; by now nothing does.
+Get-ChildItem -LiteralPath $BuildDir -Filter '*.inuse-*' -File -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+
 # The bundled Win64 include macros (win64a.inc et al.) resolve via INCLUDE.
 $env:INCLUDE = Join-Path $Root 'tools\fasm\INCLUDE'
 
+# Publishes a freshly assembled file over the previous one. fasm writes its
+# output in place, and Windows refuses a write to an image a live process has
+# loaded - a test host that loaded build/swarm.kernel.dll, a running
+# build/swarm.exe - so an in-place assembly fails for a reason that has nothing
+# to do with the sources. A mapped image cannot be overwritten or deleted, but
+# it CAN be renamed, and the holder keeps the image it already mapped, so the
+# previous file is moved aside and the new one takes its name. The aside copy
+# is deleted when nothing holds it any more and is otherwise left for the next
+# run to sweep; build/ is git-ignored in full and nothing enumerates it.
+function Publish-Output {
+    param([string]$Temp, [string]$Output)
+    try {
+        Move-Item -LiteralPath $Temp -Destination $Output -Force -ErrorAction Stop
+        return
+    }
+    catch {
+        if (-not (Test-Path -LiteralPath $Output)) { throw }
+    }
+    $aside = "$Output.inuse-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    Move-Item -LiteralPath $Output -Destination $aside -Force -ErrorAction Stop
+    Move-Item -LiteralPath $Temp -Destination $Output -Force -ErrorAction Stop
+    Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-Fasm {
     param([string]$Source, [string]$Output, [string[]]$Define = @())
-    & $Fasm @Define (Join-Path $Root "src\$Source") $Output
+    $temp = "$Output.new"
+    & $Fasm @Define (Join-Path $Root "src\$Source") $temp
     if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
         throw "fasm failed on $Source with exit code $LASTEXITCODE"
     }
+    Publish-Output $temp $Output
 }
 
 Invoke-Fasm 'swarm.asm' (Join-Path $BuildDir 'swarm.exe')
