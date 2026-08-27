@@ -72,6 +72,29 @@ jobs:
     # and lowering it would kill the 20m13s shape as well. What would settle it
     # is one run allowed past 45 minutes to completion, which is a decision
     # about runner minutes rather than a change to this file (#295).
+    #
+    # THE BOUND IS ON THE JOB AND EVERY FIGURE ABOVE IS ON ONE STEP, so the
+    # step's budget is this number minus whatever runs before it. That was a
+    # rounding error when the rows were taken and it is not one now. The
+    # preamble in each of them, job start to the mutate step's start:
+    #
+    #   gh api repos/iderex/swarm.asm/actions/runs/$r/jobs \
+    #     --jq '.jobs[] | "\(.started_at)", (.steps[] | "\(.name) \(.started_at)")'
+    #   32667583739  38s   32812099051  37s   32805302524  49s   32858859974  26s
+    #
+    # Since those runs a full harness run was inserted ahead of the mutate step
+    # (#297), and no mutation run has executed it yet: the last one was on
+    # 2026-08-25 and that step landed on 2026-08-26. Its cost is measured on the
+    # same command and the same runner image in ci.yml's "Test (conformance
+    # harness)", over the five most recent runs:
+    #
+    #   90s  88s  96s  104s  96s
+    #
+    # So the mutate step used to get 44m11s to 44m34s of this bound and now
+    # gets about a minute and a half less, and the two rows killed at 44m18s
+    # and 44m49s would be killed that much earlier today. Nothing here re-sizes
+    # the bound; it records that the number a re-sizing would start from is the
+    # step's budget rather than the 45 itself.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -117,8 +140,15 @@ jobs:
         #
         # It fails the job, deliberately. A mutation score measured against a
         # red suite means nothing, so this is a harness failure in the sense
-        # the mutate step's own message already uses. The cost is about a
-        # minute against a mutate step measured between 20 and 45 (#295).
+        # the mutate step's own message already uses.
+        #
+        # WHAT IT COSTS COMES OUT OF THE JOB'S BOUND, not out of the mutate
+        # step's spread, and the note that added this step charged it against
+        # the wrong one. `timeout-minutes` sits on the job, so this run and the
+        # mutate step share the 45 minutes between them. Measured on the same
+        # command and runner image in ci.yml's "Test (conformance harness)"
+        # over its five most recent runs: 90s, 88s, 96s, 104s, 96s. The bound's
+        # own comment above carries what that leaves the mutate step.
         run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
 
       - name: Mutate the oracle
