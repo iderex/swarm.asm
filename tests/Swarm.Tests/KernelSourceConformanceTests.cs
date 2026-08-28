@@ -660,6 +660,82 @@ public sealed class KernelSourceConformanceTests
             string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// The force-pass group macro names no vector register directly: every one
+    /// of them is written through the register-file parameter (issue #309).
+    ///
+    /// The macro is one text instantiated per lane width (masterplan decision
+    /// 7). A single `ymm3` left behind inside it assembles and runs at 8 lanes -
+    /// the shipped path is unaffected and the whole suite stays green - and
+    /// silently pins a 256-bit register into a body a 512-bit instantiation is
+    /// supposed to be able to reuse. The defect is invisible until someone
+    /// instantiates the second width and gets a body that is half one file and
+    /// half the other, which is exactly the state this issue found the tree in
+    /// and the state #164 depends on not returning to.
+    ///
+    /// The rule is narrow on purpose. It judges the group macro alone, not the
+    /// width-dispatched neighbours: `force_reduce` descends to `xmm` by
+    /// construction (the reduction ends in a scalar), and `pass_avx2` is the
+    /// 8-lane instantiation and is entitled to name `ymm` at the call site.
+    /// </summary>
+    [Fact]
+    public void ForceGroupMacroNamesNoVectorRegisterDirectly()
+    {
+        const string MacroName = "force_group";
+
+        var found = 0;
+        var offenders = new List<string>();
+        var parameterised = 0;
+
+        foreach (var path in KernelIncFiles())
+        {
+            var name = Path.GetFileName(path);
+            var lines = File.ReadAllLines(path);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var m = MacroDefRegex.Match(lines[i]);
+                if (!m.Success || m.Groups[1].Value != MacroName)
+                {
+                    continue;
+                }
+
+                found++;
+                var (end, body) = MacroBody(lines, i);
+                i = end;
+
+                foreach (Match hit in VectorRegisterLiteral.Matches(body))
+                {
+                    offenders.Add($"{name}: macro '{MacroName}' names '{hit.Value}' directly");
+                }
+
+                parameterised += RegisterFileParameter.Matches(body).Count;
+            }
+        }
+
+        // Non-vacuity in both directions: a scan that stopped finding the macro,
+        // and a body that stopped naming registers through the parameter, would
+        // both leave an empty offender list that reads as a clean pass.
+        Assert.True(found == 1, $"expected exactly one `macro {MacroName}` definition under src/kernel/, found {found}");
+        Assert.True(parameterised > 0, $"macro '{MacroName}' names no register through its register-file parameter - the scan's rule matched nothing");
+
+        Assert.True(
+            offenders.Count == 0,
+            $"the force-pass group macro is instantiated per lane width, so every vector register " +
+            $"inside it is written through its register-file parameter (V#0 .. V#15) and never as a " +
+            $"literal. A literal assembles and runs at 8 lanes and pins the width silently (issue #309):\n  " +
+            string.Join("\n  ", offenders));
+    }
+
+    // A bare vector register named in code: xmm0-15, ymm0-15, zmm0-15. The
+    // parameterised form is `V#3`, which carries no register-file letters and
+    // does not match.
+    private static readonly Regex VectorRegisterLiteral =
+        new(@"\b[xyz]mm\d{1,2}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // A register named through the macro's register-file parameter: `V#12`.
+    private static readonly Regex RegisterFileParameter =
+        new(@"\bV#\d{1,2}\b", RegexOptions.CultureInvariant);
+
     // A `macro NAME ...` definition at column 0 (FASM). Group 1 is the name.
     private static readonly Regex MacroDefRegex =
         new(@"^macro\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.CultureInvariant);
