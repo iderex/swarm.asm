@@ -653,11 +653,27 @@ FG_LANES  = 8
 ; pass_avx2 frame: the scalar const cache (KP_*), two FG_LANES-wide spill slots
 ; for dx/dy (register pressure relief across the force formula), and the
 ; neighbour-run buffer (up to 6 runs of {base, count}).
+;
+; The dx/dy slots are read and written with vmovaps, so both offsets and the
+; frame itself must be 0 mod the vector size. That used to be a written 32 and
+; is now a consequence of KP_FRAME and FG_LANES, which is a worse place for it
+; to live - so it is asserted below rather than believed. KA_FRAME is derived
+; for the same reason: left as a literal it is the one number in this block that
+; would go on covering an 8-lane layout after the rest had widened, and the
+; failure would be a silent write past the frame into the caller's slots rather
+; than an assembler refusal.
 KA_DX     = KP_FRAME                    ; first slot after the const cache
 KA_DY     = KA_DX + FG_LANES*4
 KA_RUNBUF = KA_DY + FG_LANES*4           ; 6 * 8 bytes
 KA_CACHE  = KA_RUNBUF + 48               ; {cx, cy, count} of the resolved cell
-KA_FRAME  = 192                         ; 128 + 48 + 12, rounded to a 0-mod-32 frame
+KA_FRAME  = ((KA_CACHE + 12 + FG_LANES*4 - 1) / (FG_LANES*4)) * (FG_LANES*4)
+
+if (KA_DX mod (FG_LANES*4)) <> 0 | (KA_DY mod (FG_LANES*4)) <> 0
+  err       ; a vmovaps spill slot is not vector-aligned; see the note above
+end if
+if (KA_FRAME mod 32) <> 0 | KA_FRAME < (KA_CACHE + 12)
+  err       ; the frame does not cover the block, or breaks the 0-mod-32 rsp
+end if
 
 ; The force pass as one text, parameterised by lane width W and register file V
 ; (masterplan decision 7). The 8-lane instantiation below is what ships; the
@@ -709,21 +725,62 @@ macro force_tail_mask W, V {
       end if
 }
 
-; force_group - one group of W neighbours j at [base+r9]; accumulates into
-; V#6/V#7. tail=1 folds the mask in V#5 into `valid`. dx/dy are spilled so
-; the force formula has room; V#0-5 are the working set, V#8-15 the persistent
-; broadcasts. Pinned masking: blend r2 to 1.0 on invalid lanes BEFORE the sqrt.
-; The three neighbour loads are vmovups: a run starts at cell_start[c], which is
-; not W-aligned, so the group base is unaligned (bit-identical to vmovaps when it
-; happens to land aligned, e.g. the brute single run). The dx/dy spill slots are
-; fixed 0-mod-32 frame offsets, so those stay vmovaps.
+; force_particle_regs - the per-particle prologue: broadcast xi/yi, load
+; particle i's species row as the permute table, and clear the force partials.
+; Width-specific: the matrix row is 8 floats wide whatever the lane width is, so
+; at 16 lanes what occupies the table's upper half is a decision rather than a
+; wider load, and it is the same decision the vpermps in force_group refuses.
+;   in:       rbx = bank base, r14 = stride, r12d = i
+;   out:      V#8 = xi, V#9 = yi, V#10 = the species row, V#6/V#7 = zeroed
+;   clobbers: rax, r10, flags
+macro force_particle_regs W, V {
+        elem_addr r10, AR_X_IN, r12     ; xi, yi broadcast
+        vbroadcastss V#8, [r10]
+        elem_addr r10, AR_Y_IN, r12
+        vbroadcastss V#9, [r10]
+        elem_addr r10, AR_SP_IN, r12    ; matrow = matrix[si*8 .. +7]
+        mov     eax, [r10]
+        and     eax, 7                  ; species < species_n <= 8; keep in-table
+        shl     eax, 5                  ; si*8 floats = si*32 bytes
+        lea     r10, [rbx-AH_SIZE+AH_PARAMS+SP_MATRIX]  ; arena = bank base - header
+      if W = 8
+        vmovups V#10, [r10+rax]
+      else
+        err     ; #164: an 8-float row does not fill a 16-lane permute table
+      end if
+        vxorps  V#6, V#6, V#6           ; fx partials
+        vxorps  V#7, V#7, V#7           ; fy partials
+}
+
+; force_group - one group of W neighbours j at [base+r9]. dx/dy are spilled so
+; the force formula has room; V#0-5 are the working set. Pinned masking: blend
+; r2 to 1.0 on invalid lanes BEFORE the sqrt, which is what makes a NaN
+; structurally impossible. The three neighbour loads are vmovups: a run starts
+; at cell_start[c], which is not W-aligned, so the group base is unaligned
+; (bit-identical to vmovaps when it happens to land aligned, e.g. the brute
+; single run). The dx/dy spill slots are vector-aligned frame offsets, asserted
+; where they are defined, so those stay vmovaps.
+;   in:       rsi/rdi/r11 = &IN.x[0] / &IN.y[0] / &IN.sp[0], r9 = group byte
+;             offset, rsp = the pass frame with KP_INVBETA/KP_INV1MB/KP_FS
+;             cached, V#8/V#9 = xi/yi, V#10 = the species row, V#11-15 = the
+;             pass constants, V#5 = the tail mask when tail=1
+;   in/out:   V#6/V#7 = the fx/fy partials, accumulated into
+;   out:      [rsp+KA_DX], [rsp+KA_DY] = this group's dx/dy
+;   clobbers: V#0-5; no GPR and no flag
 ;
-; Three sites inside are width-specific rather than the same text at a wider
-; register, and each refuses instead of guessing: the two selects (k-register
-; selects at 16 lanes, with an operand order that is not this shape), the tail
-; fold (a lane-mask AND here, a k-register predicate there), and the species-row
-; permute (V#10 holds one 8-float matrix row, so a wider table is a decision
-; about the upper elements rather than a wider register).
+; V#8, V#9 and V#10 are inputs, and force_particle_regs is what produces them -
+; the per-particle prologue, once per i, where this macro runs once per group of
+; W. They are named here through V like everything else, so the two must be
+; instantiated at the same width or this macro reads a register whose upper
+; lanes the other one never wrote.
+;
+; SITES BELOW THAT REFUSE AT W <> 8 ARE MARKERS, NOT A COMPLETE LIST, and the
+; number of them is deliberately not stated: at 16 lanes the dataflow changes
+; shape rather than widening. Every vcmpps here writes a k register there, so
+; `valid` stops being a vector and the two vandps that combine it become kandw;
+; vroundps has no 512-bit encoding at all (it is vrndscaleps). Some of those
+; fail closed as assembler refusals and the mask ANDs would not. #164 rewrites
+; this body against a golden of its own; it does not fill in else-arms.
 macro force_group W, V, tail {
         vmovups V#0, [rsi+r9]           ; dx = x[j] - xi ; min-image
         vsubps  V#0, V#0, V#8
@@ -856,18 +913,7 @@ pass_avx2:
         cmp     r12d, [rsp+KP_LAST]
         jae     .done
 
-        elem_addr r10, AR_X_IN, r12     ; xi, yi broadcast
-        vbroadcastss ymm8, [r10]
-        elem_addr r10, AR_Y_IN, r12
-        vbroadcastss ymm9, [r10]
-        elem_addr r10, AR_SP_IN, r12    ; matrow = matrix[si*8 .. +7]
-        mov     eax, [r10]
-        and     eax, 7                  ; species < species_n <= 8; keep in-table
-        shl     eax, 5                  ; si*8 floats = si*32 bytes
-        lea     r10, [rbx-AH_SIZE+AH_PARAMS+SP_MATRIX]  ; arena = bank base - header
-        vmovups ymm10, [r10+rax]
-        vxorps  ymm6, ymm6, ymm6        ; fx partials
-        vxorps  ymm7, ymm7, ymm7        ; fy partials
+        force_particle_regs FG_LANES, ymm
 
         ; --- resolve the neighbour run set (decision 3): grid = the 3x3 cell
         ;     runs, brute = the degenerate single run [0, n) ------------------

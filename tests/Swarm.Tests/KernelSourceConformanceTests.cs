@@ -661,31 +661,41 @@ public sealed class KernelSourceConformanceTests
     }
 
     /// <summary>
-    /// The force-pass group macro names no vector register directly: every one
-    /// of them is written through the register-file parameter (issue #309).
+    /// The width-parameterised force-pass macros name no vector register
+    /// directly: every one of them is written through the register-file
+    /// parameter (issue #309).
     ///
-    /// The macro is one text instantiated per lane width (masterplan decision
-    /// 7). A single `ymm3` left behind inside it assembles and runs at 8 lanes -
-    /// the shipped path is unaffected and the whole suite stays green - and
-    /// silently pins a 256-bit register into a body a 512-bit instantiation is
-    /// supposed to be able to reuse. The defect is invisible until someone
-    /// instantiates the second width and gets a body that is half one file and
-    /// half the other, which is exactly the state this issue found the tree in
-    /// and the state #164 depends on not returning to.
+    /// The force pass is one text instantiated per lane width (masterplan
+    /// decision 7). A single `ymm3` left behind inside it assembles and runs at
+    /// 8 lanes - the shipped path is unaffected and the whole suite stays green
+    /// - and silently pins a 256-bit register into a body a 512-bit
+    /// instantiation is supposed to be able to reuse. The defect is invisible
+    /// until someone instantiates the second width and gets a body that is half
+    /// one file and half the other, which is exactly the state this issue found
+    /// the tree in and the state #164 depends on not returning to.
     ///
-    /// The rule is narrow on purpose. It judges the group macro alone, not the
-    /// width-dispatched neighbours: `force_reduce` descends to `xmm` by
-    /// construction (the reduction ends in a scalar), and `pass_avx2` is the
-    /// 8-lane instantiation and is entitled to name `ymm` at the call site.
+    /// The scan set is the four macros that carry live vector state across the
+    /// width boundary, and it is written out rather than derived, because
+    /// membership is a judgement about which macros are meant to be
+    /// instantiated twice. `force_reduce` is deliberately absent: it descends to
+    /// `xmm` by construction, since the reduction ends in a scalar. So is
+    /// `pass_avx2`, which IS the 8-lane instantiation and is entitled to name
+    /// `ymm` at its call sites.
     /// </summary>
     [Fact]
-    public void ForceGroupMacroNamesNoVectorRegisterDirectly()
+    public void WidthParameterisedMacrosNameNoVectorRegisterDirectly()
     {
-        const string MacroName = "force_group";
+        string[] macroNames = ["force_consts", "force_tail_mask", "force_particle_regs", "force_group"];
 
-        var found = 0;
+        var found = new Dictionary<string, int>();
+        var parameterised = new Dictionary<string, int>();
+        foreach (var macroName in macroNames)
+        {
+            found[macroName] = 0;
+            parameterised[macroName] = 0;
+        }
+
         var offenders = new List<string>();
-        var parameterised = 0;
 
         foreach (var path in KernelIncFiles())
         {
@@ -694,35 +704,49 @@ public sealed class KernelSourceConformanceTests
             for (int i = 0; i < lines.Length; i++)
             {
                 var m = MacroDefRegex.Match(lines[i]);
-                if (!m.Success || m.Groups[1].Value != MacroName)
+                if (!m.Success)
                 {
                     continue;
                 }
 
-                found++;
+                var macroName = m.Groups[1].Value;
                 var (end, body) = MacroBody(lines, i);
                 i = end;
 
-                foreach (Match hit in VectorRegisterLiteral.Matches(body))
+                if (!found.ContainsKey(macroName))
                 {
-                    offenders.Add($"{name}: macro '{MacroName}' names '{hit.Value}' directly");
+                    continue;
                 }
 
-                parameterised += RegisterFileParameter.Matches(body).Count;
+                found[macroName]++;
+                foreach (Match hit in VectorRegisterLiteral.Matches(body))
+                {
+                    offenders.Add($"{name}: macro '{macroName}' names '{hit.Value}' directly");
+                }
+
+                parameterised[macroName] += RegisterFileParameter.Matches(body).Count;
             }
         }
 
-        // Non-vacuity in both directions: a scan that stopped finding the macro,
-        // and a body that stopped naming registers through the parameter, would
-        // both leave an empty offender list that reads as a clean pass.
-        Assert.True(found == 1, $"expected exactly one `macro {MacroName}` definition under src/kernel/, found {found}");
-        Assert.True(parameterised > 0, $"macro '{MacroName}' names no register through its register-file parameter - the scan's rule matched nothing");
+        // Non-vacuity in both directions, per macro: a scan that stopped finding
+        // one of them, and a body that stopped naming registers through the
+        // parameter, would both leave an empty offender list that reads as a
+        // clean pass.
+        foreach (var macroName in macroNames)
+        {
+            Assert.True(
+                found[macroName] == 1,
+                $"expected exactly one `macro {macroName}` definition under src/kernel/, found {found[macroName]}");
+            Assert.True(
+                parameterised[macroName] > 0,
+                $"macro '{macroName}' names no register through its register-file parameter - the scan's rule matched nothing");
+        }
 
         Assert.True(
             offenders.Count == 0,
-            $"the force-pass group macro is instantiated per lane width, so every vector register " +
-            $"inside it is written through its register-file parameter (V#0 .. V#15) and never as a " +
-            $"literal. A literal assembles and runs at 8 lanes and pins the width silently (issue #309):\n  " +
+            "the force pass is instantiated per lane width, so every vector register inside its " +
+            "macros is written through the register-file parameter (V#0 .. V#15) and never as a " +
+            "literal. A literal assembles and runs at 8 lanes and pins the width silently (issue #309):\n  " +
             string.Join("\n  ", offenders));
     }
 
