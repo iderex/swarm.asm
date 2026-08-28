@@ -758,9 +758,11 @@ pp_validate_params:
         jne     .bad
         test    dword [r10+SP_FLAGS], not SP_FLAGS_VALID   ; any reserved bit set?
         jnz     .bad
-        cmp     dword [r10+SP_FORCE_PATH], PATH_SCALAR
+        cmp     dword [r10+SP_FORCE_PATH], PATH_MAX
         ja      .bad                    ; unsigned: the accept range is the
-                                        ;   PATH_* set and nothing else
+                                        ;   PATH_* set and nothing else, which
+                                        ;   one compare can say only because
+                                        ;   the ids are dense (abi.inc)
         xor     r11d, r11d              ; table row index
   .row:
         imul    eax, r11d, KR_SIZE

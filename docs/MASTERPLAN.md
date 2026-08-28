@@ -178,7 +178,7 @@ thread barrier (the sorted copy is the double buffer). The explicit +16 tail
 exists because `(N+15) & ~15` alone adds zero padding whenever N ≡ 0 mod 16 -
 including the headline N = 2^20 - so "unmasked loads are always safe" would be
 false without it. Finite pinned pads are required by the NaN-hygiene rule.
-`id[]` is non-negotiable: asm (FMA) and oracle positions differ by ulps, so a
+`id[]` is non-negotiable: asm and oracle positions differ by ulps, so a
 boundary-straddling particle bins differently, the sort permutations diverge,
 and an index-wise comparison misaligns wholesale - the oracle test is not
 runnable without id matching. All-state-in-arena makes "no hidden global
@@ -224,6 +224,51 @@ bits are untouched. **Implementation is gated, not shipped:** `force_path = 4`
 is authorized only if the exact-lever measurement (the divider microbench #59
 and the IEEE-exact software-pipelining contingency #61) fails to close the
 headline-preset gap; it does not exist in code today.
+
+**Amendment (2026-08-28, #162): `force_path = 4` is the FUSED AVX2 body, and
+the id is REUSED rather than shared.** The paragraph above reserved 4 for
+"AVX2-fast" (`vrsqrtps` + one Newton-Raphson refinement); the resolution below
+closed that option not-pursued, it never existed in code, and
+`pp_validate_params` refused the id with `IERR_PARAMS` at every commit up to
+this one - so no caller can have depended on the reserved meaning. The
+reservation is retired and the id carries the fused body instead. Its shape is
+the one that paragraph worked out for an opt-in path and is unchanged by the
+reuse: never auto-selected, selectable only by the caller, exactly as
+`force_path = 3` is. What does NOT come with it is the rsqrt narrowing - the
+`vrsqrtps`/`vrcpps` ban stands unchanged everywhere in `src/kernel/`, path 4
+executes no approximate instruction, and the conformance scan is untouched.
+
+Two sentences elsewhere in this document made this amendment necessary in a way
+the reservation did not. The `id[]` rationale under decision 3 calls the asm
+"FMA", and the epsilon-horizon entry names its figure "FMA-asm vs oracle"; both
+described an intended kernel rather than the one in the tree, which emitted no
+FMA instruction at all until #162. They are corrected where they stand rather
+than here.
+
+**The clause "introduced only inside path 4, so path 1's exact bits are
+untouched" is what this amendment KEEPS, not what it spends.** Path 1 is
+unchanged: it is the same instantiation of the same macro body, and its measured
+divergence against the oracle reproduces the 2026-08-05 recorded envelope digit
+for digit at n = 200, S = 1/4/8. Fusing was landed behind an id precisely so
+that sentence could stay true.
+
+**What the fused path's determinism guarantee is, stated narrowly.** FMA is
+IEEE-correctly-rounded and cross-vendor bit-identical, so path 4 is bit-exact
+per code path exactly as paths 1-3 are, and it is NOT the narrower guarantee the
+retired path-4 reservation would have carried. What it is not is equally close
+to the oracle: the reference is an unfused f32 op sequence, so single rounding
+is a different distance from it rather than a smaller one. Measured on the
+kernel at n = 200 over 100 seeds, path 4 holds the 1e-5 / 1e-4 pair at S = 6
+with 9.3x and 3.4x margin and LEAVES it at S = 8, where seed `0x5EED002B`
+reaches 1.257062e-04 on velocity. `FusedPathTests` asserts the horizon it
+measured and records the breach; the oracle-epsilon entry below is a path-1
+figure and is not widened to cover path 4.
+
+**Not yet measured (#162 stays open for it):** what fusing BUYS. It was built
+to cut the co-limiting non-divide FP ops #59 measured, and no speed figure for
+it is recorded here - the reference machine is under a load calibration, and a
+benchmark taken beside it measures the scheduler. Divergence is deterministic
+and was taken now; the timing waits for the quiet window.
 
 **Resolution (2026-07-17):** the gate is resolved. The #59 divider microbench
 measured the AVX2 force loop **throughput-bound**, not latency-bound (a 16x
@@ -821,8 +866,13 @@ disclosed reference machine only).
    left ~6 ms. Probe: run the 3600-frame histogram early
    (M1 scale, again at each milestone) so the reference machine's jitter
    floor is known before the 1M claim is due.
-5. **Oracle epsilon horizon.** 1e-5 absolute at S = 8 for FMA-asm vs
-   unfused-oracle rests on assumed divergence growth. Probe: measure empirical
+5. **Oracle epsilon horizon.** 1e-5 absolute at S = 8 for asm vs
+   unfused-oracle rests on assumed divergence growth. (This risk was written
+   naming the asm "FMA-asm"; the kernel emitted no FMA instruction until #162,
+   and everything recorded below it was measured on the unfused AVX2 body.
+   Corrected 2026-08-28 so the figures are not read as fused ones - the fused
+   path is `force_path = 4`, carries its own figures in `FusedPathTests`, and
+   is not covered by this entry.) Probe: measure empirical
    per-step divergence growth at n = 4096 across 100 seeds; tighten tolerances
    or horizons from data, recorded in the test with the measurement.
    **Resolution (2026-08-05, #120):** the probe ran, as the opt-in sweep in

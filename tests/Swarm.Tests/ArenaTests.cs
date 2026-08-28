@@ -151,14 +151,14 @@ public sealed unsafe class ArenaTests
 
     // The other half of the force_path accept gate, and the half that runs on
     // every host. pp_validate_params bounds the field to the PATH_* set
-    // (parse.inc: `cmp dword [r10+SP_FORCE_PATH], PATH_SCALAR` / `ja .bad`),
+    // (parse.inc: `cmp dword [r10+SP_FORCE_PATH], PATH_MAX` / `ja .bad`),
     // so an id outside that set is refused as invalid params and never reaches
     // init_core's path dispatch - the arm there that rejects "not a PATH_* id
     // at all" is defence behind an already-bounded field, not the branch this
     // covers. IERR_PARAMS is therefore the correct rc, not IERR_PATH, and the
     // arena stays untouched for the same fail-closed reason.
     [Theory]
-    [InlineData(4u)]           // one past PATH_SCALAR
+    [InlineData(5u)]           // one past PATH_MAX (PATH_AVX2_FMA = 4, #162)
     [InlineData(0x80000000u)]  // the sign bit, which a signed compare would let through
     [InlineData(uint.MaxValue)]
     public void InitRefusesAPathIdOutsideTheDefinedSet(uint forcePath)
