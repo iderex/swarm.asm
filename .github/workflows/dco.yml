@@ -1,0 +1,86 @@
+# DCO sign-off gate (#143).
+#
+# CONTRIBUTING.md says every commit must be signed off, and until this workflow
+# nothing checked it: four unsigned commits on PR #140 survived three review
+# rounds before a reader noticed, and the repair after a merge is a force-push.
+#
+# THIS GATE IS PROSPECTIVE, AND THE NUMBER THAT MOTIVATED THE ISSUE NO LONGER
+# SAYS WHAT IT SAID. Re-derived at origin/main d4de203: of the last 40 commits,
+# 21 have one parent and every one of them is signed off, and the 19 that are not
+# all have two parents - GitHub's merge commits, which `rev-list --no-merges`
+# deliberately never judges. The last 60 non-merge commits are 60 for 60. So the
+# unsigned population today is exactly the class this gate exempts, and nobody
+# should read it as having caught something in the past. What it does is stop the
+# next instance, at the only moment the repair is still cheap.
+#
+# The rule this job enforces lives in tools/check-dco.ps1 rather than in a shell
+# block here, for two reasons. Enforcement logic written inside a workflow file
+# is in a language this repository has no test suite for, so it cannot be proven
+# to bite; and the same script is what the harness runs against fixture branches
+# in tests/Swarm.Tests/DcoSignOffTests.cs, so the job and its proof exercise one
+# implementation rather than two that can drift.
+#
+# This job is intended as a REQUIRED context on the `Protect main` ruleset. Until
+# the context is added there it reports without blocking, which is the state a
+# reader should assume rather than infer from the job's presence.
+name: DCO
+
+on:
+  pull_request:
+    branches: [main]
+    # `edited` is here because the verdict is a function of base.sha, and
+    # RETARGETING A PULL REQUEST'S BASE FIRES `edited`, NOT `synchronize`. Without
+    # it a green taken against the old base stands after the range has changed
+    # underneath it - which is a stale-green bypass the moment this becomes a
+    # required context. pr-hygiene.yml adds `edited` for the same class of reason.
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Fail closed: no ambient token scope at the top level.
+permissions: {}
+
+jobs:
+  dco:
+    # The job name is the required-check context in the branch ruleset - keep
+    # it stable.
+    name: dco
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, because the script refuses a shallow clone: a
+          # shallow fetch can hide commits inside the range, and a checker that
+          # cannot see the commits must not report clean.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the sign-off trailers
+        # `pwsh -File`, not `shell: pwsh`. The two are different invocation shapes
+        # - `shell: pwsh` dot-sources the script into a host whose own preamble
+        # and epilogue decide the exit code - and the harness proves the script
+        # under `-File`. Running the shape that is proven is cheaper than arguing
+        # that the other one behaves the same.
+        shell: bash
+        # The two SHAs and the opening account come from the pull_request payload
+        # and reach the script through the environment, never through `run:`
+        # interpolation, so there is no template-injection surface.
+        #
+        # PR_AUTHOR is what makes the bot exemption safe. A commit's author email
+        # is a field its author types, so an exemption keyed on that alone is
+        # available to anyone who spells Dependabot's address; the opening account
+        # is GitHub's own record of who pressed the button, and a pull request
+        # opened by a person carries no exemption whatever its commits claim.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: >-
+          pwsh -NoProfile -NonInteractive -File ./tools/check-dco.ps1
+          -Base "$BASE_SHA" -Head "$HEAD_SHA" -PullRequestAuthor "$PR_AUTHOR"

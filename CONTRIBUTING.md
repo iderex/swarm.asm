@@ -50,6 +50,18 @@ By adding it you certify the [DCO](DCO). Forgot to sign off? Add it
 retroactively across your branch with `git rebase --signoff <base>` and
 force-push.
 
+**This rule is checked, not trusted.** The `dco` job runs
+[`tools/check-dco.ps1`](tools/check-dco.ps1) over every non-merge commit
+between the pull request's base and head, and refuses any that carries no
+`Signed-off-by` trailer matching its author. The script fails closed on its own
+inputs as well: a shallow clone, an unresolvable ref or an empty range is a
+refusal, never a pass, because a checker that reports clean when it cannot see
+the commits is worse than none. GitHub's own apps are the one exemption, by
+exact address rather than by pattern, and the script says which address and
+why. What refuses each case is proven in
+`tests/Swarm.Tests/DcoSignOffTests.cs`, including the control that a correctly
+signed range still goes green.
+
 ## Code standard
 
 - **Assembly is readable.** Every routine carries a register contract
