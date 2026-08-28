@@ -52,9 +52,12 @@ public sealed class DcoSignOffTests : IDisposable
                 Directory.Delete(_root, recursive: true);
             }
         }
-        catch (IOException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // A leftover temp fixture is not a test failure.
+            // A leftover temp fixture is not a test failure. Both exceptions are
+            // caught because a read-only or ACL-blocked git object throws the
+            // second one, not the first, and a teardown throw would fail a passing
+            // test with the wrong cause attached.
         }
     }
 
@@ -107,36 +110,85 @@ public sealed class DcoSignOffTests : IDisposable
     }
 
     /// <summary>
-    /// The exemption is one exact address, so an account merely shaped like a bot
-    /// is still judged. Both halves are asserted: the named identity passes
-    /// unsigned, and a neighbouring bot address does not.
+    /// The exemption needs BOTH halves: the exact address, and GitHub's own
+    /// record that the bot opened the pull request. The commit's author email is
+    /// a field its author types, so an exemption keyed on it alone belongs to
+    /// whoever spells the address.
+    ///
+    /// Four fixtures, one identical unsigned commit: exempt only when the bot
+    /// both authored it and opened the pull request.
+    /// </summary>
+    [Theory]
+    // the real thing
+    [InlineData("49699333+dependabot[bot]@users.noreply.github.com", "dependabot[bot]", 0)]
+    // the same commit on a pull request a person opened - impersonation
+    [InlineData("49699333+dependabot[bot]@users.noreply.github.com", "iderex", 1)]
+    // a casing variant, which `-contains` would have matched and `-ceq` does not
+    [InlineData("49699333+DEPENDABOT[BOT]@users.noreply.github.com", "dependabot[bot]", 1)]
+    // a neighbouring bot address: the entry is one identity, not a pattern
+    [InlineData("1+some-other[bot]@users.noreply.github.com", "dependabot[bot]", 1)]
+    public void TheBotExemptionNeedsBothTheAddressAndTheOpeningAccount(
+        string authorEmail,
+        string openedBy,
+        int expected)
+    {
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
+        Commit(
+            repo,
+            "bump.txt",
+            "Bump a dependency",
+            signOff: false,
+            authorName: "a bot",
+            authorEmail: authorEmail);
+
+        Assert.Equal(expected, RunCheck(repo, baseSha, "HEAD", openedBy).Exit);
+    }
+
+    /// <summary>
+    /// The bypass that greened an arbitrary unsigned commit: the fields used to
+    /// be read as one <c>%an&lt;US&gt;%ae&lt;US&gt;%B</c> string and split on U+001F, on
+    /// the claim that no git identity can hold that byte. git stores it verbatim,
+    /// so an author name carrying one shifts every field left - the address the
+    /// check compares against then comes out of the author's own name, and any
+    /// trailer they like matches it.
     /// </summary>
     [Fact]
-    public void OnlyTheNamedBotIdentityIsExempt()
+    public void SeparatorInsideTheAuthorNameCannotForgeAMatch()
     {
-        var exempt = NewRepo();
-        var exemptBase = Commit(exempt, "base.txt", "Base commit", signOff: false);
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
         Commit(
-            exempt,
-            "bump.txt",
-            "Bump a dependency",
+            repo,
+            "work.txt",
+            "Add a thing\n\nSigned-off-by: Someone <victim@example.invalid>",
             signOff: false,
-            authorName: "dependabot[bot]",
-            authorEmail: "49699333+dependabot[bot]@users.noreply.github.com");
+            // The separator itself, written as an escape so this file stays ASCII.
+            authorName: "Mallory\u001Fvictim@example.invalid",
+            authorEmail: "mallory@example.invalid");
 
-        Assert.Equal(0, RunCheck(exempt, exemptBase, "HEAD").Exit);
+        var (exit, output) = RunCheck(repo, baseSha, "HEAD");
 
-        var other = NewRepo();
-        var otherBase = Commit(other, "base.txt", "Base commit", signOff: false);
-        Commit(
-            other,
-            "bump.txt",
-            "Bump a dependency",
-            signOff: false,
-            authorName: "some-other[bot]",
-            authorEmail: "1+some-other[bot]@users.noreply.github.com");
+        Assert.Equal(1, exit);
+        Assert.Contains("signed off as victim@example.invalid", output, StringComparison.Ordinal);
+    }
 
-        Assert.Equal(1, RunCheck(other, otherBase, "HEAD").Exit);
+    /// <summary>
+    /// A line that looks like a trailer is not one. Anchored at column zero, so
+    /// an indented example inside the body certifies nothing; and the name may
+    /// hold no angle brackets, so a line carrying two addresses cannot have its
+    /// second one read as the certifying one while a reader sees the first.
+    /// </summary>
+    [Theory]
+    [InlineData("Docs: show how to sign off\n\nExample:\n\n    Signed-off-by: F <f@example.invalid>")]
+    [InlineData("Add a thing\n\nSigned-off-by: Bob <bob@example.invalid> <fixture@example.invalid>")]
+    public void ALineThatMerelyLooksLikeATrailerDoesNotCertify(string message)
+    {
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
+        Commit(repo, "work.txt", message, signOff: false);
+
+        Assert.Equal(1, RunCheck(repo, baseSha, "HEAD").Exit);
     }
 
     [Fact]
@@ -176,7 +228,8 @@ public sealed class DcoSignOffTests : IDisposable
         var (exit, output) = RunCheck(shallow, baseSha, "HEAD");
 
         Assert.Equal(1, exit);
-        Assert.Contains("shallow", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not known to be complete", output, StringComparison.Ordinal);
+        Assert.Contains("git answered 'true'", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -220,6 +273,37 @@ public sealed class DcoSignOffTests : IDisposable
 
         Assert.Equal(1, exit);
         Assert.Contains("git is not on PATH", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The job's wiring, not just the script it calls. Every leg above would go on
+    /// passing with <c>dco.yml</c> deleted, its <c>run:</c> line pointed at
+    /// something inert, or its full-history checkout removed - and the script
+    /// refuses a shallow clone, so a checkout without <c>fetch-depth: 0</c> would
+    /// red every pull request. The other workflow gates in this suite assert their
+    /// own wiring for the same reason.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowRunsTheCheckerOverTheWholeHistory()
+    {
+        var path = Path.Combine(Build.RepoRoot, ".github", "workflows", "dco.yml");
+        Assert.True(File.Exists(path), "the DCO workflow is missing at .github/workflows/dco.yml");
+        var yaml = File.ReadAllText(path);
+
+        Assert.Contains("-File ./tools/check-dco.ps1", yaml, StringComparison.Ordinal);
+        Assert.Contains("fetch-depth: 0", yaml, StringComparison.Ordinal);
+        // The three inputs reach the script through the environment, never through
+        // `run:` interpolation - which is both the injection-safe form and the one
+        // that keeps zizmor quiet.
+        foreach (var name in new[] { "BASE_SHA", "HEAD_SHA", "PR_AUTHOR" })
+        {
+            Assert.Contains($"{name}: ", yaml, StringComparison.Ordinal);
+            Assert.Contains($"\"${name}\"", yaml, StringComparison.Ordinal);
+        }
+
+        // The job name is the context the ruleset names; renaming it silently
+        // would leave a required check that never reports again.
+        Assert.Contains("name: dco", yaml, StringComparison.Ordinal);
     }
 
     // --- fixture plumbing -------------------------------------------------
@@ -268,7 +352,11 @@ public sealed class DcoSignOffTests : IDisposable
         return Git(repo, "rev-parse", "HEAD").Trim();
     }
 
-    private static (int Exit, string Output) RunCheck(string repo, string @base, string head)
+    private static (int Exit, string Output) RunCheck(
+        string repo,
+        string @base,
+        string head,
+        string openedBy = "a-person")
     {
         var script = Path.Combine(Build.RepoRoot, "tools", "check-dco.ps1");
         Assert.True(File.Exists(script), $"the checker is missing at {script}");
@@ -278,13 +366,19 @@ public sealed class DcoSignOffTests : IDisposable
             Build.RepoRoot,
             "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-File", script,
-            "-Base", @base, "-Head", head, "-RepoRoot", repo);
+            "-Base", @base, "-Head", head, "-RepoRoot", repo,
+            "-PullRequestAuthor", openedBy);
     }
 
-    // pwsh where it exists (what the workflow's `shell: pwsh` step uses), and
-    // Windows PowerShell otherwise. The script is written to the intersection of
-    // the two so either host reaches the same verdict.
-    private static string PowerShellExe()
+    // pwsh where it exists (what the workflow invokes), and Windows PowerShell
+    // otherwise. The script is written to the intersection of the two so either
+    // host reaches the same verdict. Resolved once: the probe below starts a
+    // process, and per-RunCheck that was most of this class's wall time.
+    private static readonly Lazy<string> PowerShellHost = new(FindPowerShellExe);
+
+    private static string PowerShellExe() => PowerShellHost.Value;
+
+    private static string FindPowerShellExe()
     {
         foreach (var candidate in new[] { "pwsh", "powershell" })
         {
@@ -360,9 +454,17 @@ public sealed class DcoSignOffTests : IDisposable
         }
 
         using var p = Process.Start(psi) ?? throw new InvalidOperationException($"could not start {exe}");
-        var stdout = p.StandardOutput.ReadToEnd();
-        var stderr = p.StandardError.ReadToEnd();
+
+        // Both pipes are drained asynchronously, the convention Build.cs already
+        // states and for the reason it states: a synchronous ReadToEnd on one
+        // stream deadlocks against a child blocked writing the other. `git clone`
+        // writes progress to stderr while the reader is parked on stdout, and a
+        // deadlock here never reaches WaitForExit, so the timeout below cannot
+        // fire - the run hangs until CI's job timeout kills it with no failing
+        // test name attached.
+        var stdout = p.StandardOutput.ReadToEndAsync();
+        var stderr = p.StandardError.ReadToEndAsync();
         Assert.True(p.WaitForExit(60_000), $"{exe} did not exit within 60s");
-        return (p.ExitCode, stdout + stderr);
+        return (p.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
     }
 }

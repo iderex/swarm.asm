@@ -24,19 +24,32 @@ param(
     [Parameter(Mandatory = $true)][string]$Base,
     [Parameter(Mandatory = $true)][string]$Head,
     # The repository to read. Defaults to the one this script lives in.
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
+    # The login of the account that OPENED the pull request, as GitHub reports it.
+    # See the exemption below: without it there is no exemption at all.
+    [string]$PullRequestAuthor = ''
 )
 
-# Identities exempt from the rule. The DCO binds the people and agents who write
-# code here; it does not bind GitHub's own apps, which author and sign off under
-# two different addresses and so would red every pull request they open.
+# The one identity exempt from the rule, and the login that has to have opened
+# the pull request for the exemption to exist at all. The DCO binds the people
+# and agents who write code here; it does not bind GitHub's own apps, which
+# author and sign off under two different addresses and so would red every pull
+# request they open.
 #
-# ONE NAMED IDENTITY, NEVER A PATTERN. An allowlist entry reading `*[bot]` is a
-# door: any account whose name ends that way walks through it. A single exact
-# address is a documented exception a reader can weigh.
-$ExemptAuthorEmails = @(
-    '49699333+dependabot[bot]@users.noreply.github.com'
-)
+# BOTH HALVES ARE REQUIRED, AND THE SECOND IS WHY. A commit's author email is a
+# field its author types: anybody can write Dependabot's address into their own
+# unsigned commit, and an exemption keyed on that field alone hands the gate to
+# whoever spells the address. The opening account comes from GitHub's event
+# payload rather than from the commit, so a pull request opened by a person
+# carries no exemption at all, whatever its commits claim to be.
+#
+# ONE NAMED IDENTITY, NEVER A PATTERN, AND MATCHED CASE-SENSITIVELY. An
+# allowlist entry reading `*[bot]` is a door: any account whose name ends that
+# way walks through it. PowerShell's `-contains` is case-INSENSITIVE for
+# strings, which would have turned one address into its whole casing family, so
+# the comparison below is `-ceq`.
+$ExemptAuthorEmail = '49699333+dependabot[bot]@users.noreply.github.com'
+$ExemptOpenedBy = 'dependabot[bot]'
 
 # Anything unexpected below is a terminating error, so it leaves through a
 # non-zero exit rather than continuing past the failure with a stale variable.
@@ -44,9 +57,10 @@ $ExemptAuthorEmails = @(
 # otherwise be raised as an error on a run that succeeded.
 $ErrorActionPreference = 'Stop'
 
-# The record separator git writes for %x1f. No git identity or commit message can
-# contain it, which is what makes the three fields unambiguous.
-$Unit = [string][char]0x1F
+# A resolved commit id, and nothing else. git's output reaches this script with
+# stderr merged into it, so a line git decided to emit for its own reasons would
+# otherwise be carried forward as if it were the answer to the question asked.
+$Sha1 = '^[0-9a-f]{40}$'
 
 function Write-Refusal {
     param([string]$Reason)
@@ -91,16 +105,29 @@ if (-not (Test-Path -LiteralPath $RepoRoot)) {
 
 # A shallow clone can omit commits that are inside the range, so the walk below
 # would report on a subset while looking as though it had covered the whole.
+#
+# THE TEST IS FOR `false`, NOT AGAINST `true`, and the difference is the whole
+# point. A refusal that fires only on an exact literal passes everything else,
+# including a probe whose answer arrived with another line of git's output
+# joined onto it - which is a real shape here, because stderr is merged into
+# what Invoke-Git returns.
 $shallow = ((Invoke-Git @('rev-parse', '--is-shallow-repository')) -join '').Trim()
-if ($shallow -eq 'true') {
-    Write-Refusal 'the clone is shallow, so commits inside the range may be missing. Check out with fetch-depth: 0.'
+if ($shallow -cne 'false') {
+    Write-Refusal "the clone is not known to be complete (git answered '$shallow'), so commits inside the range may be missing. Check out with fetch-depth: 0."
     exit 1
 }
 
 # Resolve both ends before walking, so a misspelled ref is refused here rather
-# than becoming an empty range further down.
+# than becoming an empty range further down. The answer has to be a commit id
+# and nothing else, for the reason given at $Sha1.
 $baseSha = ((Invoke-Git @('rev-parse', '--verify', "$Base^{commit}")) -join '').Trim()
 $headSha = ((Invoke-Git @('rev-parse', '--verify', "$Head^{commit}")) -join '').Trim()
+foreach ($pair in @(@('base', $baseSha), @('head', $headSha))) {
+    if ($pair[1] -notmatch $Sha1) {
+        Write-Refusal "resolving the $($pair[0]) did not yield a commit id: '$($pair[1])'"
+        exit 1
+    }
+}
 
 $commits = @(
     Invoke-Git @('rev-list', '--no-merges', "$baseSha..$headSha") |
@@ -116,23 +143,37 @@ if ($commits.Count -eq 0) {
 $offenders = @()
 
 foreach ($sha in $commits) {
-    $record = (Invoke-Git @('show', '--no-patch', "--format=%an$($Unit)%ae$($Unit)%B", $sha)) -join "`n"
-    $parts = $record -split $Unit, 3
-    if ($parts.Count -lt 3) {
-        Write-Refusal "could not read the author and message of $sha"
+    if ($sha -notmatch $Sha1) {
+        Write-Refusal "rev-list returned something that is not a commit id: '$sha'"
         exit 1
     }
 
-    $authorName = $parts[0].Trim()
-    $authorEmail = $parts[1].Trim()
-    $message = $parts[2]
+    # ONE FIELD PER CALL, NEVER ONE FORMAT STRING SPLIT ON A SEPARATOR. The
+    # earlier form asked for `%an<US>%ae<US>%B` and split on U+001F, on the claim
+    # that no git identity can contain that byte. git stores it verbatim:
+    #
+    #     git -c user.name=$'Foo\x1fvictim@example.invalid' commit ...
+    #
+    # shifts every field one place left, so the address the check compares
+    # against comes out of the author's own name and any trailer they like
+    # matches it. That is a signed-off verdict on an arbitrary unsigned commit,
+    # which is the failure this whole script exists to make impossible. A field
+    # read on its own cannot be shifted by anything inside another field.
+    $authorName = ((Invoke-Git @('show', '--no-patch', '--format=%an', $sha)) -join ' ').Trim()
+    $authorEmail = ((Invoke-Git @('show', '--no-patch', '--format=%ae', $sha)) -join ' ').Trim()
+    $message = (Invoke-Git @('show', '--no-patch', '--format=%B', $sha)) -join "`n"
 
-    if ($ExemptAuthorEmails -contains $authorEmail) {
+    if ($PullRequestAuthor -ceq $ExemptOpenedBy -and $authorEmail -ceq $ExemptAuthorEmail) {
         continue
     }
 
+    # THE TRAILER IS A TRAILER, NOT A LINE THAT LOOKS LIKE ONE. Anchored at
+    # column zero, so a `Signed-off-by:` indented inside a fenced block or an
+    # example in the body does not certify anything; and the name may not itself
+    # contain angle brackets, so a line carrying two addresses cannot have the
+    # second one read as the certifying one while the first is what a human sees.
     $signedEmails = @(
-        [regex]::Matches($message, '(?im)^[ \t]*Signed-off-by:[ \t]*.*<([^>]+)>[ \t]*$') |
+        [regex]::Matches($message, '(?m)^Signed-off-by:[ \t]*[^<>]*<([^<>]+)>[ \t]*$') |
         ForEach-Object { $_.Groups[1].Value.Trim() }
     )
 
