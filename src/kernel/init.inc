@@ -62,7 +62,11 @@ init_core:
         mov     r10d, [r8+SP_FORCE_PATH] ; a PATH_* id, not a CPU_* bit mask
         test    r10d, r10d              ; PATH_AUTO = 0
         jnz     .explicit
-        test    r9d, CPU_AVX512         ; auto: AVX-512 > AVX2 > fail
+        test    r9d, CPU_AVX512         ; auto: AVX-512 > AVX2 > fail. PATH_AVX2_FMA
+                                        ;   is deliberately absent from this
+                                        ;   ladder (#162): it is opt-in only,
+                                        ;   like PATH_SCALAR, so no caller gets
+                                        ;   different arithmetic by not asking.
         jz      .try_avx2
         mov     r10d, PATH_AVX512
         jmp     .path_ok
@@ -76,10 +80,16 @@ init_core:
         je      .path_ok               ;   reference path; its own floor is
                                        ;   SSE4.1, see abi.inc's PATH_SCALAR)
         cmp     r10d, PATH_AVX2
-        jne     .want512
+        jne     .want_fma
         test    r9d, CPU_AVX2           ; AVX2 requested
         jz      .no_path
         jmp     .path_ok
+  .want_fma:
+        cmp     r10d, PATH_AVX2_FMA     ; the fused ymm body (#162). Gated on
+        jne     .want512                ;   CPU_AVX2 and on nothing else:
+        test    r9d, CPU_AVX2           ;   cpu_paths_core cannot report that
+        jz      .no_path                ;   bit without FMA, so a CPU that
+        jmp     .path_ok                ;   passes here has the unit.
   .want512:
         cmp     r10d, PATH_AVX512       ; not a PATH_* id at all: reject rather
         jne     .no_path                ;   than read it as an AVX-512 request

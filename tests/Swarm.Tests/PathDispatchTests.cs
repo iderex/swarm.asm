@@ -46,7 +46,7 @@ public sealed unsafe class PathDispatchTests
     // exactly the word a future bug would leave behind.
     [Theory]
     [InlineData(0u)]           // PATH_AUTO
-    [InlineData(4u)]           // one past the id set
+    [InlineData(5u)]           // one past the id set (PATH_AVX2_FMA = 4, #162)
     [InlineData(0x7FFFFFFFu)]
     [InlineData(0xFFFFFFFFu)]
     public void UnrecognisedArenaPathRunsTheReferenceBody(uint poked)
