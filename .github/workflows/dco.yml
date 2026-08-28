@@ -1,0 +1,57 @@
+# DCO sign-off gate (#143).
+#
+# CONTRIBUTING.md says every commit must be signed off, and until this workflow
+# nothing checked it: four unsigned commits on PR #140 survived three review
+# rounds before a reader noticed, and the repair after a merge is a force-push.
+#
+# The rule this job enforces lives in tools/check-dco.ps1 rather than in a shell
+# block here, for two reasons. Enforcement logic written inside a workflow file
+# is in a language this repository has no test suite for, so it cannot be proven
+# to bite; and the same script is what the harness runs against fixture branches
+# in tests/Swarm.Tests/DcoSignOffTests.cs, so the job and its proof exercise one
+# implementation rather than two that can drift.
+#
+# This job is intended as a REQUIRED context on the `Protect main` ruleset. Until
+# the context is added there it reports without blocking, which is the state a
+# reader should assume rather than infer from the job's presence.
+name: DCO
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Fail closed: no ambient token scope at the top level.
+permissions: {}
+
+jobs:
+  dco:
+    # The job name is the required-check context in the branch ruleset - keep
+    # it stable.
+    name: dco
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, because the script refuses a shallow clone: a
+          # shallow fetch can hide commits inside the range, and a checker that
+          # cannot see the commits must not report clean.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the sign-off trailers
+        shell: pwsh
+        # The two SHAs come from the pull_request payload and reach the script
+        # through the environment, never through `run:` interpolation, so there
+        # is no template-injection surface.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./tools/check-dco.ps1 -Base $env:BASE_SHA -Head $env:HEAD_SHA

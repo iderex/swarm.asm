@@ -1,0 +1,302 @@
+using Xunit;
+using System.Diagnostics;
+
+namespace Swarm.Tests;
+
+/// <summary>
+/// The DCO sign-off gate, proven against fixture repositories (issue #143).
+///
+/// <c>CONTRIBUTING.md</c> states that every commit must be signed off. Before
+/// <c>tools/check-dco.ps1</c> nothing checked it, and four unsigned commits on
+/// PR #140 survived three review rounds. A gate that is never shown to refuse
+/// anything is indistinguishable from no gate, so every leg below builds a real
+/// repository, runs the real script over it, and asserts the verdict:
+///
+/// <list type="bullet">
+///   <item>an unsigned commit reds,</item>
+///   <item>a sign-off whose address is not the author's reds,</item>
+///   <item>a correctly signed range greens - the non-vacuity control, without
+///         which a script that always failed would satisfy every other leg,</item>
+///   <item>and each fail-closed input - a shallow clone, an unresolvable ref,
+///         an empty range, a missing repository - reds rather than passing.</item>
+/// </list>
+///
+/// The fixture commits are deliberately NOT signed with a key. The subject here
+/// is the Signed-off-by trailer, which is a line of the message and has nothing
+/// to do with a signature, and CI holds no signing key - so signing the fixtures
+/// would add "the key was unavailable" as a way for this test to fail for a
+/// reason it is not about.
+/// </summary>
+public sealed class DcoSignOffTests : IDisposable
+{
+    private const string AuthorName = "Fixture Author";
+    private const string AuthorEmail = "fixture@example.invalid";
+
+    private readonly string _root = Path.Combine(
+        Path.GetTempPath(),
+        "swarm-dco-" + Guid.NewGuid().ToString("N")[..12]);
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                // git marks objects read-only; clear it before the recursive delete.
+                foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+                {
+                    File.SetAttributes(file, FileAttributes.Normal);
+                }
+
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // A leftover temp fixture is not a test failure.
+        }
+    }
+
+    [Fact]
+    public void UnsignedCommitIsRefused()
+    {
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
+        Commit(repo, "work.txt", "Add a thing", signOff: false);
+
+        var (exit, output) = RunCheck(repo, baseSha, "HEAD");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("no Signed-off-by trailer", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SignOffFromAnotherAddressIsRefused()
+    {
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
+        Commit(
+            repo,
+            "work.txt",
+            "Add a thing\n\nSigned-off-by: Someone Else <someone.else@example.invalid>",
+            signOff: false);
+
+        var (exit, output) = RunCheck(repo, baseSha, "HEAD");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("signed off as someone.else@example.invalid", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The non-vacuity control. Without it every other leg here is satisfied by a
+    /// script that refuses unconditionally.
+    /// </summary>
+    [Fact]
+    public void CorrectlySignedRangeIsAccepted()
+    {
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
+        Commit(repo, "work.txt", "Add a thing", signOff: true);
+        Commit(repo, "more.txt", "Add another thing", signOff: true);
+
+        var (exit, output) = RunCheck(repo, baseSha, "HEAD");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("2 non-merge commit(s)", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The exemption is one exact address, so an account merely shaped like a bot
+    /// is still judged. Both halves are asserted: the named identity passes
+    /// unsigned, and a neighbouring bot address does not.
+    /// </summary>
+    [Fact]
+    public void OnlyTheNamedBotIdentityIsExempt()
+    {
+        var exempt = NewRepo();
+        var exemptBase = Commit(exempt, "base.txt", "Base commit", signOff: false);
+        Commit(
+            exempt,
+            "bump.txt",
+            "Bump a dependency",
+            signOff: false,
+            authorName: "dependabot[bot]",
+            authorEmail: "49699333+dependabot[bot]@users.noreply.github.com");
+
+        Assert.Equal(0, RunCheck(exempt, exemptBase, "HEAD").Exit);
+
+        var other = NewRepo();
+        var otherBase = Commit(other, "base.txt", "Base commit", signOff: false);
+        Commit(
+            other,
+            "bump.txt",
+            "Bump a dependency",
+            signOff: false,
+            authorName: "some-other[bot]",
+            authorEmail: "1+some-other[bot]@users.noreply.github.com");
+
+        Assert.Equal(1, RunCheck(other, otherBase, "HEAD").Exit);
+    }
+
+    [Fact]
+    public void EmptyRangeIsRefusedRatherThanReadAsClean()
+    {
+        var repo = NewRepo();
+        var head = Commit(repo, "base.txt", "Base commit", signOff: true);
+
+        var (exit, output) = RunCheck(repo, head, head);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("no non-merge commits", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnresolvableRefIsRefused()
+    {
+        var repo = NewRepo();
+        Commit(repo, "base.txt", "Base commit", signOff: true);
+
+        var (exit, output) = RunCheck(repo, "refs/heads/no-such-branch", "HEAD");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("DCO check refused", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShallowCloneIsRefused()
+    {
+        var origin = NewRepo();
+        var baseSha = Commit(origin, "base.txt", "Base commit", signOff: true);
+        Commit(origin, "work.txt", "Add a thing", signOff: false);
+
+        var shallow = Path.Combine(_root, "shallow-" + Guid.NewGuid().ToString("N")[..8]);
+        Git(_root, "clone", "--depth", "1", "--no-local", origin.Replace('\\', '/'), shallow);
+
+        var (exit, output) = RunCheck(shallow, baseSha, "HEAD");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("shallow", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MissingRepositoryIsRefused()
+    {
+        var absent = Path.Combine(_root, "not-a-repo-" + Guid.NewGuid().ToString("N")[..8]);
+
+        var (exit, output) = RunCheck(absent, "HEAD~1", "HEAD");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("does not exist", output, StringComparison.Ordinal);
+    }
+
+    // --- fixture plumbing -------------------------------------------------
+
+    private string NewRepo()
+    {
+        var path = Path.Combine(_root, "repo-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(path);
+        Git(path, "init", "--initial-branch=main");
+        Git(path, "config", "user.name", AuthorName);
+        Git(path, "config", "user.email", AuthorEmail);
+        // Local to this throwaway repository. See the class remarks: the subject
+        // is the trailer, not the signature, and CI holds no key.
+        Git(path, "config", "commit.gpgsign", "false");
+        return path;
+    }
+
+    private static string Commit(
+        string repo,
+        string file,
+        string message,
+        bool signOff,
+        string? authorName = null,
+        string? authorEmail = null)
+    {
+        File.WriteAllText(Path.Combine(repo, file), message);
+        Git(repo, "add", file);
+
+        var args = new List<string>();
+        if (authorName is not null && authorEmail is not null)
+        {
+            // -c so the sign-off `-s` adds names the fixture author too; --author
+            // alone would leave the trailer reading the repository's identity and
+            // the test would be measuring the wrong disagreement.
+            args.AddRange(["-c", $"user.name={authorName}", "-c", $"user.email={authorEmail}"]);
+        }
+
+        args.AddRange(["commit", "-m", message]);
+        if (signOff)
+        {
+            args.Add("-s");
+        }
+
+        Git(repo, args.ToArray());
+
+        return Git(repo, "rev-parse", "HEAD").Trim();
+    }
+
+    private static (int Exit, string Output) RunCheck(string repo, string @base, string head)
+    {
+        var script = Path.Combine(Build.RepoRoot, "tools", "check-dco.ps1");
+        Assert.True(File.Exists(script), $"the checker is missing at {script}");
+
+        return Run(
+            PowerShellExe(),
+            Build.RepoRoot,
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", script,
+            "-Base", @base, "-Head", head, "-RepoRoot", repo);
+    }
+
+    // pwsh where it exists (what the workflow's `shell: pwsh` step uses), and
+    // Windows PowerShell otherwise. The script is written to the intersection of
+    // the two so either host reaches the same verdict.
+    private static string PowerShellExe()
+    {
+        foreach (var candidate in new[] { "pwsh", "powershell" })
+        {
+            try
+            {
+                var probe = Run(candidate, Build.RepoRoot, "-NoProfile", "-Command", "exit 0");
+                if (probe.Exit == 0)
+                {
+                    return candidate;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // Not on PATH; try the next.
+            }
+        }
+
+        throw new InvalidOperationException("neither pwsh nor powershell is on PATH");
+    }
+
+    private static string Git(string cwd, params string[] args)
+    {
+        var (exit, output) = Run("git", cwd, args);
+        Assert.True(exit == 0, $"git {string.Join(' ', args)} failed in {cwd}:\n{output}");
+        return output;
+    }
+
+    private static (int Exit, string Output) Run(string exe, string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo(exe)
+        {
+            WorkingDirectory = cwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var a in args)
+        {
+            psi.ArgumentList.Add(a);
+        }
+
+        using var p = Process.Start(psi) ?? throw new InvalidOperationException($"could not start {exe}");
+        var stdout = p.StandardOutput.ReadToEnd();
+        var stderr = p.StandardError.ReadToEnd();
+        Assert.True(p.WaitForExit(60_000), $"{exe} did not exit within 60s");
+        return (p.ExitCode, stdout + stderr);
+    }
+}
