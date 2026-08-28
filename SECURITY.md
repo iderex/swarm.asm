@@ -35,12 +35,30 @@ grep -rn '^\s*run:' .github/workflows/
 grep -rn 'secrets\.' .github/
 ```
 
-Four workflow files exist and no others: `ci.yml`, `zizmor.yml`,
-`pr-hygiene.yml` and `unicode-guard.yml`. Three manifests exist and no others:
-`tests/Swarm.Tests/Swarm.Tests.csproj`, `tests/Swarm.Tests/packages.lock.json`
-and `tests/Swarm.Bench/Swarm.Bench.csproj`. There is no `global.json`, no
-`nuget.config`, and no npm, Python, Go, Rust or submodule manifest anywhere in
-the tree. There is no release or publish workflow either, which is issue #130.
+The workflow files and the manifests are not written out here, and the reason
+is that the paragraph which used to write them out went wrong exactly as this
+one would. It wrote out both sets by name and by number, and by the time
+anybody read it the tree held more of each, with nothing anywhere comparing
+the sentence against the set it described. What replaces it is the derivation,
+in the same shape this section already hands the reader above:
+
+```
+git ls-tree --name-only origin/main .github/workflows/
+git ls-tree -r --name-only origin/main | grep -E 'csproj$|packages.lock.json$'
+```
+
+The negatives are the half a derivation cannot state on its own, so they are
+written out instead, each naming the command that would falsify it. There is
+no `global.json` and no `nuget.config`, and no npm, Python, Go, Rust or
+submodule manifest anywhere in the tree:
+
+```
+git ls-tree -r --name-only origin/main \
+  | grep -E 'global.json$|nuget.config$|package.json$|pyproject.toml$|uv.lock$|requirements.txt$|go.mod$|Cargo.toml$|.gitmodules$'
+```
+
+returns nothing. There is no release or publish workflow either, which is
+issue #130, and the first command above is what would falsify that.
 
 Where a path below is watched by Dependabot, what its cooldown does and does
 not defend against is argued in `.github/dependabot.yml`'s own header and is
@@ -51,35 +69,110 @@ not repeated here.
 Blast radius here is whatever credentials the job holds, so those are read out
 of the workflow files first and the entries below refer back to this.
 
-`grep -rn 'secrets\.' .github/` returns exactly two lines, both in
-`zizmor.yml`: `zizmor.yml:123` and `zizmor.yml:146`, each
-`GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`. No other workflow hands a secret to
-any step.
+THIS SUBSECTION IS TAKEN AT A LATER COMMIT THAN THE REST OF THE SECTION, and
+the difference is the whole reason it was rewritten. Every line cited from here
+to the end of this subsection is `origin/main` at
+`0dbd94217c420a51cf5b3ae6e2c66f604ab57b72`; the rung analysis below it is still
+at the sha named at the top of this section, and that gap is stated at the end
+rather than left for a reader to discover. What stood here covered the
+workflows that existed when it was written and went on describing the tree in
+the present tense after more arrived, which is issue #312.
 
-The job token scopes, read out of the `permissions:` blocks:
+Every workflow the derivation above returns has an entry here, and the check
+that they agree is to run the derivation and compare the names:
 
-- `ci.yml:24` sets `permissions: {}` at workflow level and `ci.yml:35-36`
-  grant the `build` job `contents: read`. That job's `GITHUB_TOKEN` therefore
-  exists at contents-read scope even though no step is handed a secret, and
+```
+git ls-tree --name-only origin/main .github/workflows/
+```
+
+Secrets first, because a job holding none is bounded by its `permissions:`
+block alone:
+
+```
+grep -rn 'secrets\.' .github/workflows/
+```
+
+Two of the lines it returns are prose inside comments (`zizmor.yml:35` and
+`zizmor.yml:69`); the rest are `zizmor.yml:138` and `zizmor.yml:162`, each
+`GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` and both inside the `zizmor` audit job,
+which holds `contents: read` and nothing else. No other workflow hands a secret
+to any step.
+
+The job token scopes, read out of the `permissions:` blocks. Every workflow
+sets `permissions: {}` at workflow level and grants per job, except
+`unicode-guard.yml`, which grants read at workflow level and has no job block:
+
+- `ci.yml:24` `permissions: {}`; the `build` job (`ci.yml:27`) gets
+  `ci.yml:36` `contents: read`. That job's `GITHUB_TOKEN` therefore exists at
+  contents-read scope even though no step is handed a secret, and
   `ci.yml:45` `persist-credentials: false` keeps checkout from leaving it in
   `.git/config`.
-- `zizmor.yml:43` sets `permissions: {}` at workflow level, and the `zizmor`
-  job gets `zizmor.yml:58` `security-events: write` plus `zizmor.yml:59`
-  `contents: read`. It is the only job in the repository holding a write
-  scope.
-- `pr-hygiene.yml:37` sets `permissions: {}` at workflow level, and the
-  hygiene job gets `pr-hygiene.yml:51` `contents: read` and
+- `dco.yml:43` `permissions: {}`; the `dco` job (`dco.yml:46`) gets
+  `dco.yml:53` `contents: read`, with `dco.yml:62` `persist-credentials: false`
+  and no secret.
+- `mutation.yml:39` `permissions: {}`; the `mutate` job (`mutation.yml:48`)
+  gets `mutation.yml:107` `contents: read`, with `mutation.yml:117`
+  `persist-credentials: false` and no secret. It is one of the two scheduled
+  jobs (`mutation.yml:34` `- cron: "43 4 * * 2"`).
+- `parser-fuzz.yml:42` `permissions: {}`; the `fuzz` job
+  (`parser-fuzz.yml:51`) gets `parser-fuzz.yml:58` `contents: read`, with
+  `parser-fuzz.yml:71` `persist-credentials: false` and no secret. It is the
+  other scheduled job (`parser-fuzz.yml:28` `- cron: "17 3 * * 1"`).
+- `pr-hygiene.yml:37` `permissions: {}`; the `hygiene` job
+  (`pr-hygiene.yml:46`) gets `pr-hygiene.yml:51` `contents: read` and
   `pr-hygiene.yml:52` `pull-requests: read`. That workflow is advisory and is
   wired into no required check, which it states at `pr-hygiene.yml:10`.
+- `scorecard.yml:57` `permissions: {}`, and it is the only workflow whose two
+  jobs hold different scopes. The `analysis` job (`scorecard.yml:66`) gets
+  `scorecard.yml:73` `id-token: write` and `scorecard.yml:74` `contents: read`.
+  The `id-token: write` is an OIDC token for the OpenSSF API and grants nothing
+  in this repository, which the file argues on its own lines at
+  `scorecard.yml:71-72`. The `upload` job (`scorecard.yml:98`) gets
+  `scorecard.yml:104` `security-events: write` and `scorecard.yml:105`
+  `contents: read`. Both set `persist-credentials: false`
+  (`scorecard.yml:79`, `scorecard.yml:110`).
 - `unicode-guard.yml:12-13` grant `contents: read` at workflow level, with no
-  job-level block and no secret.
+  job-level block and no secret. The `bidi` job is at `unicode-guard.yml:22`.
+- `zizmor.yml:53` `permissions: {}`. The `zizmor` audit job
+  (`zizmor.yml:63`) gets `zizmor.yml:71` `contents: read` ONLY - the write
+  scope was deliberately taken off this job because it is the one that
+  downloads and executes a third-party wheel, argued at `zizmor.yml:68-70` inside the block itself.
+  The `upload` job (`zizmor.yml:164`) gets `zizmor.yml:184`
+  `security-events: write` and `zizmor.yml:185` `contents: read`, and runs no
+  third-party code beyond the pinned upload action.
+
+So the write scopes in this repository are `security-events: write` in
+`zizmor.yml`'s `upload` job and in `scorecard.yml`'s `upload` job, plus
+`id-token: write` in `scorecard.yml`'s `analysis` job, and no job that holds a
+write scope also holds a secret or executes an unpinned third-party program.
+That is the property to re-check when a workflow is added, and it is not
+enforced by anything: `ZizmorJobPermissionTests` refuses the zizmor half and
+nothing reads the rest.
+
+WHAT THIS SUBSECTION DOES NOT REACH. The rung analysis below is still the
+reading taken at the sha at the top of this section, so the ingestion paths
+that arrived with `dco.yml`, `mutation.yml`, `parser-fuzz.yml` and
+`scorecard.yml` are not placed on a rung: the actions they call, the
+`.config/dotnet-tools.json` manifest that `mutation.yml:131`
+`run: dotnet tool restore` consumes, and the `tests/Swarm.Oracle` project and
+its lock file. Their credentials are above and their pins are not analysed
+here. That is a gap in the rung analysis, it is stated rather than implied, and
+it is what issue #312 leaves open for whoever re-takes the enumeration.
 
 ### Rung 1: pinned by a hash, checked before the code runs
 
-`actions/checkout`, at three call sites carrying the same 40-hex commit SHA:
-`ci.yml:43`, `zizmor.yml:64` and `unicode-guard.yml:28`. All three set
-`persist-credentials: false` (`ci.yml:45`, `zizmor.yml:66`,
-`unicode-guard.yml:31`). Watched by Dependabot through the `github-actions`
+`actions/checkout`, at the call sites `ci.yml:43`, `zizmor.yml:64` and
+`unicode-guard.yml:28`, each carrying the same 40-hex commit SHA and each
+setting `persist-credentials: false` (`ci.yml:45`, `zizmor.yml:66`,
+`unicode-guard.yml:31`). The live set of call sites is derived rather than
+counted here, and the citations above are the ones that existed at the sha at
+the top of this section:
+
+```
+grep -rn 'uses: actions/checkout' .github/workflows/
+```
+
+Watched by Dependabot through the `github-actions`
 ecosystem at `dependabot.yml:29` `- package-ecosystem: github-actions` with
 `dependabot.yml:30` `directory: "/"`, cooldown at `dependabot.yml:38`
 `default-days: 7`, minor and patch bumps grouped at `dependabot.yml:40-43`.
@@ -109,10 +202,17 @@ cooled. The script it runs is repository-authored inline JavaScript
 Credentials in scope: contents-read and pull-requests-read
 (`pr-hygiene.yml:51-52`), no secret passed.
 
-That is seven `uses:` call sites across five actions, every one at a full
-commit SHA. `grep -rn 'uses:' .github/workflows/` returns nine lines; two of
-them, `zizmor.yml:8` and `zizmor.yml:119`, are prose inside comments and not
-call sites.
+Every `uses:` call site named above is at a full commit SHA. The set is not
+written out as a total, because the total moves with the workflows and nothing
+compares a written total against them:
+
+```
+grep -rn 'uses:' .github/workflows/
+```
+
+Not every line that returns is a call site: some are prose inside comments,
+which is why the entries above name their lines individually rather than
+resting on the size of that output.
 
 The FASM archive, fetched by `ci.yml:57` `run: ./tools/get-fasm.ps1` and
 reached locally through `build.ps1:12`
@@ -136,9 +236,17 @@ token, no secret.
 The test harness's NuGet packages. `tests/Swarm.Tests/Swarm.Tests.csproj:28`
 `<PackageReference Include="xunit.v3" Version="3.2.2" />` and
 `tests/Swarm.Tests/Swarm.Tests.csproj:29`
-`<PackageReference Include="YamlDotNet" Version="18.1.0" />` are the only two
-direct package references in the tree, and `tests/Swarm.Tests/packages.lock.json`
-carries 21 `"resolved"` entries, each with a `contentHash`, starting at `:5-9`.
+`<PackageReference Include="YamlDotNet" Version="18.1.0" />` are the direct
+package references in the tree, and `tests/Swarm.Tests/packages.lock.json`
+carries a `"resolved"` entry per transitive package, each with a
+`contentHash`, starting at `:5-9`. Neither set is written out as a total here,
+because both move with the harness:
+
+```
+grep -rn 'PackageReference' -- tests/*/*.csproj
+grep -c '"resolved"' tests/Swarm.Tests/packages.lock.json
+```
+
 `YamlDotNet` is a test-only reader for `.github/dependabot.yml`: the harness
 asserts that file's cooldown policy against a loader rather than against a line
 scanner, because indentation is not scope in YAML. It is never referenced by
@@ -235,8 +343,9 @@ list, and not because pinning it is being proposed here.
 
 ### A manifest watched but not locked
 
-`tests/Swarm.Bench/Swarm.Bench.csproj` is a second manifest and it is compiled
-inside the required `build` job, at `ci.yml:88`
+`tests/Swarm.Bench/Swarm.Bench.csproj` is a manifest that the derivation at the
+top of this section returns, and it is compiled inside the required `build`
+job, at `ci.yml:88`
 `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`.
 It carries no dependency today, which the file states as a deliberate choice at
 `:4` `Force-kernel micro-benchmark. Deliberately dependency-free: it drives the`
@@ -247,19 +356,40 @@ git show origin/main:tests/Swarm.Bench/Swarm.Bench.csproj | grep -c PackageRefer
 0
 ```
 
-Dependabot watches it anyway, on the entry added for #198: a third
+Dependabot watches it anyway, on the entry added for #198: a
 `package-ecosystem: nuget` block with `directory: "/tests/Swarm.Bench"`,
 carrying the same `default-days: 7` and `semver-major-days: 14` tiers as the
 harness entry. The entry finds nothing to do while the project stays
 dependency-free, and it exists so that the day a `PackageReference` is added
 there, the arrival is not silent.
 
-What it is not is locked. Unlike `/tests/Swarm.Tests`, this project has no
-`packages.lock.json` and `ci.yml:88` does not restore in locked mode, so a
-package added here would have the cooldown as its only hold and nothing that
-fails the build on a resolved version drifting from a committed hash. That is
-the residual, and it is a property of the project rather than of the updater
-entry.
+WHAT STOOD HERE SAID THIS PROJECT HAS NO `packages.lock.json`, AND IT HAS ONE
+NOW. Corrected while doing issue #312, and found by re-running the derivation
+this section's own opening now hands the reader rather than by anything
+noticing:
+
+```
+git ls-tree -r --name-only origin/main tests/Swarm.Bench/
+```
+
+returns `tests/Swarm.Bench/packages.lock.json` at `origin/main`
+`0dbd94217c420a51cf5b3ae6e2c66f604ab57b72`. The file exists and holds no
+`"resolved"` entry, which is what a lock file for a dependency-free project
+looks like:
+
+```
+git show origin/main:tests/Swarm.Bench/packages.lock.json | grep -c '"resolved"'
+0
+```
+
+The half of the old sentence that survives is the load-bearing half. The build
+step for this project still does not restore in locked mode - at that sha it is
+`ci.yml:130` `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
+with no `-p:RestoreLockedMode=true`, unlike the harness step. So the lock file
+is present and is not enforced, and a package added here would still have the
+cooldown as its only hold. That is the residual, it is a property of the build
+step rather than of the updater entry, and the correction makes it narrower
+rather than softer: what is missing is one flag, not one file.
 
 ### What this section does not cover
 
