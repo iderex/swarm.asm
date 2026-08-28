@@ -38,6 +38,12 @@ $ExemptAuthorEmails = @(
     '49699333+dependabot[bot]@users.noreply.github.com'
 )
 
+# Anything unexpected below is a terminating error, so it leaves through a
+# non-zero exit rather than continuing past the failure with a stale variable.
+# Invoke-Git relaxes this around the git call alone, where git's stderr would
+# otherwise be raised as an error on a run that succeeded.
+$ErrorActionPreference = 'Stop'
+
 # The record separator git writes for %x1f. No git identity or commit message can
 # contain it, which is what makes the three fields unambiguous.
 $Unit = [string][char]0x1F
@@ -47,13 +53,28 @@ function Write-Refusal {
     [Console]::Error.WriteLine("DCO check refused: $Reason")
 }
 
+# git is resolved once, up front, and its absence is a refusal.
+#
+# THIS IS THE FALSE-CLEAN THIS SCRIPT IS MOST EXPOSED TO, and it was measured
+# rather than supposed: a call to a command that is not on PATH raises a
+# NON-terminating error, and `pwsh -File` on a script that only produced one
+# exits 0. So a runner without git would have taken this check green while it
+# read nothing at all. Resolving the executable turns that into an exit 1 at the
+# first line that needs it.
+$GitExe = (Get-Command git -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1)
+if (-not $GitExe) {
+    Write-Refusal 'git is not on PATH, so no commit in the range can be read'
+    exit 1
+}
+
 # Runs git and returns its output lines. A non-zero exit is a refusal rather than
 # an exception, so every failure leaves this script through one door.
 function Invoke-Git {
     param([string[]]$GitArgs)
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $output = & git -C $RepoRoot @GitArgs 2>&1 | ForEach-Object { $_.ToString() }
+    $output = & $GitExe.Source -C $RepoRoot @GitArgs 2>&1 | ForEach-Object { $_.ToString() }
     $code = $LASTEXITCODE
     $ErrorActionPreference = $previous
     if ($code -ne 0) {

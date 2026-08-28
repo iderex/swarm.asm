@@ -18,7 +18,8 @@ namespace Swarm.Tests;
 ///   <item>a correctly signed range greens - the non-vacuity control, without
 ///         which a script that always failed would satisfy every other leg,</item>
 ///   <item>and each fail-closed input - a shallow clone, an unresolvable ref,
-///         an empty range, a missing repository - reds rather than passing.</item>
+///         an empty range, a missing repository, an absent git - reds rather
+///         than passing.</item>
 /// </list>
 ///
 /// The fixture commits are deliberately NOT signed with a key. The subject here
@@ -189,6 +190,38 @@ public sealed class DcoSignOffTests : IDisposable
         Assert.Contains("does not exist", output, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The refusal the script is most exposed to, and the one that was measured
+    /// rather than reasoned about: calling a command that is not on PATH raises a
+    /// NON-terminating error in PowerShell, and <c>pwsh -File</c> on a script that
+    /// only produced one exits 0. Without the up-front resolve, a runner with no
+    /// git would take this check green while reading nothing at all.
+    ///
+    /// PATH is emptied for the child, and the host is launched by absolute path so
+    /// it still starts.
+    /// </summary>
+    [Fact]
+    public void MissingGitIsRefused()
+    {
+        var repo = NewRepo();
+        var baseSha = Commit(repo, "base.txt", "Base commit", signOff: false);
+        Commit(repo, "work.txt", "Add a thing", signOff: false);
+
+        var script = Path.Combine(Build.RepoRoot, "tools", "check-dco.ps1");
+        var host = ResolveOnPath(PowerShellExe());
+
+        var (exit, output) = Run(
+            host,
+            Build.RepoRoot,
+            emptyPath: true,
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", script,
+            "-Base", baseSha, "-Head", "HEAD", "-RepoRoot", repo);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("git is not on PATH", output, StringComparison.Ordinal);
+    }
+
     // --- fixture plumbing -------------------------------------------------
 
     private string NewRepo()
@@ -279,7 +312,35 @@ public sealed class DcoSignOffTests : IDisposable
         return output;
     }
 
-    private static (int Exit, string Output) Run(string exe, string cwd, params string[] args)
+    // The absolute path of an executable on PATH, so a child can be started with
+    // PATH emptied and still find its host.
+    private static string ResolveOnPath(string exe)
+    {
+        var separator = OperatingSystem.IsWindows() ? ';' : ':';
+        var extensions = OperatingSystem.IsWindows() ? new[] { ".exe", ".cmd", "" } : new[] { "" };
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(separator))
+        {
+            foreach (var extension in extensions)
+            {
+                var candidate = Path.Combine(dir.Trim(), exe + extension);
+                if (candidate.Length > 0 && File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        throw new InvalidOperationException($"{exe} is not on PATH");
+    }
+
+    private static (int Exit, string Output) Run(string exe, string cwd, params string[] args) =>
+        Run(exe, cwd, emptyPath: false, args);
+
+    private static (int Exit, string Output) Run(
+        string exe,
+        string cwd,
+        bool emptyPath,
+        params string[] args)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -288,6 +349,11 @@ public sealed class DcoSignOffTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
+        if (emptyPath)
+        {
+            psi.Environment["PATH"] = string.Empty;
+        }
+
         foreach (var a in args)
         {
             psi.ArgumentList.Add(a);
