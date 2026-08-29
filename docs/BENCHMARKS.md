@@ -1305,11 +1305,19 @@ probe measured.
 
 The M1 acceptance measurement, and the only row here taken from the shipped
 executable instead of a harness. `swarm.exe -capture` runs the normal paced
-live loop and records the QueryPerformanceCounter delta of the **work window**
+live loop and records the QueryPerformanceCounter deltas of the **work window**
 of each frame - step plus plot plus blit, never the pacing wait - then writes
-3600 raw `u64` samples to `swarm-frames.bin` and exits. The wait is outside the
-window on purpose: a paced loop measured wall to wall reports 16.67 ms by
-construction and would say nothing about how much room is left.
+3600 raw `u64` samples per phase to `swarm-frames.bin` and exits. The wait is
+outside the window on purpose: a paced loop measured wall to wall reports
+16.67 ms by construction and would say nothing about how much room is left.
+
+The window is read at four points, so the dump carries four planes: `step`,
+`plot`, `blit` and the whole `frame` they add up to. The three phases are
+consecutive deltas, so the identity is exact and `CaptureReportTests` asserts it
+frame by frame. **The rows tabulated below predate the split** and were taken
+when the window was two reads rather than four; the two added reads sit inside
+the window, so their cost is counted in the phase that follows each one and is
+not subtracted anywhere.
 
 The run also reduces those samples itself and writes `swarm-frames.txt` beside
 the dump, so a reading of the capture does not depend on anyone remembering to
@@ -1318,20 +1326,26 @@ recomputed from, and it stays in recorded order; the reduction runs after it has
 landed. Both files come from the same run, so a figure in one belongs to the
 samples in the other.
 
-What the file looks like, from a **separate run made to show its shape**. It is
-not one of the six rows tabulated below and is not recorded as a baseline:
+What the file looks like. This is run 1 of "The live frame split into step,
+plot and blit" below, quoted whole rather than re-run, so the shape and a
+recorded row are the same bytes:
 
 ```
 swarm.asm frame-time capture
 samples=3600  n=8192  species=4  flags=0x00000001  seed=0x9E3779B97F4A7C15  cpu_paths=0x1  qpc_freq=10000000
-mean=1.604 ms  p50=1.566 ms  p99=2.466 ms  max=18.178 ms
+step  mean=1.039 ms  p50=1.043 ms  p99=1.687 ms  max=2.234 ms
+plot  mean=0.222 ms  p50=0.215 ms  p99=0.313 ms  max=0.631 ms
+blit  mean=0.419 ms  p50=0.398 ms  p99=0.668 ms  max=1.185 ms
+frame mean=1.679 ms  p50=1.669 ms  p99=2.354 ms  max=3.152 ms
 ```
 
-The figure line carries the same four names in the same order the snippet
+Each figure line carries the same four names in the same order the snippet
 prints, and by the same definition: `FrameStatsTests` asserts the exe's
 reduction against that definition across the P/Invoke seam, and
-`CaptureReportTests` runs a real capture and checks the report against the dump
-beside it. Hardware, OS and the rest of the disclosure stay here rather than in
+`CaptureReportTests` runs a real capture and checks every plane's line against
+the plane in the dump beside it. The `frame` line is the whole work window and
+is what a row recorded before the split holds; a phase percentile is that
+phase's own distribution and does not add up to the frame's. Hardware, OS and the rest of the disclosure stay here rather than in
 the file, because the exe cannot read them within kernel32/user32/gdi32.
 
 The budget is one frame at 60 fps, 16.67 ms, on p99.
@@ -1378,7 +1392,9 @@ travel together:
 $b = [IO.File]::ReadAllBytes('swarm-frames.bin')
 $freq = [BitConverter]::ToUInt64($b, 8)
 $count = [BitConverter]::ToUInt64($b, 16)
-$ms = @(for ($i = 0; $i -lt $count; $i++) { [BitConverter]::ToUInt64($b, 40 + 8 * $i) * 1000.0 / $freq })
+$plane = 3   # 0 step, 1 plot, 2 blit, 3 the whole frame
+$at = 40 + 8 * $count * $plane
+$ms = @(for ($i = 0; $i -lt $count; $i++) { [BitConverter]::ToUInt64($b, $at + 8 * $i) * 1000.0 / $freq })
 $s = $ms | Sort-Object
 [string]::Format([Globalization.CultureInfo]::InvariantCulture,
   "mean={0:F3} ms  p50={1:F3} ms  p99={2:F3} ms  max={3:F3} ms",
@@ -1388,10 +1404,13 @@ $s = $ms | Sort-Object
   $s[$count - 1])
 ```
 
-The dump is a 40-byte header - `'SWRMFRM1'`, then `qpc_freq`, `count`, `n`,
-`flags`, `seed` - followed by `count` little-endian `u64` tick deltas. The
-scene the samples belong to is inside the file, so a dump cannot be quoted
-against a run it did not come from. `flags` carries the plot mode as well as
+The dump is a 40-byte header - `'SWRMFRM2'`, then `qpc_freq`, `count`, `n`,
+`flags`, `seed` - followed by four planes of `count` little-endian `u64` tick
+deltas, in the order `step`, `plot`, `blit`, `frame`. `count` is the samples per
+plane, so the file is `40 + 32 * count` bytes. The magic is the format version:
+a `'SWRMFRM1'` dump is one plane and is read at `40 + 8 * i`. The scene the
+samples belong to is inside the file, so a dump cannot be quoted against a run
+it did not come from. `flags` carries the plot mode as well as
 the spatial one, so it is what separates a 1-pixel capture from a `-splat` one.
 
 **Plot mode: 1 pixel per particle** for the rows below, taken before the 2x2
@@ -1442,7 +1461,9 @@ pair, and both are read from the file by the shipped exe:
 Same instrument as the M1 section above: the paced live loop, the work window
 of each frame only (step plus plot plus blit, never the pacing wait), 3600
 samples written to `swarm-frames.bin`, recomputed with the snippet printed
-there. The budget is one frame at 60 fps, 16.67 ms, on p99.
+there. The budget is one frame at 60 fps, 16.67 ms, on p99. **These rows
+predate the phase split**, so their dumps are `'SWRMFRM1'` and carry one plane;
+the snippet reads such a dump at `40 + 8 * i`, as the M1 section states.
 
 **Plot mode: 1 pixel per particle.** The commands above carry no `-splat`, and
 the plot is inside the timed window, so the mode is part of what these rows
@@ -1515,6 +1536,180 @@ rounds on a frozen uniform bank, from the harness, at 6 species and seed
 `0x5EED`; this section times the whole live window including plot and `BitBlt`,
 as a distribution over an evolving scene, from the exe. Reading a plot cost out
 of the difference between them would be comparing two different measurements.
+
+## The live frame split into step, plot and blit (#125)
+
+The first figures for the `BitBlt` anywhere in this document, and the first for
+the raster taken from the shipped executable rather than from the harness.
+
+#125's acceptance asks for a row "with the per-phase breakdown (build / pass /
+plot / blit)". Until this section the live instrument timed one undivided
+window, which is why three notes on that issue arrive at an unattributed
+remainder without being able to say whether any of it was the blit. The window
+is now read at four points and the dump carries four planes; the two sections
+above are what the instrument looked like before, and their rows are not
+re-taken here.
+
+```powershell
+.\build\swarm.exe -capture
+.\build\swarm.exe presets\headline.txt -capture
+```
+
+**What a phase is.** `step` is `pool_step`, which is the grid build and the
+force pass together - the exe makes one call and this instrument cannot divide
+it, so the build/pass half of #125's breakdown is still only available at the
+P/Invoke seam. `plot` is `sim_plot`, the clear and the raster into the DIB.
+`blit` is the `BitBlt` of that DIB into the window DC. `frame` is the whole
+work window, `t3 - t0`, and is the figure a row recorded before the split
+holds.
+
+### The built-in acceptance preset - n = 8,192, rmax = 0.05, g = 16
+
+| run | phase | mean ms | p50 ms | p99 ms | max ms |
+| --- | ----- | ------- | ------ | ------ | ------ |
+| 1   | step  | 1.039   | 1.043  | 1.687  | 2.234  |
+| 1   | plot  | 0.222   | 0.215  | 0.313  | 0.631  |
+| 1   | blit  | 0.419   | 0.398  | 0.668  | 1.185  |
+| 1   | frame | 1.679   | 1.669  | 2.354  | 3.152  |
+| 2   | step  | 1.048   | 1.045  | 1.679  | 3.154  |
+| 2   | plot  | 0.225   | 0.217  | 0.320  | 0.803  |
+| 2   | blit  | 0.426   | 0.406  | 0.676  | 1.267  |
+| 2   | frame | 1.698   | 1.694  | 2.376  | 4.137  |
+| 3   | step  | 1.040   | 1.048  | 1.713  | 2.003  |
+| 3   | plot  | 0.219   | 0.213  | 0.302  | 0.777  |
+| 3   | blit  | 0.407   | 0.390  | 0.629  | 2.003  |
+| 3   | frame | 1.666   | 1.665  | 2.370  | 3.309  |
+
+### `presets/headline.txt` - 1M, rmax = 0.001953, g = 512
+
+| run | phase | mean ms | p50 ms  | p99 ms  | max ms   |
+| --- | ----- | ------- | ------- | ------- | -------- |
+| 1   | step  | 106.406 | 119.219 | 216.508 | 589.466  |
+| 1   | plot  | 4.246   | 4.000   | 6.743   | 44.416   |
+| 1   | blit  | 0.481   | 0.468   | 0.790   | 3.047    |
+| 1   | frame | 111.134 | 124.142 | 224.029 | 632.265  |
+| 2   | step  | 112.524 | 125.299 | 221.613 | 1720.733 |
+| 2   | plot  | 4.697   | 4.469   | 8.103   | 23.992   |
+| 2   | blit  | 0.516   | 0.489   | 0.931   | 25.072   |
+| 2   | frame | 117.738 | 130.712 | 228.112 | 1726.760 |
+| 3   | step  | 106.956 | 121.772 | 206.125 | 348.340  |
+| 3   | plot  | 4.511   | 4.345   | 7.252   | 14.174   |
+| 3   | blit  | 0.505   | 0.481   | 0.938   | 2.347    |
+| 3   | frame | 111.971 | 126.834 | 212.169 | 355.933  |
+
+Same machine, build, instrument and reduction as the table above it, disclosed
+once below for both. Run 2's `max` of 1726.760 ms is what an unquiesced host
+costs and is left in rather than trimmed.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  build 10.0.26200. **Feature path**: every dump header reads
+  `cpu_paths=0x1`, so AVX2 and no AVX-512, and the preset's `force_path = 0`
+  resolves to `PATH_AVX2`. The live loop drives `pool_step`, so the pass and
+  the grid build both run across the auto-detected 16 physical cores.
+- **Scenes**: two, one per table. The preset compiled into the exe -
+  `n = 8192`, 4 species, seed `0x9E3779B97F4A7C15`, `rmax = 0.05` so `g = 16`,
+  `FLAG_GRID` - and the committed `presets/headline.txt`, which is the same 4
+  species and seed at `n = 1048576` and `rmax = 0.001953`, so `g = 512`. Each
+  dump header repeats `n`, `flags` and `seed`, and `flags = 0x00000001` is
+  `FLAG_GRID` alone, so every run here is a 1-pixel raster and not a `-splat`
+  one.
+- **Build**: `build.ps1` over this change's `src/`, `swarm.exe` 26,112 bytes.
+  The image is not byte-stable across assemblies - the PE `TimeDateStamp` at
+  `0x88` and the `CheckSum` at `0xD8` move and nothing else does, measured by
+  assembling twice and comparing - so the build is identified by its source
+  rather than by a hash. `src/swarm.asm` gained one comment block in
+  `capture_write`'s contract header after these runs were taken; assembling the
+  source from before and after that edit produced identical images, byte for
+  byte.
+- Every run is 3600 consecutive frames from process start with **no warm-up
+  discarded**, which is how the two live sections above are reduced. One
+  8,192 run costs about a minute of wall clock and one 1M run about seven.
+- **The host was not quiesced**, and the capture window sat on the interactive
+  desktop rather than a private one. Whether occluding or minimising the window
+  changes what `BitBlt` costs was not measured, so the blit figures are for a
+  visible window and are not claimed for any other state.
+- **The window is four QueryPerformanceCounter reads now rather than two.**
+  The two added reads are inside the window, so each is counted in the phase
+  that follows it and nothing is subtracted anywhere. The `frame` figures are
+  therefore not strictly the same instrument as the rows recorded above them.
+
+### What the split says at 8,192
+
+**The blit has a number, and it is a quarter of the frame at this count.** Its
+mean is 0.407 to 0.426 ms across the three runs against a frame mean of 1.666
+to 1.698, so 24 to 25%. Every earlier reading in this document had to leave it
+inside an unattributed remainder; #125's notes name it three times as the one
+phase with no row anywhere.
+
+**The raster is the smallest of the three**, 0.219 to 0.225 ms mean, below the
+blit in every run and on every figure. That ordering is worth stating because
+the two are easy to conflate: one walks `n` particles and the other moves a
+fixed 4 MiB of framebuffer, and at 8,192 particles the fixed cost is the larger
+of the two.
+
+**`step` is about 62% of the frame** and is the only phase that scales with
+`n`, which is what makes the other two a floor the frame cannot go below at
+this framebuffer size. The three phases are consecutive deltas, so they sum to
+the `frame` plane exactly, frame by frame; `CaptureReportTests` asserts that
+identity over all 3600 samples rather than leaving it to be assumed.
+
+**A phase percentile is not a share of the frame percentile.** The columns are
+four independent reductions of four distributions, so the `p99` row of a phase
+is that phase's own tail and the phase p99s do not add up to the frame p99.
+Only the per-frame samples in the dump add up, and they add up exactly.
+
+### What the split says at 1M on the committed scene
+
+**The blit is 0.4% of the frame and the question it was blocking is answered.**
+Its mean is 0.481 to 0.516 ms against a frame mean of 111.134 to 117.738, and
+its worst p99 across three runs is 0.938 ms against a frame p99 of 228.112.
+Three notes on #125 leave a remainder unattributed with the sentence that what
+has no row anywhere is the `BitBlt`. It has one now, and it is not where any of
+the distance sits.
+
+**The blit barely moves with the particle count.** 0.407 to 0.426 ms mean at
+8,192 and 0.481 to 0.516 ms at 1M, for the same 1024x1024 framebuffer. The
+~20% rise is not attributed here - it is a different scene, a different frame
+rate and a different host moment, and nothing in these runs separates those.
+
+**The raster is about 4% and the step is about 96%.** The plot's mean is 4.246
+to 4.697 ms, which is above every figure the plot-phase section recorded. Its
+`ordered` rows at this geometry - build then pass, which is what every live
+frame after the first is - read 2.337 to 2.410 ms, its whole `g = 512` block
+spans 2.337 to 3.869, and its largest figure at any geometry or state is
+4.054. The two are not the same measurement - minima over nine rounds on a
+frozen harness bank against means over 3600 frames of an evolved committed
+scene - and the difference is not decomposed here. What it does say is that no
+reading of that section bounds the live raster from above, which that section
+half predicted about itself: it measured three OUT states, found none below
+60.8% lit, and said a genuinely clustered scene was not among them. This one
+is, and the settle-depth section reads its lit share down to 12.6%. Everything
+left over is `step`, which this instrument cannot divide into build and pass.
+
+**So decision 11's four phases are three-quarters measured live.** `plot` and
+`blit` have their own distributions from the shipped exe; `build` and `pass`
+are one `pool_step` call here and stay split only at the P/Invoke seam, which
+is what the sections above them do. That is the part of #125's per-phase
+acceptance this instrument cannot reach.
+
+### These three runs do not reproduce the rows recorded at `33047f3`
+
+The 1M live section above records a worst p99 of 150.849 ms on this preset,
+captured on 2026-08-08. These three runs read 224.029, 228.112 and 212.169. A
+note on #125 dated 2026-08-29 saw 247.173 in a single run and declined to call
+it a drift measurement, on the grounds that one run against three, on an
+unquiesced host and at a different commit, is not that.
+
+Three runs are the re-reading that note asked for, and the direction is worth
+recording plainly: **the gap is larger than the spread inside either set**, and
+it points the wrong way for the obvious explanation. The parallel grid build
+(#243) landed the day after `33047f3`, so this binary's build phase is the
+faster one and the frame should have fallen rather than risen.
+
+What these runs do not do is attribute that. The host was not quiesced in
+either set, the two sets are months and many commits apart, and no bisection
+was run. It is recorded here as a disagreement between two readings of the same
+committed file, not as a regression measurement.
 
 ## The AVX2 force inner loop (cycles/candidate; #59)
 
