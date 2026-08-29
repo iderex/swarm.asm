@@ -47,7 +47,17 @@ FRAME_H      = 1024
 DIB_RGB_COLORS = 0                      ; not in the bundled equates
 SMOKE_FRAMES = 60                       ; frames rendered under -smoke
 CAPTURE_FRAMES = 3600                   ; work-window samples recorded under -capture
-; swarm-frames.bin header: 'SWRMFRM1' (8) + qpc_freq (8) + count (8) + n (4)
+; The work window is recorded as four series rather than one: the step, the
+; plot and the blit as they are timed, and the whole window they add up to.
+; Consecutive reads, so the three phases sum to the fourth exactly and a
+; reader needs no separate total. The order here is the order of the planes
+; in the dump, of the reductions, and of the report's figure lines.
+CAP_SERIES = 4
+CAP_STEP   = 0
+CAP_PLOT   = 1
+CAP_BLIT   = 2
+CAP_FRAME  = 3
+; swarm-frames.bin header: 'SWRMFRM2' (8) + qpc_freq (8) + count (8) + n (4)
 ; + flags (4) + seed (8). Every field is naturally aligned, so a reader can
 ; map the struct rather than parse it. The layout is checked below where the
 ; fields are laid out, so this constant cannot drift away from them.
@@ -132,13 +142,16 @@ start:
         mov     [capture_mode], eax
 
         ; The sample buffer is committed in capture mode ONLY, so the shipped
-        ; image carries no 28,800-byte block for a mode almost no run uses.
+        ; image carries no 115,200-byte block for a mode almost no run uses.
+        ; It holds CAP_SERIES planes of CAPTURE_FRAMES samples, laid out plane
+        ; after plane so each one is the contiguous array frame_stats_core
+        ; sorts and so the dump is written with one WriteFile.
         ; Fail closed: a capture that cannot record must not reach the loop and
         ; exit 0, because a green run that produced no measurement would be
         ; read as a measurement.
         test    eax, eax
         jz      .args_done
-        invoke  VirtualAlloc, 0, CAPTURE_FRAMES*8, MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
+        invoke  VirtualAlloc, 0, CAPTURE_FRAMES*8*CAP_SERIES, MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
         test    rax, rax
         jz      .fail
         mov     [capture_buf], rax
@@ -300,8 +313,12 @@ start:
         call    ui_reinit               ; fresh positions, same matrix
 
   .step:
-        ; The work window opens here and closes just after BitBlt. Only the
-        ; capture run pays the two QPC reads; a normal live frame is unchanged.
+        ; The work window opens here and closes just after BitBlt, and the two
+        ; reads inside it are what separate the step from the plot and the plot
+        ; from the blit. Only the capture run pays the four QPC reads; a normal
+        ; live frame is unchanged. The reads sit inside the window, so their
+        ; own cost is counted in the phase that follows each one rather than
+        ; being subtracted anywhere.
         cmp     dword [capture_mode], 0
         je      .work
         invoke  QueryPerformanceCounter, cap_t0
@@ -312,11 +329,22 @@ start:
         mov     edx, 1                  ;   the worker pool (build and pass both
         call    pool_step               ;   parallel) - bit-identical to sim_step
   .plot:
+        ; Read on both arms of the pause branch, so a paused frame records a
+        ; step phase of about nothing rather than folding the pause into the
+        ; plot.
+        cmp     dword [capture_mode], 0
+        je      .raster
+        invoke  QueryPerformanceCounter, cap_t1
+  .raster:
         mov     rcx, [arena]            ; raster the state into the DIB
         mov     rdx, [pixels]           ; (plot_core clears then plots)
         mov     r8d, FRAME_W
         mov     r9d, FRAME_H
         call    sim_plot
+        cmp     dword [capture_mode], 0
+        je      .blit
+        invoke  QueryPerformanceCounter, cap_t2
+  .blit:
         ; BitBlt's BOOL is deliberately unchecked: the smoke gate covers
         ; process viability and setup, not mid-run device loss.
         invoke  BitBlt, [wnd_dc], 0, 0, FRAME_W, FRAME_H, [mem_dc], 0, 0, SRCCOPY
@@ -1240,8 +1268,9 @@ frame_pace:
         ret
 
 ; ------------------------------------------------------------------
-; capture_frame - close the frame's work window and record its length.
-;   in:       [cap_t0] = QPC at the top of .step, [capture_buf], [capture_count]
+; capture_frame - close the frame's work window and record its four lengths.
+;   in:       [cap_t0]/[cap_t1]/[cap_t2] = QPC at the top of .step, after the
+;             step and after the plot; [capture_buf], [capture_count]
 ;   out:      eax = 0 while the run continues; 1 once CAPTURE_FRAMES samples
 ;             have been recorded AND swarm-frames.bin has been written
 ;   clobbers: caller-saved, flags
@@ -1250,6 +1279,10 @@ frame_pace:
 ;             (the count check and this call), not at the exact BitBlt return -
 ;             nanoseconds against a millisecond-scale frame, and disclosed
 ;             rather than rounded away
+;   note:     the three phases are consecutive deltas of four reads, so they
+;             sum to the whole window exactly. The frame plane is written from
+;             t3 - t0 rather than from that sum, so a reader comparing the two
+;             is comparing the instrument against itself
 ; ------------------------------------------------------------------
 capture_frame:
         sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
@@ -1261,12 +1294,22 @@ capture_frame:
         mov     ecx, [capture_count]
         cmp     ecx, CAPTURE_FRAMES
         jae     .complete
-        invoke  QueryPerformanceCounter, cap_t1
-        mov     rax, [cap_t1]
-        sub     rax, [cap_t0]           ; work-window ticks, pacing excluded
+        invoke  QueryPerformanceCounter, cap_t3
         mov     ecx, [capture_count]
         mov     rdx, [capture_buf]
-        mov     [rdx+rcx*8], rax
+        lea     rdx, [rdx+rcx*8]        ; the frame's slot in plane 0
+        mov     rax, [cap_t1]
+        sub     rax, [cap_t0]           ; step: pool_step, or nothing if paused
+        mov     [rdx+CAP_STEP*CAPTURE_FRAMES*8], rax
+        mov     rax, [cap_t2]
+        sub     rax, [cap_t1]           ; plot: the clear and the raster
+        mov     [rdx+CAP_PLOT*CAPTURE_FRAMES*8], rax
+        mov     rax, [cap_t3]
+        sub     rax, [cap_t2]           ; blit: the DIB to the window DC
+        mov     [rdx+CAP_BLIT*CAPTURE_FRAMES*8], rax
+        mov     rax, [cap_t3]
+        sub     rax, [cap_t0]           ; the whole window, pacing excluded
+        mov     [rdx+CAP_FRAME*CAPTURE_FRAMES*8], rax
         inc     ecx
         mov     [capture_count], ecx
         cmp     ecx, CAPTURE_FRAMES
@@ -1292,6 +1335,10 @@ capture_frame:
 ;             WriteFile that failed, and a WriteFile that reported fewer bytes
 ;             than asked for. A capture run that exits 0 has a complete file,
 ;             so an exit code can be trusted to mean a measurement exists
+;   note:     the planes are strided by CAPTURE_FRAMES, not by the sample
+;             count, so the one WriteFile below is a well-formed dump only at a
+;             full buffer. capture_frame reaches here on the sample that fills
+;             it and on no other, which is what makes the two agree
 ; ------------------------------------------------------------------
 capture_write:
         sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
@@ -1299,7 +1346,8 @@ capture_write:
         mov     [cap_freq], rax         ;   the analysis needs the tick rate,
         mov     eax, [capture_count]    ;   and the scene needs n/flags/seed to
         mov     [cap_samples], rax      ;   be recomputable from the file alone
-        shl     rax, 3                  ; u64 per sample
+        shl     rax, 3                  ; u64 per sample, per plane
+        imul    rax, rax, CAP_SERIES    ;   and CAP_SERIES planes behind it
         mov     [cap_bytes], rax
         mov     eax, [sim_params+SP_N]
         mov     [cap_n], eax
@@ -1333,7 +1381,7 @@ capture_write:
         invoke  ExitProcess, 1
 
 ; ------------------------------------------------------------------
-; capture_report - the run's four published figures, in a file beside the dump.
+; capture_report - the run's published figures, in a file beside the dump.
 ;   in:       [capture_buf], [capture_count], [qpc_freq], [sim_params]
 ;   out:      nothing on success; exits the process with code 1 on any failure
 ;   clobbers: caller-saved, flags
@@ -1353,13 +1401,24 @@ capture_write:
 ; ------------------------------------------------------------------
 capture_report:
         sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
-        mov     rcx, [capture_buf]
+        mov     dword [cap_series_i], 0
+  .reduce:                              ; one reduction per plane, in place
+        mov     eax, [cap_series_i]
+        imul    rax, rax, CAPTURE_FRAMES*8
+        add     rax, [capture_buf]
+        mov     rcx, rax
         mov     edx, [capture_count]
         mov     r8,  [qpc_freq]
         lea     r9,  [cap_stats]
+        mov     eax, [cap_series_i]
+        shl     eax, 5                  ; four u64 figures per plane
+        add     r9, rax
         call    frame_stats_core
         test    eax, eax
         jnz     .fail                   ; no figures: publish nothing
+        inc     dword [cap_series_i]
+        cmp     dword [cap_series_i], CAP_SERIES
+        jb      .reduce
         call    cpu_paths_core          ; the feature path the run resolved on
         mov     [cap_paths], eax
         ; n, the flags and the seed are already staged in the dump header that
@@ -1381,17 +1440,46 @@ capture_report:
         mov     [cap_ms+rcx*8], eax
         mov     [cap_ms+rcx*8+4], edx
         inc     ecx
-        cmp     ecx, 4
+        cmp     ecx, CAP_SERIES*4
         jb      .split
         invoke  wsprintfA, rep_buf, fmt_report, \
                 [cap_samples], [cap_n], [cap_species], \
                 [cap_flags], [cap_seed_hi], [cap_seed_lo], \
-                [cap_paths], [cap_freq], \
-                [cap_ms], [cap_ms+4], [cap_ms+8], [cap_ms+12], \
-                [cap_ms+16], [cap_ms+20], [cap_ms+24], [cap_ms+28]
+                [cap_paths], [cap_freq]
         test    eax, eax
         jle     .fail                   ; nothing formatted is not a report
         mov     [rep_len], eax
+        mov     dword [cap_series_i], 0
+  .line:                                ; one figure line per plane, appended
+        mov     eax, [cap_series_i]
+        shl     eax, 5
+        lea     rdx, [cap_ms]
+        add     rdx, rax                ; this plane's eight dwords, copied to
+        mov     rax, [rdx]              ;   the fixed slots the invoke names
+        mov     qword [cap_l], rax
+        mov     rax, [rdx+8]
+        mov     qword [cap_l+8], rax
+        mov     rax, [rdx+16]
+        mov     qword [cap_l+16], rax
+        mov     rax, [rdx+24]
+        mov     qword [cap_l+24], rax
+        mov     eax, [cap_series_i]
+        lea     rdx, [cap_names]
+        mov     rax, [rdx+rax*8]
+        mov     [cap_name], rax
+        lea     rdx, [rep_buf]
+        mov     eax, [rep_len]
+        add     rdx, rax
+        mov     [cap_out], rdx
+        invoke  wsprintfA, [cap_out], fmt_report_line, [cap_name], \
+                [cap_l], [cap_l+4], [cap_l+8], [cap_l+12], \
+                [cap_l+16], [cap_l+20], [cap_l+24], [cap_l+28]
+        test    eax, eax
+        jle     .fail                   ; nothing formatted is not a report
+        add     [rep_len], eax
+        inc     dword [cap_series_i]
+        cmp     dword [cap_series_i], CAP_SERIES
+        jb      .line
         invoke  CreateFileW, rep_path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, \
                 FILE_ATTRIBUTE_NORMAL, 0
         cmp     rax, INVALID_HANDLE_VALUE
@@ -1430,9 +1518,19 @@ section '.data' data readable writeable
   ; carries them beside every published row.
   fmt_report    db 'swarm.asm frame-time capture', 13, 10, \
                    'samples=%u  n=%u  species=%u  flags=0x%08X  ', \
-                   'seed=0x%08X%08X  cpu_paths=0x%X  qpc_freq=%u', 13, 10, \
-                   'mean=%u.%03u ms  p50=%u.%03u ms  p99=%u.%03u ms  ', \
-                   'max=%u.%03u ms', 13, 10, 0
+                   'seed=0x%08X%08X  cpu_paths=0x%X  qpc_freq=%u', 13, 10, 0
+  ; One figure line per plane. `frame` is the whole work window and carries the
+  ; same four names in the same order the reports written before the split did,
+  ; so a row recorded then and a row recorded now are read the same way; the
+  ; three phases above it are what the split adds.
+  fmt_report_line db '%-5s mean=%u.%03u ms  p50=%u.%03u ms  ', \
+                   'p99=%u.%03u ms  max=%u.%03u ms', 13, 10, 0
+  cap_step_name db 'step', 0
+  cap_plot_name db 'plot', 0
+  cap_blit_name db 'blit', 0
+  cap_frame_name db 'frame', 0
+  align 8
+  cap_names     dq cap_step_name, cap_plot_name, cap_blit_name, cap_frame_name
 
   ; Preset failure text. Every cap that appears in a message is formatted from
   ; the constant that enforces it, so the sentence a reader sees cannot drift
@@ -1479,9 +1577,12 @@ section '.data' data readable writeable
   capture_count dd 0                    ; samples recorded so far
   align 8
   cmd_line    dq ?                      ; GetCommandLine result, scanned twice
-  capture_buf dq 0                      ; CAPTURE_FRAMES u64 work-window ticks
+  capture_buf dq 0                      ; CAP_SERIES planes of CAPTURE_FRAMES
+                                        ;   u64 ticks, in CAP_STEP.. order
   cap_t0      dq ?                      ; work window open (top of .step)
-  cap_t1      dq ?                      ; work window close (after BitBlt)
+  cap_t1      dq ?                      ; step closed, plot opens
+  cap_t2      dq ?                      ; plot closed, blit opens
+  cap_t3      dq ?                      ; work window close (after BitBlt)
   cap_file    dq ?                      ; swarm-frames.bin handle
   cap_bytes   dq ?                      ; sample bytes asked of WriteFile
   cap_written dd ?                      ; WriteFile's LPDWORD out-parameter
@@ -1490,9 +1591,10 @@ section '.data' data readable writeable
   ; WriteFile and no marshalling. Field order and widths are the file format;
   ; the check below refuses a layout that has drifted from CAP_HEADER_BYTES.
   align 8
-  cap_header  db 'SWRMFRM1'             ; magic, and the format version in it
+  cap_header  db 'SWRMFRM2'             ; magic, and the format version in it
   cap_freq    dq ?                      ; QueryPerformanceFrequency, ticks/s
-  cap_samples dq ?                      ; u64 samples following the header
+  cap_samples dq ?                      ; u64 samples per plane, CAP_SERIES of
+                                        ;   them, following the header
   cap_n       dd ?                      ; particle count of the captured run
   cap_flags   dd ?                      ; SwarmParams flags (FLAG_GRID et al.)
   cap_seed    dq ?                      ; world seed
@@ -1500,15 +1602,26 @@ section '.data' data readable writeable
         err     ; the header fields and CAP_HEADER_BYTES disagree
   end if
 
-  ; swarm-frames.txt state. cap_stats holds the reduction's four microsecond
-  ; figures in its own order - mean, p50, p99, max - and cap_ms is each of them
-  ; split into the whole-millisecond and three-digit-remainder pair the format
-  ; string prints. REP_MAX is far above the ~150 characters the report reaches;
-  ; wsprintfA's own 1024-character limit is the tighter of the two.
-  REP_MAX = 512
+  ; swarm-frames.txt state. cap_stats holds each plane's four microsecond
+  ; figures in the reduction's own order - mean, p50, p99, max - one group of
+  ; four per plane, and cap_ms is each of them split into the whole-millisecond
+  ; and three-digit-remainder pair the format string prints. REP_MAX is above
+  ; the ~350 characters the report reaches: a figure line is at most a name, a
+  ; 10-digit whole part and a 3-digit remainder four times over with its fixed
+  ; text, which is under 128 characters, and there are CAP_SERIES of them under
+  ; a two-line header. wsprintfA's own 1024-character limit applies per call,
+  ; and every call here writes one of those lines.
+  REP_MAX = 1024
   align 8
-  cap_stats   dq 4 dup (?)              ; mean, p50, p99, max, microseconds
-  cap_ms      dd 8 dup (?)              ; (whole ms, remainder us) per figure
+  cap_stats   dq CAP_SERIES*4 dup (?)   ; mean, p50, p99, max, per plane, us
+  cap_ms      dd CAP_SERIES*8 dup (?)   ; (whole ms, remainder us) per figure
+  cap_series_i dd ?                     ; plane under reduction, then under
+                                        ;   formatting
+  align 8
+  cap_l       dd 8 dup (?)              ; the plane being formatted, staged in
+                                        ;   slots the invoke can name
+  cap_name    dq ?                      ; its label out of cap_names
+  cap_out     dq ?                      ; where in rep_buf its line goes
   cap_paths   dd ?                      ; swarm_cpu_paths of the capturing run
   cap_species dd ?                      ; species count, the one scene field
                                         ;   the dump header does not carry
