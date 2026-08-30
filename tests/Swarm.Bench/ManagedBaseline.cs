@@ -50,7 +50,12 @@ internal static class ManagedBaseline
     // init.inc) rather than an implementation choice, so they are reproduced
     // exactly. Getting them wrong would give the baseline a different
     // population and make every comparison quietly meaningless.
-    private static void Draw(Scene s, float[] x, float[] y, int[] species)
+    /// <summary>Draw the population for a scene into caller-owned arrays.
+    /// Internal rather than private because the ported competitor cores
+    /// (<see cref="CompetitorCores"/>) start from the SAME particles: two
+    /// engines drawn by two copies of this routine would be a comparison of
+    /// two populations wearing one seed.</summary>
+    internal static void Draw(Scene s, float[] x, float[] y, int[] species)
     {
         ulong state = s.Seed;
 
