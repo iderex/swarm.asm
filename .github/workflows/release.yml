@@ -1,0 +1,225 @@
+# Release - what a maintainer-pushed version tag runs (#181).
+#
+# THIS WORKFLOW CREATES NO GITHUB RELEASE OBJECT, and that is the whole shape
+# of it rather than an omission. docs/RELEASE-POLICY.md decides it twice, and
+# the reason it gives is a property of the object rather than of who creates
+# one: a release is immutable once created and permanently burns its tag if it
+# is ever deleted. So the tag stays the release, and what a tag push buys is
+# proof about that tag - the same gate the pull request had, a version-truth
+# cross-check that refuses a tag disagreeing with the tree or with the binary,
+# and a provenance attestation bound to the artifact's digest. The exe and its
+# checksums are uploaded as artifacts of this run, which expire, because a
+# durable download is the thing the policy declines.
+#
+# The gate below is ci.yml's, step for step and command for command, because a
+# release gate weaker than the pull-request gate is a hole shaped exactly like
+# the difference. ReleaseGateTests refuses that drift: every `run:` block in
+# ci.yml's build job must appear here verbatim. When you edit one, edit both.
+# The comments on those steps are not repeated here - ci.yml carries them, and
+# a second copy would drift from the first.
+#
+# TWO JOBS, FOR #193'S REASON RATHER THAN FOR TIDINESS. secrets.GITHUB_TOKEN is
+# minted with the permissions of the job it is read in, so a single job would
+# hand a token carrying `attestations: write` and `id-token: write` to the steps
+# with the widest ingestion surface in this repository - `npx prettier` off the
+# npm registry, a NuGet restore, the FASM bootstrap. SECURITY.md states as a
+# property of this tree that no job holding a write scope also executes an
+# unpinned third-party program, and one job here would have made that sentence
+# false. So `gate` builds and proves and holds `contents: read` alone, and
+# `attest` holds the two write scopes, runs nothing but two pinned actions and
+# `sha256sum`, and re-derives the digest before it signs anything.
+#
+# The other deliberate difference from ci.yml is the .NET cache. ci.yml keys a
+# restore cache on the lock file; `gate` does not, because the bytes it hands
+# to `attest` must not come out of a cache a pull request could have written
+# into. zizmor's cache-poisoning audit is what enforces that, and the cost is a
+# cold restore on a run that happens once per release.
+#
+# step-security/harden-runner is deliberately absent for ci.yml's reason: it
+# does not support Windows runners, and this build needs Windows to execute the
+# produced PE.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Fail closed: no ambient token scope at the top level; each job re-grants the
+# minimum it needs.
+permissions: {}
+
+# One in-flight run per tag. cancel-in-progress is false, unlike ci.yml: a
+# superseded pull-request run is noise, a half-finished release run is not.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: gate
+    runs-on: windows-latest
+    # ci.yml's 15 minutes, plus a cold NuGet restore.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      # CI has no application-control policy, so the native DLL must actually
+      # load - the ABI conformance test is required here, never skipped.
+      SWARM_REQUIRE_NATIVE: "1"
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "9.0.x"
+          # No `cache:` here. See the header: these bytes get attested.
+
+      - name: Bootstrap the pinned assembler (SHA-256-verified)
+        run: ./tools/get-fasm.ps1
+
+      - name: Assemble
+        run: ./build.ps1 -Debug
+
+      - name: Report the size budget
+        run: |
+          $size = (Get-Item .\build\swarm.exe).Length
+          Write-Host "swarm.exe: $size bytes of the 65536-byte budget ($([math]::Round(100 * $size / 65536, 1))%)"
+          if ($size -gt 65536) { throw "swarm.exe is $size bytes - over the 64 KiB budget" }
+
+      - name: Smoke-run
+        run: |
+          $p = Start-Process -FilePath .\build\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "swarm.exe -smoke exited with $($p.ExitCode)" }
+
+      - name: Smoke-run the debug build
+        run: |
+          $p = Start-Process -FilePath .\build\debug\swarm.exe -ArgumentList '-smoke' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "debug swarm.exe -smoke exited with $($p.ExitCode)" }
+
+      - name: Smoke-run with a preset on the command line
+        run: |
+          function Invoke-Preset($file, $expected, $what) {
+            $p = Start-Process -FilePath .\build\swarm.exe -ArgumentList "-smoke $file" -Wait -PassThru
+            if ($p.ExitCode -ne $expected) {
+              throw "$what : swarm.exe -smoke $file exited with $($p.ExitCode), expected $expected"
+            }
+            Write-Host "$what : exit $($p.ExitCode)"
+          }
+          $accepted = 'tests/fixtures/preset/accepted.txt'
+          Invoke-Preset $accepted 0 'accepted fixture'
+          Invoke-Preset 'tests/fixtures/preset/rejected.txt' 1 'refused fixture'
+          Invoke-Preset 'tests/fixtures/preset/no-such-file.txt' 1 'name that opens nothing'
+          $oversized = Join-Path $env:RUNNER_TEMP 'oversized-preset.txt'
+          $text = [IO.File]::ReadAllText($accepted)
+          [IO.File]::WriteAllText($oversized, $text + ("`n" * (8193 - $text.Length)))
+          Invoke-Preset $oversized 1 'one byte past the read cap'
+
+      - name: Test (conformance harness)
+        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+
+      - name: Build the micro-bench (compile-check only)
+        run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo
+
+      - name: Check formatting (Prettier)
+        run: npx --yes prettier@3.9.5 --check "**/*.{md,yml,yaml}"
+
+      - name: Read the ABI version out of the built kernel DLL
+        # The cross-check below compares the tag against the BINARY, so the
+        # number has to come out of the artifact rather than out of
+        # src/kernel/abi.inc. `swarm_version` is the DLL export whose whole body
+        # is that constant, and calling it is the only way to read it: the image
+        # carries no version resource and the exe exports nothing at all. A DLL
+        # that will not load, or an export that has gone, throws here.
+        run: |
+          $dll = (Resolve-Path .\build\swarm.kernel.dll).Path
+          Add-Type -TypeDefinition @"
+          using System.Runtime.InteropServices;
+          public static class SwarmAbiProbe {
+              [DllImport(@"$dll")]
+              public static extern uint swarm_version();
+          }
+          "@
+          $abi = [SwarmAbiProbe]::swarm_version()
+          Write-Host "build/swarm.kernel.dll reports SWARM_ABI_VERSION = $abi"
+          "SWARM_ABI_VERSION=$abi" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Version truth (tag vs CHANGELOG vs binary)
+        # The tag arrives through the environment rather than through a `${{ }}`
+        # interpolation inside the script body: a ref name is attacker-shaped
+        # input in the general case, and zizmor's template-injection audit is
+        # right to refuse it there. What the three legs do and do not cover is
+        # written at the top of the script, including the two digits that are
+        # checked against the changelog alone.
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          ./tools/version-truth.ps1 -Tag $env:RELEASE_TAG -ChangelogPath CHANGELOG.md -AbiVersion ([int]$env:SWARM_ABI_VERSION)
+          if ($LASTEXITCODE -ne 0) { throw "version truth refused $env:RELEASE_TAG - see the REFUSED lines above" }
+
+      - name: Write SHA-256SUMS
+        # coreutils format, so `sha256sum -c SHA-256SUMS` verifies it as-is next
+        # to a downloaded exe - which is exactly what the attest job does with
+        # it before signing anything.
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 .\build\swarm.exe).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD\build\SHA-256SUMS", "$hash  swarm.exe`n")
+          Get-Content .\build\SHA-256SUMS
+
+      - name: Upload the tagged build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: swarm-${{ github.ref_name }}
+          path: |
+            build/swarm.exe
+            build/SHA-256SUMS
+          # Fail closed: an upload that silently found nothing would make a
+          # green release run that published no bytes, and would leave the
+          # attest job with nothing to sign.
+          if-no-files-found: error
+
+  attest:
+    name: attest
+    needs: gate
+    # Linux: this job runs no PE, and `sha256sum` is the coreutils tool whose
+    # format the gate job wrote for.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # attest-build-provenance mints an OIDC token and writes the attestation.
+      # These two scopes exist in this job and nowhere else in the workflow, and
+      # every program this job runs is either pinned by SHA or part of the
+      # runner image.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Fetch the tagged build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: swarm-${{ github.ref_name }}
+
+      - name: Re-derive the digest before signing it
+        # The bytes travelled through the artifact store to get here, so the
+        # checksum the gate job computed is verified against the file that
+        # actually arrived, rather than trusted because it was written by the
+        # same run. This also proves SHA-256SUMS is in the format its name
+        # promises: a file coreutils cannot read fails here.
+        run: |
+          sha256sum -c SHA-256SUMS
+          sha256sum swarm.exe
+
+      - name: Attest the build provenance
+        # Binds the artifact's digest to this workflow, this repository and this
+        # tag, verifiable with
+        # `gh attestation verify swarm.exe -R iderex/swarm.asm`. This is the
+        # durable half: the artifact expires, the attestation and the tag do
+        # not, and a rebuild of the tag reproducing the digest is what makes the
+        # pair worth having.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: swarm.exe

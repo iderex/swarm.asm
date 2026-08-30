@@ -57,8 +57,14 @@ git ls-tree -r --name-only origin/main \
   | grep -E 'global.json$|nuget.config$|package.json$|pyproject.toml$|uv.lock$|requirements.txt$|go.mod$|Cargo.toml$|.gitmodules$'
 ```
 
-returns nothing. There is no release or publish workflow either, which is
-issue #130, and the first command above is what would falsify that.
+returns nothing. THERE IS A RELEASE WORKFLOW NOW AND THIS PARAGRAPH SAID THERE
+WAS NONE. `release.yml` landed on #181: a `v*` tag push assembles, runs the
+whole pull-request gate, refuses a tag that disagrees with `CHANGELOG.md` or
+with the ABI version the built DLL reports, and attests the artifact's digest.
+It publishes no GitHub Release object, because `docs/RELEASE-POLICY.md` refuses
+one. The first command above is what re-derives the set. #130 stays open for
+the rest of the release pipeline; what it no longer covers is the workflow's
+absence.
 
 Where a path below is watched by Dependabot, what its cooldown does and does
 not defend against is argued in `.github/dependabot.yml`'s own header and is
@@ -122,8 +128,21 @@ sets `permissions: {}` at workflow level and grants per job, except
   (`pr-hygiene.yml:46`) gets `pr-hygiene.yml:51` `contents: read` and
   `pr-hygiene.yml:52` `pull-requests: read`. That workflow is advisory and is
   wired into no required check, which it states at `pr-hygiene.yml:10`.
-- `scorecard.yml:57` `permissions: {}`, and it is the only workflow whose two
-  jobs hold different scopes. The `analysis` job (`scorecard.yml:66`) gets
+- `release.yml:50` `permissions: {}`, and its two jobs hold different scopes.
+  The `gate` job (`release.yml:59`) gets `release.yml:65` `contents: read` and
+  nothing else, and it is the job that runs every ingesting step in the
+  workflow - `npx prettier`, the NuGet restore, the FASM bootstrap - with
+  `release.yml:74` `persist-credentials: false` on its checkout. The `attest`
+  job (`release.yml:185`) gets `release.yml:193` `contents: read`,
+  `release.yml:198` `id-token: write` and `release.yml:199`
+  `attestations: write`, checks nothing out, and runs `sha256sum` plus two
+  SHA-pinned actions and nothing else. Neither job is handed a secret. It is
+  the only workflow started by a tag push (`release.yml:44-46`), so no pull
+  request reaches it. THESE LINE CITATIONS ARE TAKEN AT THE COMMIT THAT ADDS
+  THE FILE (#181), not at the sha this subsection names above, because the
+  file does not exist at that sha.
+- `scorecard.yml:57` `permissions: {}`, and its two jobs hold different
+  scopes. The `analysis` job (`scorecard.yml:66`) gets
   `scorecard.yml:73` `id-token: write` and `scorecard.yml:74` `contents: read`.
   The `id-token: write` is an OIDC token for the OpenSSF API and grants nothing
   in this repository, which the file argues on its own lines at
@@ -142,12 +161,18 @@ sets `permissions: {}` at workflow level and grants per job, except
   third-party code beyond the pinned upload action.
 
 So the write scopes in this repository are `security-events: write` in
-`zizmor.yml`'s `upload` job and in `scorecard.yml`'s `upload` job, plus
-`id-token: write` in `scorecard.yml`'s `analysis` job, and no job that holds a
+`zizmor.yml`'s `upload` job and in `scorecard.yml`'s `upload` job,
+`id-token: write` in `scorecard.yml`'s `analysis` job, and `id-token: write`
+with `attestations: write` in `release.yml`'s `attest` job. No job that holds a
 write scope also holds a secret or executes an unpinned third-party program.
-That is the property to re-check when a workflow is added, and it is not
-enforced by anything: `ZizmorJobPermissionTests` refuses the zizmor half and
-nothing reads the rest.
+That is the property to re-check when a workflow is added, and it is READ IN
+TWO PLACES AND NOT IN THE THIRD: `ZizmorJobPermissionTests` refuses the zizmor
+half, `ReleaseGateTests` refuses a `release.yml` job that holds a write scope
+and also runs `npx`, `dotnet` or a repository script, and nothing reads the
+scorecard half or any workflow added tomorrow. The release half was built by
+splitting a single job in two - #193's finding, met a second time - because one
+job would have handed a token carrying `attestations: write` to `npx prettier`
+and made the sentence above false.
 
 WHAT THIS SUBSECTION DOES NOT REACH. The rung analysis below is still the
 reading taken at the sha at the top of this section, so the ingestion paths
