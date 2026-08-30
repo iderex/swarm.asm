@@ -859,4 +859,147 @@ public sealed class KernelSourceConformanceTests
 
         return false;
     }
+
+    // Every PATH_* id the kernel defines, read out of abi.inc rather than
+    // listed here, so an id added without a body cannot get past this scan by
+    // somebody forgetting to extend a literal.
+    private static string[] PathIds()
+    {
+        var abi = File.ReadAllLines(Path.Combine(Build.RepoRoot, "src", "kernel", "abi.inc"));
+        var rx = new Regex(@"^(PATH_[A-Z0-9_]+)\s*=", RegexOptions.CultureInvariant);
+        var ids = abi.Select(StripComment)
+                     .Select(l => rx.Match(l))
+                     .Where(m => m.Success)
+                     .Select(m => m.Groups[1].Value)
+                     .Where(id => id != "PATH_MAX")   // a bound, not an id
+                     .ToArray();
+        Assert.Contains("PATH_AVX2", ids);            // a renamed set must fail loudly
+        Assert.Contains("PATH_SCALAR", ids);
+        Assert.Contains("PATH_AVX512", ids);
+        return ids;
+    }
+
+    /// <summary>
+    /// AH_PATH names the body that runs (issue #316). The word is written by
+    /// init_core and read by pass_core, and nothing at run time compares the
+    /// two: swarm_pass returns void, so a disagreement cannot be refused where
+    /// it is used. It has to be refused where it is produced, and these are the
+    /// two ways it was produced.
+    ///
+    /// The defect this refuses was live. PATH_AVX512 was resolved by the auto
+    /// ladder on any host reporting the feature AND aliased onto the ymm body
+    /// by pass_core, so on exactly the hardware nobody could check, the header
+    /// said AVX-512 while the instructions were AVX2's. A bench row or a
+    /// golden keyed on that word carried a path attribution the instructions
+    /// did not support.
+    ///
+    /// Two properties, because either alone passes the shape that was in the
+    /// tree. Containment alone - every resolvable id has an arm - was
+    /// satisfied by the alias, since PATH_AVX512 had an arm; it just went to
+    /// somebody else's body. Distinctness alone would pass a ladder resolving
+    /// an id with no arm at all.
+    ///
+    /// WHAT THIS CANNOT SEE, stated because the scan reads stronger than it
+    /// is. It works on tokens and jump targets, not on control flow: it cannot
+    /// tell an init_core arm that ACCEPTS an id from one that REFUSES it, so
+    /// an id named anywhere in that file's code counts as resolvable - which
+    /// is why PATH_AVX512's refusal is written as a fall-through naming
+    /// nothing. It cannot tell two labels apart as bodies: pass_avx2 and
+    /// pass_avx2_fma are distinct targets here whatever they expand to. And it
+    /// reads source rather than the assembled image, so it says nothing about
+    /// what either routine encodes.
+    /// </summary>
+    [Fact]
+    public void EveryResolvablePathIdHasABodyOfItsOwn()
+    {
+        var ids = PathIds();
+        var arms = PassCoreArms(ids);
+        Assert.NotEmpty(arms); // a renamed dispatch must fail loudly, not pass vacuously
+
+        // PATH_AUTO is the field's "resolve for me" value and never a resolved
+        // id; PATH_SCALAR is pass_core's fall-through and needs no named arm.
+        var resolvable = CodeTokens(Path.Combine(Build.RepoRoot, "src", "kernel", "init.inc"), ids)
+            .Except(["PATH_AUTO", "PATH_SCALAR"]);
+
+        var bodiless = resolvable.Except(arms.Keys).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        Assert.True(
+            bodiless.Length == 0,
+            "init.inc names a path id that pass_core does not dispatch, so an arena header could "
+            + "claim a path the kernel would not run (#316): " + string.Join(", ", bodiless));
+
+        var shared = arms.GroupBy(a => a.Value, StringComparer.Ordinal)
+                         .Where(g => g.Count() > 1)
+                         .Select(g => $"{g.Key} <- {string.Join(" and ", g.Select(a => a.Key).Order(StringComparer.Ordinal))}")
+                         .Order(StringComparer.Ordinal)
+                         .ToArray();
+        Assert.True(
+            shared.Length == 0,
+            "pass_core sends two path ids to one body, so one of them is a label the instructions "
+            + "do not support (#316): " + string.Join("; ", shared));
+    }
+
+    // pass_core's dispatch, as id -> jump target. The routine is read from its
+    // label to the next global one; `cmp eax, PATH_X` arms the id and the `je`
+    // beneath it names the body. The trailing `jmp` is the fall-through and is
+    // deliberately not an arm - it is where everything unnamed goes.
+    private static Dictionary<string, string> PassCoreArms(string[] ids)
+    {
+        var lines = File.ReadAllLines(Path.Combine(Build.RepoRoot, "src", "kernel", "step.inc"))
+                        .Select(StripComment).ToArray();
+        var known = new HashSet<string>(ids, StringComparer.Ordinal);
+        var globalLabel = new Regex(@"^[A-Za-z_][A-Za-z0-9_]*:", RegexOptions.CultureInvariant);
+        var cmpRx = new Regex(@"^\s+cmp\s+\w+\s*,\s*(PATH_[A-Z0-9_]+)\s*$", RegexOptions.CultureInvariant);
+        var jeRx = new Regex(@"^\s+je\s+(\S+)\s*$", RegexOptions.CultureInvariant);
+
+        int start = Array.FindIndex(lines, l => l.TrimEnd() == "pass_core:");
+        Assert.True(start >= 0, "pass_core: not found in src/kernel/step.inc");
+
+        var arms = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? pending = null;
+        for (int i = start + 1; i < lines.Length && !globalLabel.IsMatch(lines[i]); i++)
+        {
+            var cmp = cmpRx.Match(lines[i].TrimEnd());
+            if (cmp.Success)
+            {
+                Assert.Contains(cmp.Groups[1].Value, known); // an id abi.inc does not define
+                pending = cmp.Groups[1].Value;
+                continue;
+            }
+
+            var je = jeRx.Match(lines[i].TrimEnd());
+            if (je.Success && pending is not null)
+            {
+                arms[pending] = je.Groups[1].Value;
+                pending = null;
+            }
+        }
+
+        return arms;
+    }
+
+    // The PATH_* ids that appear in a file's CODE, comments stripped and
+    // matched whole-word so a mention inside a longer identifier is not a hit.
+    private static HashSet<string> CodeTokens(string path, string[] ids)
+    {
+        var rx = ids.Select(id => (Id: id, Rx: WholeWord(id))).ToArray();
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in File.ReadAllLines(path))
+        {
+            var code = StripComment(line);
+            if (code.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (var (id, r) in rx)
+            {
+                if (r.IsMatch(code))
+                {
+                    found.Add(id);
+                }
+            }
+        }
+
+        return found;
+    }
 }

@@ -485,6 +485,15 @@ build_pads_core:
 ; preserve the seam's 0-mod-32 entry, which the SIMD path relies on for
 ; aligned spills.
 ;
+; PATH_AVX512 IS NOT NAMED HERE and is not an omission (#316). It used to be,
+; jumping to the ymm body, so a header word saying AVX-512 and the instructions
+; that ran disagreed on every host reporting the feature. init_core now refuses
+; the id rather than resolving it, so no arena this engine writes can carry it,
+; and a forged word carrying it lands on the reference path with everything
+; else - the direction below where being wrong costs speed. Naming it again
+; belongs in the change that builds the zmm body (#123/#164), beside the
+; init_core arms that admit it.
+;
 ; The vector ids are named and everything else falls to the reference path,
 ; rather than the reverse (#202). Deciding by exclusion sent PATH_AUTO, and any
 ; word that never came from a resolution at all, into the vector body: the
@@ -501,11 +510,10 @@ pass_core:
         mov     eax, [rcx+AH_PATH]
         cmp     eax, PATH_AVX2
         je      pass_avx2
-        cmp     eax, PATH_AVX512        ; shares the ymm body until #123 builds
-        je      pass_avx2               ;   the zmm instantiation
         cmp     eax, PATH_AVX2_FMA      ; the fused ymm body (#162), opt-in only
         je      pass_avx2_fma
-        jmp     pass_scalar             ; PATH_SCALAR, PATH_AUTO, anything else
+        jmp     pass_scalar             ; PATH_SCALAR, PATH_AUTO, PATH_AVX512,
+                                        ;   anything else
 
 ; ------------------------------------------------------------------
 ; pass_scalar - the reference path: fused force+integrate for i in
@@ -1016,8 +1024,8 @@ pass_avx2:
 ; pass_avx2_fma - the fused AVX2 path (PATH_AVX2_FMA, #162). Same neighbourhood,
 ; same lane hygiene, same reduction order; five mul-then-add/sub pairs rounded
 ; once instead of twice. Never auto-selected: init resolves PATH_AUTO to
-; PATH_AVX512 or PATH_AVX2 and never to this id, so reaching it is an explicit
-; caller act, exactly as PATH_SCALAR is. Its CPU requirement is PATH_AVX2's -
+; PATH_AVX2 and never to this id, so reaching it is an explicit caller act,
+; exactly as PATH_SCALAR is. Its CPU requirement is PATH_AVX2's -
 ; cpu_paths_core cannot report CPU_AVX2 without FMA (cpuid.inc leaf 1 ecx bit
 ; 12), so no CPU that reaches this body lacks the unit.
 ;   in:       rcx = arena, edx = first, r8d = last
