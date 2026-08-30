@@ -122,6 +122,15 @@ if (args.Contains("--managed"))
     return 0;
 }
 
+// The two ported competitor cores of the comparison (#153), behind an argument
+// for the same reason --managed is: three foreign force loops in front of the
+// default report would put minutes of other engines' work ahead of this one's.
+if (args.Contains("--cores"))
+{
+    CompetitorCoreReport();
+    return 0;
+}
+
 int[] ns = [1024, 2048, 4096, 8192, 16384];
 const uint Scalar = 3, Avx2 = 1;
 
@@ -1787,6 +1796,98 @@ static ManagedBaseline.Scene ManagedScene(int n)
 
     return new ManagedBaseline.Scene(
         n, (int)p.SpeciesN, p.Seed, p.RMax, p.Beta, p.Dt, p.Friction, p.ForceScale, matrix);
+}
+
+// --- the ported competitor cores (#153) ------------------------------------
+
+// The comparison #153 asks for, in the only form that is reproducible from
+// this repository alone: each competitor's CORE ported into this harness and
+// run beside the kernel, in one process, on one host, over one drawn
+// population, timed by the instrument the kernel rows use.
+//
+// WHAT THIS IS NOT. It is not a measurement of anyone's program. A number
+// taken from an executable this repository did not build cannot be reproduced
+// from this repository, so it would be a different kind of claim and it is
+// kept in a different sentence - see the section in docs/BENCHMARKS.md.
+//
+// ALL FOUR COLUMNS WALK N^2 PAIRS. Neither engine's acceleration structure is
+// ported: a table where one side enumerates fewer pairs measures the structure
+// rather than the core, and this engine's own grid has its own rows in that
+// document. What differs between the columns is the arithmetic each engine
+// specifies for one pair and for one particle, which is what "algorithm
+// comparison, ported cores" means and all it means.
+//
+// THE RESTORE IS INSIDE THE CLOCK AND IS MEASURED. Both ported cores advance
+// the state in place, so each timed call restores the drawn population first.
+// That restore is O(N) against an O(N^2) pass; rather than assert it is
+// negligible, it is timed on its own and printed as its own column.
+static void CompetitorCoreReport()
+{
+    int[] ns = [1024, 2048, 4096, 8192, 16384];
+    const uint Scalar = 3, Avx2 = 1;
+
+    int paths = Native.swarm_cpu_paths();
+    bool haveAvx2 = (paths & 1) != 0;
+
+    Console.WriteLine("Ported competitor cores (#153): one update of the same population, same run");
+    Console.WriteLine();
+    Console.WriteLine(
+        $"{"n",9} {"app(Java) ms",13} {"cpp ms",10} {"C# SoA ms",11} {"scalar ms",11} " +
+        $"{"avx2 ms",10} {"restore ms",11}");
+    Console.WriteLine(new string('-', 82));
+
+    foreach (int n in ns)
+    {
+        ManagedBaseline.Scene scene = ManagedScene(n);
+
+        var app = new CompetitorCores.ParticleLifeApp(scene);
+        for (int i = 0; i < 3; i++)
+            app.Update();
+        double appMs = MinOfRounds(app.Update);
+
+        var cpp = new CompetitorCores.ParticleLifeCpp(scene);
+        for (int i = 0; i < 3; i++)
+            cpp.Update();
+        double cppMs = MinOfRounds(cpp.Update);
+
+        var soa = new ManagedBaseline.Soa(scene);
+        for (int i = 0; i < 3; i++)
+            soa.Pass();
+        double soaMs = MinOfRounds(soa.Pass);
+
+        var restore = new CompetitorCores.RestoreOnly(scene);
+        for (int i = 0; i < 3; i++)
+            restore.Update();
+        double restoreMs = MinOfRounds(restore.Update);
+
+        double scalarMs = TimePass((uint)n, Scalar);
+        double avx2Ms = haveAvx2 ? TimePass((uint)n, Avx2) : double.NaN;
+        string avxCol = haveAvx2 ? avx2Ms.ToString("0.000") : "n/a";
+
+        Console.WriteLine(
+            $"{n,9} {appMs,13:0.000} {cppMs,10:0.000} {soaMs,11:0.000} {scalarMs,11:0.000} " +
+            $"{avxCol,10} {restoreMs,11:0.000}");
+    }
+
+    // The partition the C++ core's pair count comes out of, printed rather
+    // than assumed balanced: it is what makes the sum of its group products
+    // equal to n^2.
+    var probe = new CompetitorCores.ParticleLifeCpp(ManagedScene(1024));
+    Console.WriteLine();
+    long total = probe.GroupSizes.Sum();
+    long slots = probe.GroupSizes.Sum(g => (long)g * total);
+    Console.WriteLine($"cpp group sizes at n=1024: {string.Join(", ", probe.GroupSizes)} " +
+        $"(sum {total}, pair slots {slots} = {total}^2)");
+    Console.WriteLine();
+    Console.WriteLine("app(Java) = tom-mohr/particle-life-app core, 3ba0c4e; cpp = hunar4321/particle-life");
+    Console.WriteLine("core, 2562787. Ported cores, NOT measurements of those programs, and neither");
+    Console.WriteLine("engine's acceleration structure is ported - every column walks n^2 pair slots.");
+    Console.WriteLine("Deviations are listed at the line that makes them in CompetitorCores.cs and on");
+    Console.WriteLine("the published row; the cpp core does not express this repository's rule set.");
+    Console.WriteLine();
+    Console.WriteLine($"runtime: {Environment.Version}, server GC={System.Runtime.GCSettings.IsServerGC}, " +
+        $"tiered PGO={Environment.GetEnvironmentVariable("DOTNET_TieredPGO") ?? "default"}");
+    Console.WriteLine("Per-machine, as every row here is - record in docs/BENCHMARKS.md with the host.");
 }
 
 // --- the README assets (#131) ----------------------------------------------

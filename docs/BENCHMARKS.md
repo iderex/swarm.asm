@@ -31,9 +31,11 @@ regression gating against a stored baseline.
 
 Partly measured, and worth naming at the top so the absence is not read as a
 comparison that exists: the competitor set #153 asks for is three engines, and
-one of them is here. The managed baseline has its own section at the end of
-this document; the two foreign ports are not measured, and no comparison table
-is published.
+all three now run here - the managed baseline and the two foreign cores, each
+with its own section at the end of this document. **No comparison table is
+published**, because no run of the three has been taken on a host free of a
+second workload; the section that would carry the table measures the load and
+says so instead.
 
 ## How to run
 
@@ -2041,28 +2043,185 @@ What matters for the claim is the direction. A kernel measured slower than its
 own baseline makes the quoted ratio a conservative one for this engine, so the
 1.85× is a floor on the margin rather than a flattering reading of it.
 
+## The ported competitor cores (#153)
+
+The other two engines of the comparison exist here now, as **ported cores**:
+each engine's force law, damping and integration transcribed into C# in
+`tests/Swarm.Bench/CompetitorCores.cs`, run in this harness beside the kernel
+and the managed baseline, over one drawn population, in one process, on one
+host, timed by the instrument the `## Baseline` rows use.
+
+**No comparison table is published from them yet**, and the reason is measured
+rather than asserted - it is at the end of this section.
+
+### What a ported core is, and what it is not
+
+It is not a measurement of anyone's program. A figure taken from an executable
+this repository did not build is not reproducible from this repository alone,
+which is the rule every row in this document is held to. Those are two
+different claims and this document keeps them in different sentences: a ported
+core is source in this tree that anybody can re-run, and an external
+observation of a competitor's own build would be dated, quoted with its version
+and build environment, and marked as something a reader can weigh but not
+reproduce from here. Nothing below is the second kind.
+
+**Neither engine's acceleration structure is ported.** Both cores walk every
+ordered pair, which is what the managed baseline and the `## Baseline` kernel
+rows already do. A table in which one side enumerates fewer pairs measures the
+acceleration structure rather than the core, and this engine's own structure
+has its own sections above. So every column walks n^2 pair slots and the only
+thing that differs between them is the arithmetic each engine specifies for one
+pair and for one particle.
+
+### tom-mohr/particle-life-app, at `3ba0c4e`
+
+**It expresses the rule set this repository pins.** Its accelerator
+(`src/main/java/com/particle_life/app/Main.java:275-279`) is the same knee, the
+same tent and the same matrix entry as `docs/MASTERPLAN.md`; the term
+`|1 + beta - 2*xn|` is `|2*xn - 1 - beta|` term for term. That is checked
+rather than claimed: `CompetitorCoreTests.TheJavaAcceleratorIsThePinnedForceCurve`
+walks both branches of the curve at three values of beta.
+
+The deviations, each marked at the line in the port that makes it:
+
+1. **An extra factor of rmax on the acceleration.** `Physics.java:437` applies
+   `rmax * force * dt`, and `Accelerator.java` documents why - the
+   accelerator's result "is also interpreted as relative to rmax".
+2. **Friction renormalised to 60 fps**, `pow(friction, 60 * dt)` at
+   `Physics.java:401`. At the benchmark scene that is `0.71^1.2`, not `0.71`.
+3. **No velocity clamp.** This engine bounds velocity at `rmax / dt` so a
+   particle cannot cross a cell in one step; `Physics.java` has no such bound.
+4. **Double precision throughout**, because `Physics` carries `Vector3d`.
+
+**Those four are the whole list, and that is asserted rather than asserted at.**
+All four are removable from the scene rather than from the port - deviation 1
+by handing the port `forceScale / rmax`, deviation 2 by a timestep of `1/60`,
+deviation 3 by a scene that never reaches the bound - and with them removed
+`CompetitorCoreTests.JavaCoreIsThisEnginesLawOnceTheFourNamedDeviationsAreRemoved`
+requires the port to land on `TestOracle`, the reference the kernel itself is
+checked against, at three scenes chosen to put a different share of the
+population on each side of the knee. A port carrying an unnamed fifth
+difference cannot pass that.
+
+Two smaller differences are in the port's comments rather than on this list,
+because neither changes a trajectory: the neighbour test is `<=` rmax squared
+where this engine's is `<`, and a pair at exactly rmax carries zero force under
+both laws; and the shortest-connection wrap differs from `dx -= round(dx)` only
+exactly at +/-0.5, where round-half-even sends 0.5 to 0.
+
+The container grid (`Physics.java:309-395`) and the twelve-thread fan-out
+(`Physics.java:37`) are not ported, for the reason given above.
+
+### hunar4321/particle-life, at `2562787`
+
+**It does not express the rule set**, and that is the finding rather than an
+obstacle to be normalised away. Read against `docs/MASTERPLAN.md`, at
+`particle_life/src/ofApp.cpp`:
+
+- The force is `1/r` inside a radius and zero outside it (`:59`). No repulsion
+  knee, no matrix-weighted tent; the matrix entry enters once, as the scalar
+  coefficient `G / -100` (`:39`).
+- The world is bounded by a **clamp**, not a wrap (`:84-90`), and the offset
+  between two particles is therefore the plain difference with no wrap at all.
+- There is **no dt**: velocity is added straight to position (`:79-80`).
+- Each particle is integrated **once per partner group**, not once per frame
+  against a frozen state. `ofApp::update` calls `interaction` once per ordered
+  species pair (`:474-489`) and each call ends by moving its first group, so a
+  particle has already moved before the next group is summed against it.
+
+The last of those is the sharpest one and it is the property the port exists to
+carry, so it is pinned by arithmetic rather than by prose:
+`CompetitorCoreTests.TheCppCoreIntegratesPerPartnerGroup` asserts that one
+update's displacement is the SUM of the intermediate velocities and not the
+final velocity, which is what a frozen-state update would produce. Ported as
+the source has it, the worst gap at its fixture is 1.03E-05; with the
+integration lifted out of the group loop it falls to 2.98E-08, the rounding of
+one f32 add at a coordinate of order 0.5.
+
+Three further departures are made by this repository's scene rather than by the
+engine, and each is a comment at the line that makes it: the wall repel is left
+out, because its default of 10.0 belongs to a 1600 x 900 pixel world
+(`ofApp.h:215-222`) and would cover the whole of a unit square; `viscosity` is
+taken as `1 - friction`, because this scene declares a friction coefficient
+where the source declares a viscosity; and the coefficient is the scene's
+matrix entry put through the source's `G / -100` unchanged, where the
+application supplies a slider in [-100, 100].
+
+### How to run
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" run -c Release --project tests\Swarm.Bench\Swarm.Bench.csproj -- --cores
+```
+
+Both ported cores advance their state in place, so each timed call restores the
+drawn population first. That restore is inside the timed window rather than
+hidden outside it, and the report times it on its own as a column so its size
+is a measurement instead of an assurance: it comes out at 0.000 to 0.005 ms
+against passes of 0.9 to 2143 ms.
+
+### Why there is no table here yet
+
+**The host is not fit to take one tonight, and that is measured.** Two
+consecutive runs of the command above disagree with each other by more than the
+differences a comparison would be about:
+
+| n     | scalar kernel ms, run 1 | run 2   | cpp core ms, run 1 | run 2   |
+| ----- | ----------------------- | ------- | ------------------ | ------- |
+| 2048  | 21.162                  | 8.874   | 8.651              | 7.456   |
+| 4096  | 32.109                  | 37.975  | 31.617             | 39.203  |
+| 8192  | 119.145                 | 114.593 | 117.053            | 145.873 |
+| 16384 | 569.866                 | 595.371 | 575.028            | 632.556 |
+
+The scalar column moves by a factor of 2.4 between two runs of one binary at
+n = 2048, and reads 45% above the 391.980 ms this document records for the same
+row at n = 16384. A single foreign process accounts for it, and it was measured
+across each run rather than inferred:
+
+```
+LOAD eu5 dCPU=409.05s over window 97.59s = 419.1% of one core = 13.1% of 32 logical
+LOAD eu5 dCPU=393.17s over window 93.37s = 421.1% of one core = 13.2% of 32 logical
+```
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise
+  10.0.26200, single-threaded. **Feature path**: AVX2 + FMA, no AVX-512
+  (`cpu paths (bits) : 0x1`), .NET 10.0.11 running a `net9.0` build.
+  **Scene / seed**: `MakeParams`, `0x5EED`, 6 species, `rmax = 0.05`,
+  `beta = 0.3`, `dt = 0.02`, `friction = 0.71`, force scale 10.
+  **Commit**: `2fbdc75` plus this change's own working tree, which is why the
+  numbers above are quoted only against each other and never against a row
+  elsewhere in this document. **Date**: 2026-08-30.
+
+The AVX2 column is the one that survived - 210.646 and 227.331 ms at n = 16384
+against the 209.493 recorded above - so this is not a claim that nothing on
+this host is measurable tonight. It is the narrower statement that the scalar
+column, which a cross-engine table is read against, is not.
+
+So what lands here is the apparatus and not the row. The comparison is one
+command away from a number and the command is above; what it needs is a host
+carrying no second workload, and that is the only thing still between this
+document and the table #153 asks for.
+
 ### What is still owed on #153
 
-Two engines, `hunar4321/particle-life` and `tom-mohr/particle-life-app`, and
-the comparison table itself. Nothing in this section is that comparison, and
-the README's M4 row still promises a suite this document does not yet carry.
+**The comparison table, and nothing else.** Both foreign cores are in the tree
+and both run from one command; what is missing is a run on a host carrying no
+second workload, for the reason the section above measures.
 
-Both engines sit behind something outside this repository, and the two are not
-the same size. The Java one needs a runtime and a build tool, neither of which
-is on this machine, so standing one up is a change to the host every published
-number here is taken on. The C++ one is an openFrameworks application with a
-Visual Studio solution and no CMake input, so what it needs fetched is the
-openFrameworks release and its `ofxGui` addon; the MSVC toolset its project
-files ask for is already installed here. That repository also ships built
-binaries, and none of them may be measured: a figure taken from an executable
-this repository did not build is not reproducible from the repository alone.
+The obstacle this sub-section used to lead with is gone rather than solved,
+and the difference is worth stating. It said both engines sat behind a
+toolchain outside this repository - a Java runtime and build tool that are not
+on this machine, an openFrameworks release and its `ofxGui` addon for the C++
+one - and that the C++ engine could not express the pinned rules anyway. All
+of that is still true of their PROGRAMS. None of it is in the way any more,
+because what is compared here is each engine's core, ported, and a ported core
+needs no foreign toolchain. The rule that shut the door on the shipped
+binaries in that repository is unchanged and is why the door stays shut: a
+figure from an executable this repository did not build is not reproducible
+from this repository alone.
 
-Neither toolchain is the larger obstacle. Read against the law pinned in
-`docs/MASTERPLAN.md`, the C++ engine does not express the same rules. It has no
-repulsion knee below `beta`, it carries a separate radius per ordered species
-pair, its boundary is a clamp rather than a wrap, and it integrates each
-particle once per partner group rather than once per frame against a frozen
-state. Which comparison is wanted, every engine measured as it stands with the
-deviations published beside its figure, or a rule set cut down to what all
-three can express, is open on #153, and no number is taken here before it is
-settled.
+The question that stood open here - every engine measured as it stands with
+its deviations published, or a rule set cut down to what all three can express
+
+- is answered by the first of the two, and the answer is executed above rather
+  than restated: each core is ported as its source has it, and every deviation is
+  a comment at the line that makes it and a line on the row.

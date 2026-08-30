@@ -36,6 +36,10 @@
          laws, and the one this suite asserts about has to be the one the
          published number was taken from. -->
     <Compile Include="../Swarm.Bench/ManagedBaseline.cs" Link="ManagedBaseline.cs" />
+    <!-- The two ported competitor cores (#153), linked for the same reason:
+         the port the suite asserts about has to be the one the published
+         number was taken from. -->
+    <Compile Include="../Swarm.Bench/CompetitorCores.cs" Link="CompetitorCores.cs" />
   </ItemGroup>
 
   <ItemGroup>
