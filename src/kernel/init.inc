@@ -62,19 +62,22 @@ init_core:
         mov     r10d, [r8+SP_FORCE_PATH] ; a PATH_* id, not a CPU_* bit mask
         test    r10d, r10d              ; PATH_AUTO = 0
         jnz     .explicit
-        test    r9d, CPU_AVX512         ; auto: AVX-512 > AVX2 > fail. PATH_AVX2_FMA
-                                        ;   is deliberately absent from this
-                                        ;   ladder (#162): it is opt-in only,
+        test    r9d, CPU_AVX2           ; auto: AVX2 > fail. THE LADDER MAY ONLY
+        jz      .no_path                ;   RESOLVE TO AN ID THAT HAS A BODY,
+        mov     r10d, PATH_AVX2         ;   because AH_PATH names the body
+        jmp     .path_ok                ;   pass_core will run (#316).
+                                        ;   PATH_AVX512 has no body until
+                                        ;   #123/#164 build the zmm
+                                        ;   instantiation, and the rung that
+                                        ;   used to sit above this one resolved
+                                        ;   to it on any CPU reporting
+                                        ;   CPU_AVX512 - writing a header word
+                                        ;   that named AVX-512 while the ymm
+                                        ;   body ran. PATH_AVX2_FMA is absent
+                                        ;   for a different reason (#162): it
+                                        ;   has a body, and is opt-in only,
                                         ;   like PATH_SCALAR, so no caller gets
                                         ;   different arithmetic by not asking.
-        jz      .try_avx2
-        mov     r10d, PATH_AVX512
-        jmp     .path_ok
-  .try_avx2:
-        test    r9d, CPU_AVX2
-        jz      .no_path
-        mov     r10d, PATH_AVX2
-        jmp     .path_ok
   .explicit:
         cmp     r10d, PATH_SCALAR       ; scalar: accepted against any CPU (the
         je      .path_ok               ;   reference path; its own floor is
@@ -86,15 +89,15 @@ init_core:
         jmp     .path_ok
   .want_fma:
         cmp     r10d, PATH_AVX2_FMA     ; the fused ymm body (#162). Gated on
-        jne     .want512                ;   CPU_AVX2 and on nothing else:
+        jne     .no_path                ;   CPU_AVX2 and on nothing else:
         test    r9d, CPU_AVX2           ;   cpu_paths_core cannot report that
         jz      .no_path                ;   bit without FMA, so a CPU that
         jmp     .path_ok                ;   passes here has the unit.
-  .want512:
-        cmp     r10d, PATH_AVX512       ; not a PATH_* id at all: reject rather
-        jne     .no_path                ;   than read it as an AVX-512 request
-        test    r9d, CPU_AVX512         ; AVX-512 requested
-        jz      .no_path
+                                        ; PATH_AVX512 leaves through the jne
+                                        ;   above, with every word that is not
+                                        ;   an accepted id. That is deliberate
+                                        ;   and it is the last arm: see the
+                                        ;   note at .no_path.
   .path_ok:
         mov     [rsp+24], r10d          ; chosen path id
 
@@ -135,6 +138,17 @@ init_core:
         jmp     .ret
 
   .no_path:
+        ; PATH_AVX512 IS REFUSED HERE ON EVERY HOST, one whose CPU reports the
+        ; feature included (#316). The id has no body: pass_core names
+        ; PATH_AVX2 and PATH_AVX2_FMA, and sends everything else to
+        ; pass_scalar, so accepting 2 would either write a header word naming a
+        ; path the ymm body was about to run, or hand a caller who asked for
+        ; sixteen lanes the reference path. A caller that asks for AVX-512 now
+        ; gets IERR_PATH and no arena byte, which is a reading it can act on,
+        ; where a success code and the AVX2 pass was not. #123/#164 build the
+        ; zmm instantiation; the change that makes the claim true is the one
+        ; that restores this id here and in the auto ladder above, CPU-gated on
+        ; CPU_AVX512 in both places.
         mov     eax, IERR_PATH
   .ret:
         add     rsp, 48
