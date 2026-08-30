@@ -1313,12 +1313,12 @@ of each frame - step plus plot plus blit, never the pacing wait - then writes
 outside the window on purpose: a paced loop measured wall to wall reports
 16.67 ms by construction and would say nothing about how much room is left.
 
-The window is read at four points, so the dump carries four planes: `step`,
-`plot`, `blit` and the whole `frame` they add up to. The three phases are
-consecutive deltas, so the identity is exact and `CaptureReportTests` asserts it
-frame by frame. **The rows tabulated below predate the split** and were taken
-when the window was two reads rather than four; the two added reads sit inside
-the window, so their cost is counted in the phase that follows each one and is
+The window is read at five points, so the dump carries five planes: `build`,
+`pass`, `plot`, `blit` and the whole `frame` they add up to. The four phases
+are consecutive deltas, so the identity is exact and `CaptureReportTests`
+asserts it frame by frame. **The rows tabulated below predate the split** and
+were taken when the window was two reads, and then four; every added read sits
+inside the window, so its cost is counted in the phase that follows it and is
 not subtracted anywhere.
 
 The run also reduces those samples itself and writes `swarm-frames.txt` beside
@@ -1328,9 +1328,11 @@ recomputed from, and it stays in recorded order; the reduction runs after it has
 landed. Both files come from the same run, so a figure in one belongs to the
 samples in the other.
 
-What the file looks like. This is run 1 of "The live frame split into step,
-plot and blit" below, quoted whole rather than re-run, so the shape and a
-recorded row are the same bytes:
+What the file looks like. This is run 1 of "The live frame split into its
+phases" below, quoted whole rather than re-run, so the shape and a recorded row
+are the same bytes. **It is a `'SWRMFRM2'` report**, so it carries a `step`
+line where a run of the current executable writes a `build` line and a `pass`
+line; the rest of the shape is unchanged:
 
 ```
 swarm.asm frame-time capture
@@ -1394,7 +1396,7 @@ travel together:
 $b = [IO.File]::ReadAllBytes('swarm-frames.bin')
 $freq = [BitConverter]::ToUInt64($b, 8)
 $count = [BitConverter]::ToUInt64($b, 16)
-$plane = 3   # 0 step, 1 plot, 2 blit, 3 the whole frame
+$plane = 4   # 0 build, 1 pass, 2 plot, 3 blit, 4 the whole frame
 $at = 40 + 8 * $count * $plane
 $ms = @(for ($i = 0; $i -lt $count; $i++) { [BitConverter]::ToUInt64($b, $at + 8 * $i) * 1000.0 / $freq })
 $s = $ms | Sort-Object
@@ -1406,11 +1408,16 @@ $s = $ms | Sort-Object
   $s[$count - 1])
 ```
 
-The dump is a 40-byte header - `'SWRMFRM2'`, then `qpc_freq`, `count`, `n`,
-`flags`, `seed` - followed by four planes of `count` little-endian `u64` tick
-deltas, in the order `step`, `plot`, `blit`, `frame`. `count` is the samples per
-plane, so the file is `40 + 32 * count` bytes. The magic is the format version:
-a `'SWRMFRM1'` dump is one plane and is read at `40 + 8 * i`. The scene the
+The dump is a 40-byte header - `'SWRMFRM3'`, then `qpc_freq`, `count`, `n`,
+`flags`, `seed` - followed by five planes of `count` little-endian `u64` tick
+deltas, in the order `build`, `pass`, `plot`, `blit`, `frame`. `count` is the
+samples per plane, so the file is `40 + 40 * count` bytes. The magic is the
+format version, and the two older ones are still readable: a `'SWRMFRM2'` dump
+is four planes in the order `step`, `plot`, `blit`, `frame` at `40 + 32 * count`
+bytes, and a `'SWRMFRM1'` dump is one plane read at `40 + 8 * i`. Every row
+tabulated in this document was taken from one of those two, so the snippet
+above needs its plane index and stride adjusted before it is pointed at an
+archived dump. The scene the
 samples belong to is inside the file, so a dump cannot be quoted against a run
 it did not come from. `flags` carries the plot mode as well as
 the spatial one, so it is what separates a 1-pixel capture from a `-splat` one.
@@ -1539,7 +1546,7 @@ rounds on a frozen uniform bank, from the harness, at 6 species and seed
 as a distribution over an evolving scene, from the exe. Reading a plot cost out
 of the difference between them would be comparing two different measurements.
 
-## The live frame split into step, plot and blit (#125)
+## The live frame split into its phases (#125)
 
 The first figures for the `BitBlt` anywhere in this document, and the first for
 the raster taken from the shipped executable rather than from the harness.
@@ -1548,22 +1555,35 @@ the raster taken from the shipped executable rather than from the harness.
 plot / blit)". Until this section the live instrument timed one undivided
 window, which is why three notes on that issue arrive at an unattributed
 remainder without being able to say whether any of it was the blit. The window
-is now read at four points and the dump carries four planes; the two sections
+is now read at five points and the dump carries five planes; the two sections
 above are what the instrument looked like before, and their rows are not
 re-taken here.
+
+**THE ROWS IN THIS SECTION ARE FOUR-PLANE ROWS AND THE INSTRUMENT IS NOW
+FIVE.** They were taken when `step` was one figure, and they are left as they
+were rather than re-labelled: a row says what the run it came from recorded.
+The paragraph below says what has changed since, and no build-against-pass row
+has been taken from the live executable yet - the reason is at the end of this
+section.
 
 ```powershell
 .\build\swarm.exe -capture
 .\build\swarm.exe presets\headline.txt -capture
 ```
 
-**What a phase is.** `step` is `pool_step`, which is the grid build and the
-force pass together - the exe makes one call and this instrument cannot divide
-it, so the build/pass half of #125's breakdown is still only available at the
-P/Invoke seam. `plot` is `sim_plot`, the clear and the raster into the DIB.
-`blit` is the `BitBlt` of that DIB into the window DC. `frame` is the whole
-work window, `t3 - t0`, and is the figure a row recorded before the split
-holds.
+**What a phase is, in the rows below.** `step` is `pool_step`, the grid build
+and the force pass together. `plot` is `sim_plot`, the clear and the raster
+into the DIB. `blit` is the `BitBlt` of that DIB into the window DC. `frame` is
+the whole work window and is the figure a row recorded before any split holds.
+
+**What a phase is now.** `step` is gone, replaced by `build` and `pass`. The
+frame no longer makes one `pool_step` call: it performs that routine's loop
+body itself - `pool_build`, then the read, then `pool_fanout` and the frame
+counter - so the division is the product's own rather than a seam figure taken
+on a harness scene. The cost of writing the step out twice is that the two
+statements can drift, and `LiveFrameStepEquivalenceTests` is what stands under
+it: it reads both sources and refuses a `pool_step` that grew an operation the
+live frame does not perform, in either direction.
 
 ### The built-in acceptance preset - n = 8,192, rmax = 0.05, g = 16
 
@@ -1688,11 +1708,23 @@ half predicted about itself: it measured three OUT states, found none below
 is, and the settle-depth section reads its lit share down to 12.6%. Everything
 left over is `step`, which this instrument cannot divide into build and pass.
 
-**So decision 11's four phases are three-quarters measured live.** `plot` and
-`blit` have their own distributions from the shipped exe; `build` and `pass`
-are one `pool_step` call here and stay split only at the P/Invoke seam, which
-is what the sections above them do. That is the part of #125's per-phase
-acceptance this instrument cannot reach.
+**So decision 11's four phases were three-quarters measured live when these
+runs were taken.** `plot` and `blit` had their own distributions from the
+shipped exe; `build` and `pass` were one `pool_step` call and were split only
+at the P/Invoke seam, which is what the sections above them do.
+
+**THE INSTRUMENT REACHES THE FOURTH PHASE NOW, AND NO ROW HAS BEEN TAKEN WITH
+IT.** The frame is read at five points and the dump carries `build` and `pass`
+as separate planes, so the sentence above about a remainder this instrument
+cannot divide has stopped being true of the executable and stays true of the
+rows. What is missing is a run, and the reason is the one the ported-cores
+section measures at the end of this document: a foreign process held 419% of
+one core across every run taken tonight, and the instrument was left unused
+rather than pointed at a host in that state. `CaptureReportTests` runs the full
+3,600-frame capture on every `dotnet test`, asserts the four phases sum to the
+frame exactly over all of them, and requires the `build` and `pass` planes to
+carry work in more than half the frames - so the split is exercised and
+refusable without a published row standing behind it.
 
 ### These three runs do not reproduce the rows recorded at `33047f3`
 

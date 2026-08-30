@@ -30,10 +30,10 @@ public sealed class CaptureReportTests
 
     /// <summary>
     /// CAP_SERIES in src/swarm.asm, and the plane order the dump is written
-    /// in. The first three are the phases the work window is split into; the
-    /// fourth is the whole window they add up to.
+    /// in. The first four are the phases the work window is split into; the
+    /// fifth is the whole window they add up to.
     /// </summary>
-    private static readonly string[] Planes = ["step", "plot", "blit", "frame"];
+    private static readonly string[] Planes = ["build", "pass", "plot", "blit", "frame"];
 
     [Fact]
     public void ACaptureRunWritesTheDumpAndAReportThatAgreesWithIt()
@@ -54,7 +54,7 @@ public sealed class CaptureReportTests
             Assert.True(File.Exists(reportPath), $"no swarm-frames.txt in {work.FullName}");
 
             var dump = File.ReadAllBytes(dumpPath);
-            Assert.Equal("SWRMFRM2", System.Text.Encoding.ASCII.GetString(dump, 0, 8));
+            Assert.Equal("SWRMFRM3", System.Text.Encoding.ASCII.GetString(dump, 0, 8));
             ulong freq = BitConverter.ToUInt64(dump, 8);
             ulong count = BitConverter.ToUInt64(dump, 16);
             uint n = BitConverter.ToUInt32(dump, 24);
@@ -74,14 +74,42 @@ public sealed class CaptureReportTests
                 }
             }
 
-            // The three phases are consecutive deltas of four reads and the
+            // The four phases are consecutive deltas of five reads and the
             // frame is the outermost pair, so the identity is exact rather than
             // approximate. It is what says the planes describe one window and
-            // not three unrelated ones: a read taken on the wrong side of a
+            // not four unrelated ones: a read taken on the wrong side of a
             // call, or a plane written at the wrong offset, breaks it.
+            int whole = Planes.Length - 1;
             for (int i = 0; i < (int)count; i++)
             {
-                Assert.Equal(planes[3][i], planes[0][i] + planes[1][i] + planes[2][i]);
+                ulong parts = 0;
+                for (int p = 0; p < whole; p++)
+                    parts += planes[p][i];
+                Assert.Equal(planes[whole][i], parts);
+            }
+
+            // The build and the pass are the split #125 asks for, and a split
+            // that recorded one of them as nothing would satisfy the identity
+            // above while saying nothing at all. The shipped scene runs
+            // unpaused for every one of these frames, so both phases carry
+            // real work in every frame.
+            //
+            // The bar is the MEDIAN rather than "any frame", and that is the
+            // difference between a check and a formality: with the read between
+            // the two halves moved to the wrong side of the build, the build
+            // plane measures a compare and a jump, which is under one 100 ns
+            // tick and reads as zero in nearly every frame - but not in
+            // literally all of them, so "any nonzero frame" passes on it. The
+            // grid build at this scene is microseconds, so its median is many
+            // ticks.
+            for (int p = 0; p < 2; p++)
+            {
+                int nonzero = planes[p].Count(v => v > 0);
+                Assert.True(
+                    nonzero * 2 > (int)count,
+                    $"the {Planes[p]} plane is zero in {(int)count - nonzero} of {count} frames, so the " +
+                    "work window is not actually divided there - a phase that measures a branch " +
+                    "rather than the work reads like this");
             }
 
             // The dump is the recorded order, and the reduction sorts in place,
