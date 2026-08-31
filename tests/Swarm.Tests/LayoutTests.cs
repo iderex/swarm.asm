@@ -81,11 +81,13 @@ public sealed class LayoutTests
         Assert.Equal(0ul, swarm_layout_bytes(in bad));
 
         bad = Valid();
-        // 0 auto / 1 AVX2 / 2 AVX-512 / 3 scalar / 4 AVX2+FMA (#162); 5 invalid.
-        // This fixture is one past PATH_MAX, so it moves whenever an id is
-        // added - which is the point: a widened accept gate that forgot to
-        // widen its bound would still be refusing something here.
-        bad.ForcePath = 5;
+        // The defined ids are PATH_AUTO..PATH_MAX in src/kernel/abi.inc, which
+        // is where they are read rather than restated here. This fixture is
+        // the first value past PATH_MAX, written as a literal on purpose: an
+        // id added over there without moving it turns this assertion red,
+        // instead of leaving it asserting a refusal the widened gate has
+        // stopped making.
+        bad.ForcePath = 4;
         Assert.Equal(0ul, swarm_layout_bytes(in bad));
 
         bad = Valid();
