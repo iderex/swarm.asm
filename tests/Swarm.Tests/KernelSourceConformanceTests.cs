@@ -750,6 +750,85 @@ public sealed class KernelSourceConformanceTests
             string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// The AVX2 force group is FUSED, and it is fused at exactly the five sites
+    /// issue #162 names.
+    ///
+    /// WHY THIS IS A SOURCE SCAN AND NOT A BEHAVIOUR TEST. Nothing else in the
+    /// tree can say the fusion is present. The parity tiers are bounds, and a
+    /// bound cannot tell one rounding from another; what DID move when the
+    /// fusion landed - the recorded divergence envelope, the README raster, the
+    /// wrap-pin landing - are all re-baselined artefacts, so a silent revert to
+    /// the unfused instructions would redden them for a reason a reader would
+    /// have to reconstruct. This reddens naming the missing instruction.
+    ///
+    /// The five, by the expression each one computes:
+    /// <code>
+    /// vfmadd231ps   r2 = dx*dx + dy*dy      (the add of the two squares)
+    /// vfmsub213ps   rep = xn*invbeta - 1
+    /// vfnmadd213ps  tt  = 1 - |..|*inv1mb
+    /// vfmadd231ps   fx += q*dx
+    /// vfmadd231ps   fy += q*dy
+    /// </code>
+    ///
+    /// `att = tt*a` is a lone mul with no add to fuse into, and it is not
+    /// counted. The count is asserted exactly rather than as a floor, so a
+    /// sixth FMA appearing - which would be a new arithmetic decision - fails
+    /// here instead of landing unremarked.
+    ///
+    /// It is scoped to the macro body rather than to the file, so an FMA in
+    /// some future neighbouring routine is out of scope by construction and
+    /// this scan keeps saying only what it can see.
+    /// </summary>
+    [Fact]
+    public void TheAvx2ForceGroupIsFusedAtTheFiveSites()
+    {
+        var expected = new Dictionary<string, int>
+        {
+            ["vfmadd231ps"] = 3,
+            ["vfmsub213ps"] = 1,
+            ["vfnmadd213ps"] = 1,
+        };
+
+        string body = null;
+        foreach (var path in KernelIncFiles())
+        {
+            var lines = File.ReadAllLines(path);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var m = MacroDefRegex.Match(lines[i]);
+                if (!m.Success || m.Groups[1].Value != "force_group")
+                {
+                    continue;
+                }
+
+                Assert.True(body is null, "more than one `macro force_group` definition under src/kernel/");
+                var (end, found) = MacroBody(lines, i);
+                i = end;
+                body = found;
+            }
+        }
+
+        Assert.True(body is not null, "no `macro force_group` definition found under src/kernel/");
+
+        var offenders = new List<string>();
+        foreach (var (mnemonic, want) in expected)
+        {
+            int got = WholeWord(mnemonic).Matches(body).Count;
+            if (got != want)
+            {
+                offenders.Add($"force_group holds {got} `{mnemonic}`, expected {want}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "the AVX2 force group is fused at five sites (issue #162): five mul-then-add/sub pairs " +
+            "are one FMA each, which is PATH_AVX2's arithmetic rather than a spelling of it. " +
+            "Losing one silently un-fuses the path and moves its bits back:\n  " +
+            string.Join("\n  ", offenders));
+    }
+
     // A bare vector register named in code: xmm0-15, ymm0-15, zmm0-15. The
     // parameterised form is `V#3`, which carries no register-file letters and
     // does not match.

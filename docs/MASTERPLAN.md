@@ -225,44 +225,59 @@ is authorized only if the exact-lever measurement (the divider microbench #59
 and the IEEE-exact software-pipelining contingency #61) fails to close the
 headline-preset gap; it does not exist in code today.
 
-**Amendment (2026-08-28, #162): `force_path = 4` is the FUSED AVX2 body, and
-the id is REUSED rather than shared.** The paragraph above reserved 4 for
-"AVX2-fast" (`vrsqrtps` + one Newton-Raphson refinement); the resolution below
-closed that option not-pursued, it never existed in code, and
-`pp_validate_params` refused the id with `IERR_PARAMS` at every commit up to
-this one - so no caller can have depended on the reserved meaning. The
-reservation is retired and the id carries the fused body instead. Its shape is
-the one that paragraph worked out for an opt-in path and is unchanged by the
-reuse: never auto-selected, selectable only by the caller, exactly as
-`force_path = 3` is. What does NOT come with it is the rsqrt narrowing - the
-`vrsqrtps`/`vrcpps` ban stands unchanged everywhere in `src/kernel/`, path 4
-executes no approximate instruction, and the conformance scan is untouched.
+**Amendment (2026-08-28, #162), SUPERSEDED 2026-08-31 and kept because it is
+what the next amendment reverses.** It read `force_path = 4` as the FUSED AVX2
+body, reusing an id the paragraph above had reserved for "AVX2-fast"
+(`vrsqrtps` + one Newton-Raphson refinement) and the resolution below had
+closed not-pursued. Its argument for the reuse was sound and is not what was
+overturned: the reserved option never existed in code and `pp_validate_params`
+refused the id with `IERR_PARAMS` at every commit up to that one, so no caller
+could have depended on the reserved meaning. What was overturned is that the
+fusion belonged behind an id at all. The `vrsqrtps`/`vrcpps` ban was untouched
+by it and is untouched by what replaces it.
 
-Two sentences elsewhere in this document made this amendment necessary in a way
-the reservation did not. The `id[]` rationale under decision 3 calls the asm
-"FMA", and the epsilon-horizon entry names its figure "FMA-asm vs oracle"; both
+Two sentences elsewhere in this document made that amendment necessary in a way
+the reservation did not. The `id[]` rationale under decision 3 called the asm
+"FMA", and the epsilon-horizon entry named its figure "FMA-asm vs oracle"; both
 described an intended kernel rather than the one in the tree, which emitted no
-FMA instruction at all until #162. They are corrected where they stand rather
-than here.
+FMA instruction at all until #162. They were corrected where they stand.
+
+**Amendment (2026-08-31, #162): A PATH ID NAMES AN ALGORITHM, NOT AN ENCODING
+OF ONE, so an encoding change re-baselines its path rather than forking one.**
+The AVX2 force group is fused inside `force_path = 1`, and `force_path = 4` is
+retired: `PATH_MAX` is `PATH_SCALAR` again and the id is refused with
+`IERR_PARAMS` as it was before 2026-08-28.
+
+The tie could not be broken by measurement - both shapes emit the same
+instructions and produce the same number - so it was taken on what each costs
+the tree afterwards. An id spends an ABI slot permanently and doubles what the
+per-path goldens must cover, forever, to record a difference in how one
+arithmetic is spelled; every later reader has to learn that two ids mean one
+algorithm and every later path decision inherits a narrower slot space. Fusing
+in place costs once, and only because all three artefacts it moves are
+reproducible by construction: path 1's recorded divergence envelope, the two
+README media assets, and the wrap-pin landing search. A golden that could not
+be regenerated would have decided this the other way.
 
 **The clause "introduced only inside path 4, so path 1's exact bits are
-untouched" is what this amendment KEEPS, not what it spends.** Path 1 is
-unchanged: it is the same instantiation of the same macro body, and its measured
-divergence against the oracle reproduces the 2026-08-05 recorded envelope digit
-for digit at n = 200, S = 1/4/8. Fusing was landed behind an id precisely so
-that sentence could stay true.
+untouched" is what this amendment SPENDS.** Path 1's bits moved on 2026-08-31,
+deliberately, and every artefact that held them was re-baselined in the same
+change - separately from the instruction change, so the goldens are visibly
+downstream of it.
 
-**What the fused path's determinism guarantee is, stated narrowly.** FMA is
-IEEE-correctly-rounded and cross-vendor bit-identical, so path 4 is bit-exact
-per code path exactly as paths 1-3 are, and it is NOT the narrower guarantee the
-retired path-4 reservation would have carried. What it is not is equally close
-to the oracle: the reference is an unfused f32 op sequence, so single rounding
-is a different distance from it rather than a smaller one. Measured on the
-kernel at n = 200 over 100 seeds, path 4 holds the 1e-5 / 1e-4 pair at S = 6
-with 9.3x and 3.4x margin and LEAVES it at S = 8, where seed `0x5EED002B`
-reaches 1.257062e-04 on velocity. `FusedPathTests` asserts the horizon it
-measured and records the breach; the oracle-epsilon entry below is a path-1
-figure and is not widened to cover path 4.
+**What path 1's determinism guarantee is after the fusion, stated narrowly.**
+Unchanged in kind: FMA is IEEE-correctly-rounded and cross-vendor
+bit-identical, so path 1 is bit-exact per code path, cross-vendor and
+cross-runner, exactly as it was and exactly as paths 2 and 3 are. What moved is
+its DISTANCE FROM THE ORACLE, which is a different property. The reference is
+an unfused f32 op sequence, so single rounding is a different distance from it
+rather than a smaller one, and it is a second divergence source beside the
+summation-order difference the path already carried. Measured on the kernel at
+n = 200 over 100 seeds, path 1 now holds the 1e-5 / 1e-4 pair through S = 7 and
+LEAVES it at S = 8, where seed `0x5EED002B` reaches 1.257062e-04 on velocity.
+`Avx2ParityHorizonTests` asserts at S = 6, where the pair holds with 9.3x and
+3.4x margin, and its header records the breach rather than hiding it. The
+oracle-epsilon entry below carries the re-measured envelope.
 
 **Not yet measured (#162 stays open for it):** what fusing BUYS. It was built
 to cut the co-limiting non-divide FP ops #59 measured, and no speed figure for
@@ -868,11 +883,12 @@ disclosed reference machine only).
    floor is known before the 1M claim is due.
 5. **Oracle epsilon horizon.** 1e-5 absolute at S = 8 for asm vs
    unfused-oracle rests on assumed divergence growth. (This risk was written
-   naming the asm "FMA-asm"; the kernel emitted no FMA instruction until #162,
-   and everything recorded below it was measured on the unfused AVX2 body.
-   Corrected 2026-08-28 so the figures are not read as fused ones - the fused
-   path is `force_path = 4`, carries its own figures in `FusedPathTests`, and
-   is not covered by this entry.) Probe: measure empirical
+   naming the asm "FMA-asm"; the kernel emitted no FMA instruction until #162.
+   Corrected 2026-08-28, when the fusion sat behind `force_path = 4` and the
+   figures below were the unfused path 1's; corrected again 2026-08-31, when
+   the fusion moved into path 1 itself and those figures were re-measured. The
+   name in the risk's own title is accurate again and the figures under the
+   resolution are the fused ones.) Probe: measure empirical
    per-step divergence growth at n = 4096 across 100 seeds; tighten tolerances
    or horizons from data, recorded in the test with the measurement.
    **Resolution (2026-08-05, #120):** the probe ran, as the opt-in sweep in
@@ -892,6 +908,20 @@ disclosed reference machine only).
    case in the tree runs at n <= 200, inside the measured domain, so nothing
    asserted today sits outside it. What this line previously got wrong was
    stating the tolerance without the count it is bounded by.
+   **Re-measured 2026-08-31 (#162), and THE DOMAIN NOW CARRIES A HORIZON AS
+   WELL AS A COUNT.** Fusing the AVX2 force group in place moved path 1's
+   figures; the same sweep, same 100 seeds, same parameters, on the fused
+   kernel: at n = 200, S = 8 velocity is 1.26e-04, which is OUTSIDE the 1e-4
+   it was inside by 1.4x, and one seed in the hundred does it. The pair holds
+   through S = 7 (1.31e-06 and 2.99e-05, 7.6x and 3.3x margin) and no longer
+   at S = 8. Above n = 200 the shape is unchanged: at n = 1024 position leaves
+   by S = 6 and velocity by S = 4, at n = 4096 velocity leaves by S = 2 and
+   position by S = 3, reaching 7.01e-03 / 3.10e-01 by S = 8. The scalar path
+   is still bit-exact against the oracle at every count and horizon, which is
+   what says the fusion reached path 1 and nothing else. The recorded envelope
+   in `OracleDivergenceSweep` moved with these figures, and
+   `Avx2ParityHorizonTests` is the case that asserts the pair over the hundred
+   seeds, at S = 6.
 6. **Wrap canonicalization completeness.** The p ≥ 1.0 pin is proven for the
    floor-subtract path; other producers of boundary values (clamp
    interactions, minimum image at exactly 0.5) need an empirical sweep.

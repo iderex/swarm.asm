@@ -302,13 +302,33 @@ public sealed unsafe class BoundaryPropertyTests
     /// expected hit.
     ///
     /// So it was searched for instead, against a build with the pin removed:
-    /// 1.688e8 particle-steps over twelve seeds produced four landings, and
-    /// this is the cheapest of the four to reproduce. It is pinned by seed and
-    /// step count rather than searched for again at run time, because the
-    /// search costs minutes and the engine is deterministic.
+    /// 1.6884e8 particle-steps over twelve seeds (n = 4096, 3435 steps each,
+    /// seeds 1..12), and the earliest landing in that sweep is the one pinned
+    /// here. It is pinned by seed and step count rather than searched for again
+    /// at run time, because the search costs minutes and the engine is
+    /// deterministic.
+    ///
+    /// RE-SEARCHED 2026-08-31 (#162), because fusing the AVX2 force group moved
+    /// path 1's arithmetic and with it every landing this pin is about. The
+    /// same sweep run against both builds, each with the two pin instructions
+    /// removed:
+    ///
+    /// <code>
+    /// unfused  1.6884e8 particle-steps, 5 landings, earliest seed 11 step 1211 y[3229]
+    /// fused    1.6884e8 particle-steps, 1 landing,  earliest seed 11 step 1212 y[3229]
+    /// </code>
+    ///
+    /// The unfused arm reproduces the landing recorded on 2026-08-05 exactly,
+    /// which is what makes the fused arm beside it readable rather than merely
+    /// printed. The landing count is NOT the same as the four recorded in 2026,
+    /// and the difference is not explained here: this sweep records every
+    /// landing over a fixed 3435 steps per seed, and how the earlier one was
+    /// bounded is not written down anywhere this could be checked against.
+    /// What carries over unambiguously is the earliest landing, which is the
+    /// only one this test uses.
     ///
     /// PROVEN TO BITE: with the two pin instructions removed, this test reports
-    /// `y[3229] at step 1211 is 1, not 0`; with them present it reads 0. It is
+    /// `y[3229] at step 1212 is 1, not 0`; with them present it reads 0. It is
     /// the only test in the tree that tells those two builds apart.
     /// </summary>
     [Fact]
@@ -316,7 +336,7 @@ public sealed unsafe class BoundaryPropertyTests
     {
         _ = NativeKernel.Handle;
 
-        const uint n = 4096, species = 5, hitStep = 1211, hitIndex = 3229;
+        const uint n = 4096, species = 5, hitStep = 1212, hitIndex = 3229;
         var p = new SwarmParams
         {
             Version = 1, N = n, SpeciesN = species, Seed = 11,
