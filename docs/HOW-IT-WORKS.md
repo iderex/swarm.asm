@@ -181,9 +181,11 @@ matters when reading the benchmark ratios below.
 The AVX2 path is the production one, selected automatically when CPUID reports
 the feature. It has no early exit: it evaluates the whole force formula for all
 eight lanes and masks the out-of-range ones to zero. An AVX-512 path is
-designed, its detection and dispatch plumbing exists, and its instantiation is
-open work; the dispatch fails closed rather than falling through to an
-instruction the CPU does not have.
+designed and its detection exists - `swarm_cpu_paths` reports the feature - but
+its body is open work, so `force_path = 2` is refused at init on every host,
+one reporting the feature included. That refusal is the honest reading of the
+arena's path word: it names the body the pass will run, and until a 16-lane
+body exists there is nothing for it to name.
 
 ### Rendering and the window
 
