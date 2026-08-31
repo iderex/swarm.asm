@@ -9,8 +9,8 @@
 #
 # This workflow is deliberately ADVISORY: it is NOT wired into any required-
 # status-check ruleset, so it never blocks a merge. It surfaces a deterministic
-# hygiene signal; the maintainers keep the final say. The checks are tiered by
-# confidence so it does not red-flag reasonable PRs:
+# hygiene signal; I keep the final say. The checks are tiered by confidence so
+# it does not red-flag reasonable PRs:
 #   - FAIL (high confidence, near-zero false-positive):
 #       * no issue reference anywhere -- the PR title carries a bracketed ref
 #         (`[#N]`), or the PR body carries Closes/Fixes/Resolves/Refs #N or a

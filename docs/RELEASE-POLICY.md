@@ -29,8 +29,8 @@ one day.
 
 - **Version:** patch on the released line, bump `Z`, tag `X.Y.Z`.
 - **Still required:** a green CI gate and the adversarial-review pass -
-  security is exactly what that gate exists for. The maintainer gives the
-  final go and pushes the tag; security is never delayed by cadence.
+  security is exactly what that gate exists for. I give the final go and
+  push the tag; security is never delayed by cadence.
 
 ## 2. Bug-fix release - at most once per day
 
@@ -57,7 +57,7 @@ the on-disk preset/config format, in a way that is not backward compatible.
 
 - **Version:** bump `X`, reset `Y` and `Z` to `0`, tag `X.Y.Z`.
 - **Cadence:** none fixed - a breaking release happens only when the change
-  genuinely requires it, and only by the maintainer's explicit decision.
+  genuinely requires it, and only by my explicit decision.
 
 ## How a release ships
 
@@ -65,7 +65,7 @@ the on-disk preset/config format, in a way that is not backward compatible.
    breaking) from what changed.
 2. **Check the cadence gate** against the recent tags: security → proceed;
    bug-fix → stop if one shipped today; feature → stop if one shipped this
-   month; breaking → maintainer decision.
+   month; breaking → my decision.
 3. **Bump the version and update the changelog.** Move the relevant
    `Unreleased` entries in [CHANGELOG.md](../CHANGELOG.md) under the new
    version heading with today's date - the changelog bump is part of the
@@ -74,9 +74,9 @@ the on-disk preset/config format, in a way that is not backward compatible.
    the size budget, and the formatting check, all green.
 5. **Push the version tag.** Tag-push is the **only** publish trigger - there
    is no `gh release create` step and no separate publish action. Pushing a
-   version tag to this repository is a **maintainer-gated** action: an
-   unreviewed or accidental tag push is blocked by a local safety check
-   before it reaches the remote, and only the maintainer can clear it.
+   version tag to this repository is **gated on me**: an unreviewed or
+   accidental tag push is blocked by a local safety check before it reaches
+   the remote, and only I can clear it.
 
 There is no separate GitHub Release object to manage: the tag is the
 release. GitHub releases are immutable once created and permanently burn a

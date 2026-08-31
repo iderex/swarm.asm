@@ -9,7 +9,7 @@ tools/fasm/
 bin/
 obj/
 
-# Local maintainer tooling and working notes - never in the public tree.
+# Local tooling and working notes I keep - never in the public tree.
 .claude/
 CLAUDE.md
 docs/internal/

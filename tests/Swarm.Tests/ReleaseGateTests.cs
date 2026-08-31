@@ -38,7 +38,7 @@ namespace Swarm.Tests;
 /// the tag trigger fires, whether the attestation is produced, and whether the
 /// artifacts carry the bytes are facts about an execution, and the only place
 /// they can be established is a tag run - which is #182, deliberately a
-/// separate issue because it needs a maintainer-authorized tag.
+/// separate issue because it needs a tag I authorize.
 /// </summary>
 public sealed class ReleaseGateTests
 {
