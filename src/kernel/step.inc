@@ -503,8 +503,6 @@ pass_core:
         je      pass_avx2
         cmp     eax, PATH_AVX512        ; shares the ymm body until #123 builds
         je      pass_avx2               ;   the zmm instantiation
-        cmp     eax, PATH_AVX2_FMA      ; the fused ymm body (#162), opt-in only
-        je      pass_avx2_fma
         jmp     pass_scalar             ; PATH_SCALAR, PATH_AUTO, anything else
 
 ; ------------------------------------------------------------------
@@ -784,15 +782,16 @@ macro force_particle_regs W, V {
 ; fail closed as assembler refusals and the mask ANDs would not. #164 rewrites
 ; this body against a golden of its own; it does not fill in else-arms.
 ;
-; `fused` selects the FMA instantiation (#162). It changes the ARITHMETIC and
-; is not a formatting switch: five mul-then-add/sub pairs collapse to one
-; instruction each, which rounds once instead of twice. Both arms compute the
-; same expression and neither is more correct than the other against the
-; oracle - the reference is an unfused f32 op sequence, so single rounding is
-; a DIFFERENT distance from it rather than a smaller one. That is why the
-; fused arm is reached only through its own opt-in path id and never from
-; PATH_AVX2, and why the two arms carry separate parity figures.
-macro force_group W, V, tail, fused {
+; FIVE SITES ARE FUSED (#162): the five mul-then-add/sub pairs are one FMA
+; each, rounding once instead of twice. That is the ARITHMETIC of PATH_AVX2
+; rather than a spelling of it, which is why it is written here once with no
+; switch beside it: a path id names an algorithm, not an encoding, so an
+; encoding change re-baselines its path rather than forking one (masterplan
+; decision 2, amended 2026-08-31). `att = tt*a` stays a lone mul - it has no
+; add to fuse with. Fusing is not a move TOWARD the oracle: the reference is
+; an unfused f32 op sequence, so single rounding is a DIFFERENT distance from
+; it, and the recorded parity envelope is what says how far.
+macro force_group W, V, tail {
         vmovups V#0, [rsi+r9]           ; dx = x[j] - xi ; min-image
         vsubps  V#0, V#0, V#8
         vroundps V#4, V#0, 0
@@ -803,14 +802,8 @@ macro force_group W, V, tail, fused {
         vsubps  V#1, V#1, V#4
         vmovaps [rsp+KA_DX], V#0        ; spill dx, dy
         vmovaps [rsp+KA_DY], V#1
-      if fused
         vmulps  V#2, V#0, V#0           ; r2 = dx*dx + dy*dy (one rounding)
         vfmadd231ps V#2, V#1, V#1
-      else
-        vmulps  V#2, V#0, V#0           ; r2 = dx*dx + dy*dy
-        vmulps  V#4, V#1, V#1
-        vaddps  V#2, V#2, V#4
-      end if
         vxorps  V#4, V#4, V#4
         vcmpps  V#3, V#2, V#4, 0x0E     ; r2 > 0
         vcmpps  V#4, V#2, V#11, 0x11    ; r2 < rmax2
@@ -830,23 +823,13 @@ macro force_group W, V, tail, fused {
         vsqrtps V#2, V#2                ; r
         vmulps  V#4, V#2, V#15          ; xn = r * invrmax
         vbroadcastss V#0, [rsp+KP_INVBETA]
-      if fused
         vfmsub213ps V#0, V#4, V#12      ; rep = invbeta*xn - 1 (mul commutes)
-      else
-        vmulps  V#0, V#4, V#0           ; rep = xn*invbeta - 1
-        vsubps  V#0, V#0, V#12
-      end if
         vaddps  V#1, V#4, V#4           ; att: 2xn - 1 - beta
         vsubps  V#1, V#1, V#12
         vsubps  V#1, V#1, V#13
         vandps  V#1, V#1, V#14          ; abs
         vbroadcastss V#5, [rsp+KP_INV1MB]
-      if fused
         vfnmadd213ps V#1, V#5, V#12     ; tt = 1 - |..|*inv1mb
-      else
-        vmulps  V#1, V#1, V#5
-        vsubps  V#1, V#12, V#1          ; tt = 1 - |..|*inv1mb
-      end if
         vmovups V#5, [r11+r9]           ; sj (species indices)
       if W = 8
         vpermps V#5, V#5, V#10          ; a[k] = matrow[sj[k]]
@@ -864,19 +847,10 @@ macro force_group W, V, tail, fused {
         vbroadcastss V#5, [rsp+KP_FS]
         vmulps  V#0, V#0, V#5           ; q = f*fs / r  (invalid: f=0, r=1 -> 0)
         vdivps  V#0, V#0, V#2
-      if fused
         vmovaps V#5, [rsp+KA_DX]        ; fx += q*dx ; fy += q*dy
         vfmadd231ps V#6, V#0, V#5
         vmovaps V#5, [rsp+KA_DY]
         vfmadd231ps V#7, V#0, V#5
-      else
-        vmovaps V#5, [rsp+KA_DX]        ; fx += q*dx ; fy += q*dy
-        vmulps  V#5, V#0, V#5
-        vaddps  V#6, V#6, V#5
-        vmovaps V#5, [rsp+KA_DY]
-        vmulps  V#0, V#0, V#5
-        vaddps  V#7, V#7, V#0
-      end if
 }
 
 ; force_reduce - collapse the W partial forces in V#6/V#7 to xmm6[0]/xmm7[0]
@@ -921,17 +895,18 @@ macro force_reduce W, V {
 ; Matches the oracle within the epsilon tier (its lane reduction order differs
 ; from the scalar path - that is the per-code-path golden's whole reason to exist).
 ;
-; EVERY LABEL IN HERE IS A FASM LOCAL, which is what makes two instantiations
-; legal: a local binds to the global label above it, so pass_avx2's .outer and
-; pass_avx2_fma's .outer are different labels. resolve_neighbour_runs jumps to
-; .single_run and .have_runs and is inside this macro for the same reason.
+; EVERY LABEL IN HERE IS A FASM LOCAL, and it stays a macro with one caller
+; for #164's sake rather than for a second AVX2 instantiation: a local binds to
+; the global label above it, so a 16-lane body instantiated beside this one
+; gets its own .outer. resolve_neighbour_runs jumps to .single_run and
+; .have_runs and is inside this macro for the same reason.
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
 ;             ymm0-15, flags (kernel tier; the seam saved the nonvolatiles)
 ;   MXCSR:    assumes the pinned seam MXCSR
 ;   align:    rsp = 0 mod 32 at entry (aligned ymm loads/spills)
 ; ------------------------------------------------------------------
-macro avx2_pass_body fused {
+macro avx2_pass_body {
         sub     rsp, KA_FRAME
         mov     [rsp+KP_LAST], r8d
         mov     r12d, edx               ; i = first
@@ -978,14 +953,14 @@ macro avx2_pass_body fused {
   .g8:
         cmp     r9, r8
         jae     .g8done
-        force_group FG_LANES, ymm, 0, fused
+        force_group FG_LANES, ymm, 0
         add     r9, FG_LANES*4
         jmp     .g8
   .g8done:
         and     eax, FG_LANES-1          ; tail lanes = count & (W-1)
         jz      .run_next                ; run length a lane multiple -> no tail
         force_tail_mask FG_LANES, ymm
-        force_group FG_LANES, ymm, 1, fused ; r9 at the tail group offset
+        force_group FG_LANES, ymm, 1 ; r9 at the tail group offset
   .run_next:
         add     rcx, 8
         dec     r13d
@@ -1001,9 +976,12 @@ macro avx2_pass_body fused {
         ret
 }
 
-; pass_avx2 - the unfused AVX2 path (PATH_AVX2). Its bits are the recorded ones
-; and #162 does not touch them: this is avx2_pass_body's unfused instantiation
-; and assembles to the same bytes it did before that macro existed.
+; pass_avx2 - the AVX2 path (PATH_AVX2), fused at the five sites #162 names.
+; Its CPU requirement is unchanged by the fusion: cpu_paths_core cannot report
+; CPU_AVX2 without FMA (cpuid.inc leaf 1 ecx bit 12), so no CPU that reaches
+; this body lacks the unit, and no new feature bit is spent. The bits it
+; produces MOVED on 2026-08-31 and the recorded parity envelope moved with
+; them; nothing that reads those bits was left asserting the pre-fusion ones.
 ;   in:       rcx = arena, edx = first, r8d = last
 ;   out:      OUT[i].{x,y,vx,vy} integrated for i in [first, last)
 ;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
@@ -1011,23 +989,7 @@ macro avx2_pass_body fused {
 ;   MXCSR:    assumes the pinned seam MXCSR
 ;   align:    rsp = 0 mod 32 at entry (aligned ymm loads/spills)
 pass_avx2:
-        avx2_pass_body 0
-
-; pass_avx2_fma - the fused AVX2 path (PATH_AVX2_FMA, #162). Same neighbourhood,
-; same lane hygiene, same reduction order; five mul-then-add/sub pairs rounded
-; once instead of twice. Never auto-selected: init resolves PATH_AUTO to
-; PATH_AVX512 or PATH_AVX2 and never to this id, so reaching it is an explicit
-; caller act, exactly as PATH_SCALAR is. Its CPU requirement is PATH_AVX2's -
-; cpu_paths_core cannot report CPU_AVX2 without FMA (cpuid.inc leaf 1 ecx bit
-; 12), so no CPU that reaches this body lacks the unit.
-;   in:       rcx = arena, edx = first, r8d = last
-;   out:      OUT[i].{x,y,vx,vy} integrated for i in [first, last)
-;   clobbers: rax, rcx, rdx, r8, r9, r10, r11, rsi, rdi, rbx, r12-r15,
-;             ymm0-15, flags (kernel tier; the seam saved the nonvolatiles)
-;   MXCSR:    assumes the pinned seam MXCSR
-;   align:    rsp = 0 mod 32 at entry (aligned ymm loads/spills)
-pass_avx2_fma:
-        avx2_pass_body 1
+        avx2_pass_body
 
 ; ------------------------------------------------------------------
 ; wrap_body - p -= floor(p); if p >= 1.0: p = 0.0. One body, two encodings
