@@ -106,31 +106,14 @@ PATH_SCALAR = 3                         ; the reference path: its own floor is
                                         ;   the image's own AVX1 baseline (the
                                         ;   seam's vmovaps), so init accepts it
                                         ;   against any CPU that gets that far
-PATH_AVX2_FMA = 4                       ; the fused AVX2 body (#162): PATH_AVX2's
-                                        ;   neighbourhood, lane hygiene and
-                                        ;   reduction order, with five
-                                        ;   mul-then-add/sub pairs rounded once
-                                        ;   instead of twice. Its CPU
-                                        ;   requirement IS PATH_AVX2's -
-                                        ;   cpu_paths_core cannot report
-                                        ;   CPU_AVX2 without FMA - so it needs
-                                        ;   no new feature bit and adds none.
-                                        ;   NEVER AUTO-SELECTED: PATH_AUTO
-                                        ;   resolves to PATH_AVX512 or
-                                        ;   PATH_AVX2 and never here, so this
-                                        ;   id is reached only by a caller
-                                        ;   naming it, exactly as PATH_SCALAR
-                                        ;   is. THE ID IS REUSED, and the
-                                        ;   masterplan's decision 2 is where
-                                        ;   that is argued: 4 was reserved for
-                                        ;   the vrsqrtps "AVX2-fast" option,
-                                        ;   which #38 closed not-pursued and
-                                        ;   which never existed in code, so no
-                                        ;   caller can have depended on it -
-                                        ;   pp_validate_params refused 4 with
-                                        ;   IERR_PARAMS at every commit before
-                                        ;   this one.
-PATH_MAX    = PATH_AVX2_FMA             ; the largest defined id. The accept
+; THERE IS NO ENCODING ID. 4 briefly named a fused AVX2 body beside the
+; unfused PATH_AVX2 (#162, 2026-08-28) and was retired on 2026-08-31 when the
+; fusion moved into PATH_AVX2 itself: a path id names an ALGORITHM, not an
+; encoding of one, so an encoding change re-baselines its path rather than
+; forking one (masterplan decision 2). 4 names nothing again, and
+; pp_validate_params refuses it with IERR_PARAMS as it did at every commit
+; before 2026-08-28.
+PATH_MAX    = PATH_SCALAR               ; the largest defined id. The accept
                                         ;   gate in pp_validate_params bounds
                                         ;   the field with one unsigned compare
                                         ;   against this, which is only sound

@@ -40,49 +40,66 @@ public sealed unsafe class OracleDivergenceSweep
     private static readonly uint[] Counts = [200, 1024, 4096];
 
     // The horizons the risk names, and the AVX2 figures recorded at them on
-    // 2026-08-05. Only path 1 has an envelope: path 3 is asserted exactly.
+    // 2026-08-31. Only path 1 has an envelope: path 3 is asserted exactly.
     private static readonly int[] Horizons = [1, 4, 8];
     private static readonly Dictionary<uint, (float[] Pos, float[] Vel)> RecordedAvx2 = new()
     {
-        [200] = ([5.9604645e-08f, 2.9802322e-07f, 3.1590462e-06f], [2.9802322e-07f, 5.3048134e-06f, 6.9618225e-05f]),
-        [1024] = ([1.1920929e-07f, 2.8014183e-06f, 5.2899122e-05f], [1.3113022e-06f, 9.214878e-05f, 2.5424957e-03f]),
-        [4096] = ([1.1920929e-07f, 8.5912645e-05f, 7.598579e-03f], [5.722046e-06f, 4.2147636e-03f, 3.0829597e-01f]),
+        [200] = ([5.9604645e-08f, 4.172325e-07f, 2.5629997e-06f], [4.172325e-07f, 9.953976e-06f, 1.257062e-04f]),
+        [1024] = ([1.1920929e-07f, 2.8703362e-06f, 5.1796436e-05f], [1.1920929e-06f, 1.4179945e-04f, 1.5134811e-03f]),
+        [4096] = ([1.1920929e-07f, 8.812547e-05f, 7.0055723e-03f], [5.722046e-06f, 4.323125e-03f, 3.0997157e-01f]),
     };
     private const uint Species = 5;
     private const int Seeds = 100, Horizon = 8;
     private const float RMax = 0.2f, Beta = 0.3f, Dt = 0.02f, Friction = 0.71f, ForceScale = 10f;
 
-    // MEASURED 2026-08-05, 100 seeds, rmax 0.2, beta 0.3, dt 0.02,
+    // RE-MEASURED 2026-08-31 (#162), 100 seeds, rmax 0.2, beta 0.3, dt 0.02,
     // friction 0.71, force_scale 10, brute force, on the reference machine.
+    // The figures below MOVED because the AVX2 force group was fused in place:
+    // five mul-then-add/sub pairs now round once instead of twice, which is a
+    // second divergence source beside the summation-order difference the path
+    // already carried. The 2026-08-05 figures this replaces are in the history
+    // of this file, and the pull request that landed the fusion states both
+    // sets side by side.
+    //
     // Max per-component drift against the oracle, by particle count and step:
     //
-    //   path 3 (scalar): 0 at EVERY n and EVERY S. The scalar path reproduces
-    //   the C# reference bit for bit, so the epsilon does no work there at all.
+    //   path 3 (scalar): 0 at EVERY n and EVERY S, unchanged by the fusion.
+    //   The scalar path reproduces the C# reference bit for bit, so the
+    //   epsilon does no work there at all - and re-measuring that is what says
+    //   the fusion reached path 1 and nothing else.
     //
-    //   path 1 (AVX2), pos / vel:
-    //     n=200   S=1 5.96e-08 / 2.98e-07   S=4 2.98e-07 / 5.30e-06
-    //             S=6 6.56e-07 / 2.67e-05   S=8 3.16e-06 / 6.96e-05
-    //     n=1024  S=1 1.19e-07 / 1.31e-06   S=4 2.80e-06 / 9.21e-05
-    //             S=6 1.31e-05 / 5.64e-04   S=8 5.29e-05 / 2.54e-03
-    //     n=4096  S=1 1.19e-07 / 5.72e-06   S=4 8.59e-05 / 4.21e-03
-    //             S=6 1.08e-03 / 5.37e-02   S=8 7.60e-03 / 3.08e-01
+    //   path 1 (AVX2, fused), pos / vel:
+    //     n=200   S=1 5.96e-08 / 4.17e-07   S=4 4.17e-07 / 9.95e-06
+    //             S=6 1.07e-06 / 2.92e-05   S=7 1.31e-06 / 2.99e-05
+    //             S=8 2.56e-06 / 1.26e-04
+    //     n=1024  S=1 1.19e-07 / 1.19e-06   S=4 2.87e-06 / 1.42e-04
+    //             S=6 1.11e-05 / 4.78e-04   S=8 5.18e-05 / 1.51e-03
+    //     n=4096  S=1 1.19e-07 / 5.72e-06   S=4 8.81e-05 / 4.32e-03
+    //             S=6 9.37e-04 / 4.66e-02   S=8 7.01e-03 / 3.10e-01
     //
-    // THE READING. The 1e-5 / 1e-4 pair holds at n=200 and nowhere above it.
-    // At n=200, S=8 it holds with 3.2x margin on position and 1.4x on
-    // velocity - thin, and worth knowing, because that is the size the suite
-    // actually asserts at. At n=1024 position leaves the tolerance by S=6 and
-    // velocity by S=5; at n=4096 velocity leaves by S=2 and position by S=3.
+    // THE READING, AND IT MOVED IN ONE PLACE THAT MATTERS. The 1e-5 / 1e-4
+    // pair holds at n=200 and nowhere above it, as before - but at n=200 it
+    // now stops at S=7 rather than S=8. Velocity at S=8 is 1.26e-04, outside
+    // the 1e-4 it was inside by 1.4x before the fusion, and it is one seed in
+    // the hundred that does it. At S=7 the pair holds with 7.6x margin on
+    // position and 3.3x on velocity. At n=1024 position leaves the tolerance
+    // by S=6 and velocity by S=4; at n=4096 velocity leaves by S=2 and
+    // position by S=3.
     //
-    // So the pair is CONFIRMED FOR THE DOMAIN THE HARNESS USES IT IN and is
-    // not a general statement about the engine. Every parity case in the tree
-    // runs at n <= 200, so nothing asserted today sits outside it. What was
-    // wrong was the masterplan stating the tolerance without the n it is
-    // bounded by, which is repaired in the same change.
+    // So the pair is CONFIRMED FOR THE DOMAIN THE HARNESS USES IT IN, with a
+    // horizon rather than only a count attached to it, and it is not a general
+    // statement about the engine. Every parity case in the tree runs at
+    // n <= 200; Avx2ParityHorizonTests is the one that sweeps the hundred
+    // seeds and it asserts at S=6, inside the horizon above. The concrete
+    // cases in StepTests run at S=8 on their own seeds, where the drift is
+    // more than an order of magnitude inside the pair - a worst case over a
+    // hundred seeds is not what any single case measures, and that difference
+    // is the whole reason this sweep exists.
     //
     // Growth is roughly an order of magnitude per step once it starts, which
-    // is Lyapunov separation amplifying a summation-order difference, not an
-    // error accumulating. Bigger n means more terms per sum, so the seed
-    // difference is larger and the same growth starts from higher up.
+    // is Lyapunov separation amplifying a rounding difference, not an error
+    // accumulating. Bigger n means more terms per sum, so the seed difference
+    // is larger and the same growth starts from higher up.
 
     [Theory]
     [InlineData(1u)]
@@ -177,6 +194,15 @@ public sealed unsafe class OracleDivergenceSweep
         // recorded figure, so an ordinary re-baseline passes and a change of
         // regime does not: growth here is about an order of magnitude per
         // step, so a shift of one step in when it starts is a factor of ten.
+        //
+        // WHAT THAT BAND DID NOT CATCH, recorded because it happened. Fusing
+        // the force group moved n=200 S=8 velocity from 6.96e-05 to 1.26e-04,
+        // which is outside the 1e-4 the harness claims and well inside four
+        // times the recorded figure, so this assertion would have stayed green
+        // while the claim it exists to justify stopped holding. The band is a
+        // change-of-regime detector and was never a tolerance check; what
+        // holds the tolerance is Avx2ParityHorizonTests, at the horizon the
+        // reading above names.
         for (int k = 0; k < envelope.Count; k++)
         {
             var (label, measured, recorded) = envelope[k];

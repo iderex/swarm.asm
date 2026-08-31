@@ -158,7 +158,8 @@ public sealed unsafe class ArenaTests
     // covers. IERR_PARAMS is therefore the correct rc, not IERR_PATH, and the
     // arena stays untouched for the same fail-closed reason.
     [Theory]
-    [InlineData(5u)]           // one past PATH_MAX (PATH_AVX2_FMA = 4, #162)
+    [InlineData(4u)]           // one past PATH_MAX (the encoding id #162 retired)
+    [InlineData(5u)]           // and the one past that
     [InlineData(0x80000000u)]  // the sign bit, which a signed compare would let through
     [InlineData(uint.MaxValue)]
     public void InitRefusesAPathIdOutsideTheDefinedSet(uint forcePath)

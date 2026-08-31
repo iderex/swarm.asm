@@ -32,13 +32,23 @@ public sealed unsafe class StepTests
         void* arena, float[] x, float[] y, float[] vx, float[] vy, uint[] species);
 
     // The 1e-5 position / 1e-4 velocity tolerances below are MEASURED rather
-    // than assumed, and they are bounded by n. OracleDivergenceSweep records
-    // the sweep that established it (100 seeds, 2026-08-05): at n = 200, S = 8
-    // the worst drift is 3.16e-06 position and 6.96e-05 velocity, so the pair
-    // holds here with 3.2x and 1.4x margin. It does NOT hold above this count -
-    // at n = 4096 velocity leaves the tolerance by S = 2 - which is why every
-    // parity case in this file stays at n <= 200. Raising n in a case here
-    // means re-reading that sweep first.
+    // than assumed, and they are bounded by n AND by a horizon.
+    // OracleDivergenceSweep records the sweep that establishes it (100 seeds,
+    // re-measured 2026-08-31 after the AVX2 force group was fused in place):
+    // at n = 200 the pair holds through S = 7 with 7.6x and 3.3x margin, and
+    // at S = 8 velocity reaches 1.26e-04, outside the 1e-4. It does NOT hold
+    // above this count either - at n = 4096 velocity leaves by S = 2 - which
+    // is why every parity case in this file stays at n <= 200. Raising n in a
+    // case here means re-reading that sweep first.
+    //
+    // WHY THE S = 8 CASES BELOW STILL PASS, which is the part that reads as a
+    // contradiction until the two figures are separated. The sweep's figure is
+    // the WORST over a hundred seeds, and the S = 8 breach is one of those
+    // hundred. The cases here run at their own seeds and stay more than an
+    // order of magnitude inside the pair at S = 8. So the tolerance is
+    // justified for THESE cases and is no longer justified as a claim about
+    // any n = 200 seed at S = 8. Avx2ParityHorizonTests is where the claim
+    // over the hundred is asserted, and it asserts at S = 6.
     private const float RMax = 0.2f, Beta = 0.3f, Dt = 0.02f, Friction = 0.71f, ForceScale = 10f;
     private const int AhPadded = 32, AhFrame = 16, AhSize = 512;
 
