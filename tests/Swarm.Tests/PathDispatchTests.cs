@@ -46,6 +46,13 @@ public sealed unsafe class PathDispatchTests
     // exactly the word a future bug would leave behind.
     [Theory]
     [InlineData(0u)]           // PATH_AUTO
+    [InlineData(2u)]           // PATH_AVX512: a defined id with no body (#316).
+                               //   init_core refuses it, so no arena this
+                               //   engine writes can hold it and only a forged
+                               //   word gets here. It used to be a named arm
+                               //   jumping to the ymm body, which is why this
+                               //   case reads as the reference body only after
+                               //   that arm was removed.
     [InlineData(4u)]           // one past the id set (the encoding id #162 retired)
     [InlineData(5u)]           // and the one past that
     [InlineData(0x7FFFFFFFu)]
