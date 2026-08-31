@@ -650,6 +650,26 @@ pursued**; this decision's threading lever (worker pool + AVX-512) stands as
 the sole path to the 1M headline, unchanged from the original claim. Path 4
 stays a recorded, unbuilt design option. Refs #38 #59 #61.
 
+**Amendment (2026-08-31, #316): `force_path = 2` is refused on every host until
+the zmm body exists.** The decision above stores the resolved path id in the
+arena header and fails an AVX-512 request closed "on unsupported hardware".
+Both halves were true of the design and neither described the tree. No zmm
+instantiation exists yet, so the auto ladder resolved to `PATH_AVX512` wherever
+CPUID reported the feature and `pass_core` sent that id to the ymm body -
+`AH_PATH` said AVX-512 while the instructions were AVX2's, on exactly the
+hardware nobody could check - and an explicit `force_path = 2` was accepted
+there, returning success for a path it did not run. `AH_PATH` now names the
+body `pass_core` will run, which is the one reading the header word carries:
+the auto ladder resolves to `PATH_AVX2` alone, `force_path = 2` is refused with
+`IERR_PATH` on every host, one reporting F+DQ+VL included, and `pass_core`
+names no `PATH_AVX512` arm. The id keeps its meaning and its place in the dense
+id set, so `pp_validate_params` still accepts the field value and the refusal
+is `IERR_PATH` rather than `IERR_PARAMS`; what it loses is the ability to reach
+a header while nothing can execute it. #123 and #164 build the 16-lane body and
+restore both arms, CPU-gated as this decision describes, in the change that
+makes the claim true. `EveryResolvablePathIdHasABodyOfItsOwn` refuses the shape
+from returning.
+
 ### 8. RNG
 
 **Decision:** splitmix64, alone. One u64 state in the arena header; ~10

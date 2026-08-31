@@ -117,35 +117,39 @@ public sealed unsafe class ArenaTests
         }
     }
 
+    // PATH_AVX512 is refused at init on EVERY host, one reporting the feature
+    // included, because no zmm body exists to run it (#316). Before that, the
+    // id was accepted wherever CPUID reported AVX-512 and the ymm body ran, so
+    // AH_PATH named a path the instructions were not: a caller that asked for
+    // sixteen lanes got a success code, the AVX2 pass, and no reading that
+    // would tell the two apart.
+    //
+    // THIS TEST DOES NOT SKIP, and that is its point rather than a detail. The
+    // assertion is the same on both sides of the bit-1 divide, so the host it
+    // runs on cannot decide whether the property is checked. It replaces a
+    // test that requested AVX-512 as "a path the machine lacks" and therefore
+    // skipped itself on exactly the hosts this defect was about (#299).
+    //
+    // WHAT MOVED OUT OF COVERAGE WITH IT, stated because a reader counting
+    // fail-closed coverage would otherwise count it. The old test observed the
+    // CPU-FEATURE gate on PATH_AVX512; init.inc now names that id in no arm at
+    // all, so the gate is deleted rather than shadowed by the refusal below -
+    // there is no second branch hiding behind a green here. What is no longer
+    // exercised anywhere is a CPU-driven IERR_PATH: the arms that still carry
+    // one gate PATH_AVX2 on CPU_AVX2, which no host that can load this kernel
+    // lacks. That branch is unreachable from the suite rather than untested by
+    // choice.
     [Fact]
-    public void InitFailsClosedOnUnsupportedPath()
+    public void InitRefusesTheAvx512PathIdOnEveryHost()
     {
         _ = NativeKernel.Handle;
-        uint paths = swarm_cpu_paths();
-        // Request a path the machine lacks. Prefer AVX-512 when absent; if this
-        // machine has it, request nothing testable and skip.
-        uint want = (paths & CpuAvx512) == 0 ? 2u : 0u;
-        if (want == 0)
-        {
-            // The skip states what goes uncovered rather than only why it is
-            // taken. On a host reporting AVX-512 no accepted force_path value
-            // reaches IERR_PATH at all: PATH_SCALAR is accepted against any
-            // CPU, PATH_AVX2 is always available there because cpu_paths_core
-            // cannot report CPU_AVX512 without CPU_AVX2, PATH_AVX512 is by
-            // assumption present, and PATH_AUTO resolves. Anything above
-            // PATH_SCALAR never reaches the dispatch - pp_validate_params
-            // refuses it first, which is IERR_PARAMS and is
-            // InitRefusesAPathIdOutsideTheDefinedSet below.
-            Assert.Skip("this host reports AVX-512, so swarm_init can return IERR_PATH for no accepted force_path value here and neither this rc nor the untouched-arena assertion beside it is exercised on it");
-            return;
-        }
-        var p = Valid(forcePath: want);
+        var p = Valid(forcePath: 2); // PATH_AVX512
         WithArena(p, (arena, size) =>
         {
             new Span<byte>((void*)arena, (int)size).Fill(0xCD);
             int rc = swarm_init((void*)arena, size, in p);
             Assert.Equal(IerrPath, rc);
-            Assert.Equal(0xCDCDCDCDu, Read<uint>((void*)arena, 0));
+            Assert.Equal(0xCDCDCDCDu, Read<uint>((void*)arena, 0)); // arena untouched
         });
     }
 
@@ -184,8 +188,11 @@ public sealed unsafe class ArenaTests
     {
         _ = NativeKernel.Handle;
         var p = Valid(n: 100, species: 3, seed: 0xABCD);
-        uint paths = swarm_cpu_paths();
-        uint expectedPath = (paths & CpuAvx512) != 0 ? 2u : 1u; // auto: 512 > 2 > avx2
+        // PATH_AVX2 on every host, including one reporting AVX-512: the auto
+        // ladder may only resolve to an id that has a body, and PATH_AVX512 has
+        // none (#316). This expectation used to branch on the CPU and read 2 on
+        // a bit-1 host, which pinned the mislabelling as correct behaviour.
+        const uint expectedPath = 1;
         WithArena(p, (a, size) =>
         {
             void* arena = (void*)a;

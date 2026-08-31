@@ -77,7 +77,14 @@ PERR_EXTRA_TOKEN  = 12                  ; surplus token on a structural line
 ; this paragraph moves with it.
 AH_MAGIC   = 0                          ; u64, 'SWRM' arena stamp (diagnostic)
 AH_ABI     = 8                          ; u32, = SWARM_ABI_VERSION (diagnostic)
-AH_PATH    = 12                         ; u32, the resolved PATH_* id
+AH_PATH    = 12                         ; u32, the PATH_* id of the body
+                                        ;   pass_core will run. The word
+                                        ;   has two readings - the path a
+                                        ;   caller asked for, and the body
+                                        ;   that executes - and this is
+                                        ;   the one it means (#316), so an
+                                        ;   id pass_core cannot dispatch
+                                        ;   never reaches it.
 AH_FRAME   = 16                         ; u64, step counter (0 at init)
 AH_RNG     = 24                         ; u64, live splitmix64 state
 AH_PADDED  = 32                         ; u32, cached padded_n
@@ -90,9 +97,10 @@ ARENA_MAGIC = 0x004D525753             ; 'SWRM\0\0\0' little-endian tag
 CPU_AVX2   = 1                          ; swarm_cpu_paths bit0
 CPU_AVX512 = 2                          ; swarm_cpu_paths bit1
 
-; SIMD path ids - the values SP_FORCE_PATH accepts. AH_PATH stores the
-; RESOLVED id, so it never holds PATH_AUTO: init either resolves 0 to AVX-512
-; or AVX2 against the CPU, or fails with IERR_PATH. A DENSE ID, not a bit
+; SIMD path ids - the values SP_FORCE_PATH accepts. AH_PATH stores the id of
+; the body that will run, so it never holds PATH_AUTO: init either resolves 0
+; to AVX2 against the CPU, or fails with IERR_PATH. It never holds PATH_AVX512
+; either, for as long as that id has no body (#316). A DENSE ID, not a bit
 ; mask: PATH_AVX2 and PATH_AVX512 collide numerically with the CPU_AVX2 /
 ; CPU_AVX512 support bits above and mean something else entirely. Every
 ; comparison against an id spells the id, so the collision cannot be read as
@@ -100,7 +108,22 @@ CPU_AVX512 = 2                          ; swarm_cpu_paths bit1
 ; because naming it there would assemble to a different instruction.
 PATH_AUTO   = 0                         ; resolve against the CPU at init
 PATH_AVX2   = 1
-PATH_AVX512 = 2
+PATH_AVX512 = 2                         ; RESERVED AND REFUSED (#316). No zmm
+                                        ;   body exists, so init_core rejects
+                                        ;   this id with IERR_PATH on every
+                                        ;   host, one reporting CPU_AVX512
+                                        ;   included, and PATH_AUTO never
+                                        ;   resolves to it. It was accepted
+                                        ;   there and aliased onto the ymm
+                                        ;   body, which made AH_PATH claim a
+                                        ;   path the instructions did not
+                                        ;   support. The id stays inside the
+                                        ;   dense set PATH_MAX bounds, so
+                                        ;   pp_validate_params still accepts
+                                        ;   the field value and the refusal
+                                        ;   is IERR_PATH, not IERR_PARAMS.
+                                        ;   #123/#164 build the body and
+                                        ;   lift the refusal.
 PATH_SCALAR = 3                         ; the reference path: its own floor is
                                         ;   SSE4.1 (step.inc's roundss), under
                                         ;   the image's own AVX1 baseline (the

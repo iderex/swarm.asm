@@ -485,6 +485,15 @@ build_pads_core:
 ; preserve the seam's 0-mod-32 entry, which the SIMD path relies on for
 ; aligned spills.
 ;
+; PATH_AVX512 IS NOT NAMED HERE and that is not an omission (#316). It used to
+; be, jumping to the ymm body, so on every host reporting the feature a header
+; word saying AVX-512 and the instructions that ran disagreed. init_core now
+; refuses the id rather than resolving it, so no arena this engine writes can
+; carry it, and a forged word carrying it lands on the reference path with
+; everything else - the direction below where being wrong costs speed. Naming
+; it again belongs in the change that builds the zmm body (#123/#164), beside
+; the init_core arms that admit it.
+;
 ; The vector ids are named and everything else falls to the reference path,
 ; rather than the reverse (#202). Deciding by exclusion sent PATH_AUTO, and any
 ; word that never came from a resolution at all, into the vector body: the
@@ -501,9 +510,8 @@ pass_core:
         mov     eax, [rcx+AH_PATH]
         cmp     eax, PATH_AVX2
         je      pass_avx2
-        cmp     eax, PATH_AVX512        ; shares the ymm body until #123 builds
-        je      pass_avx2               ;   the zmm instantiation
-        jmp     pass_scalar             ; PATH_SCALAR, PATH_AUTO, anything else
+        jmp     pass_scalar             ; PATH_SCALAR, PATH_AUTO, PATH_AVX512,
+                                        ;   anything else
 
 ; ------------------------------------------------------------------
 ; pass_scalar - the reference path: fused force+integrate for i in
