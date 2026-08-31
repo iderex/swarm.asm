@@ -3,8 +3,8 @@ using Xunit;
 namespace Swarm.Tests;
 
 /// <summary>
-/// Lock-in for the maintainer's external-review-services policy (2026-07-17,
-/// issue #50): all code review and quality gating happens in-house via the
+/// Lock-in for my external-review-services policy (2026-07-17, issue #50):
+/// all code review and quality gating happens in-house via the
 /// adversarial lens gate (four refute-by-default lenses + simd-reviewer) - the
 /// review of record for this project.
 ///
@@ -44,7 +44,7 @@ public sealed class NoExternalReviewServiceConfigTests
             offenders.Length == 0,
             "external review/quality-service config has re-entered the repo root: " +
             string.Join(", ", offenders) +
-            ". Maintainer decision 2026-07-17 (issue #50): all review and quality " +
+            ". I decided on 2026-07-17 (issue #50) that all review and quality " +
             "gating is in-house via the adversarial lens gate - the review of record. " +
             "Remove the file(s) rather than re-enable an external service.");
     }
@@ -88,8 +88,8 @@ public sealed class NoExternalReviewServiceConfigTests
 
         Assert.True(
             offenders.Count == 0,
-            "a workflow step references an external review/quality service. Maintainer " +
-            "decision 2026-07-17 (issue #50): the adversarial lens gate is the review of " +
+            "a workflow step references an external review/quality service. I " +
+            "decided on 2026-07-17 (issue #50) that the adversarial lens gate is the review of " +
             "record - no sonar/coderabbit/copilot steps belong in CI:\n  " +
             string.Join("\n  ", offenders));
     }

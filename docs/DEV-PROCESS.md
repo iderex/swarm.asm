@@ -7,8 +7,8 @@ before features, and every change earns its merge through the same gated
 loop described here.
 
 Work is **issue-driven** (every change traces to a GitHub issue), branches
-off `main`, is **PR-only**, and merges as the sole maintainer on a green gate
-stack. Design intent lives in [MASTERPLAN.md](MASTERPLAN.md); the milestone
+off `main`, is **PR-only**, and I merge it myself on a green gate stack.
+Design intent lives in [MASTERPLAN.md](MASTERPLAN.md); the milestone
 issues (M0–M4) are the source of truth for _what_ to build. This document is
 the source of truth for _how_.
 

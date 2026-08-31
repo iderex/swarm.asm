@@ -1,4 +1,4 @@
-# Release - what a maintainer-pushed version tag runs (#181).
+# Release - what a version tag I push runs (#181).
 #
 # THIS WORKFLOW CREATES NO GITHUB RELEASE OBJECT, and that is the whole shape
 # of it rather than an omission. docs/RELEASE-POLICY.md decides it twice, and

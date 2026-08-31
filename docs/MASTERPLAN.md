@@ -36,7 +36,7 @@ reproducible benchmark suite against existing CPU ports).
 | Fail-closed I/O | presets/config that do not validate are rejected, never half-applied |
 
 **Determinism scope amendment (accepted in principle 2026-07-17, design #38,
-maintainer Conditional-GO - see decisions 2 and 7):** "bit-exact per code path"
+my Conditional-GO - see decisions 2 and 7):** "bit-exact per code path"
 carries a per-path caveat once a gated, not-yet-built `force_path = 4` exists
 in this document. Paths 1 (AVX2-exact), 2 (AVX-512-exact), and 3 (scalar) are
 bit-exact **cross-vendor and cross-CI-runner** - the guarantee this table has
@@ -206,8 +206,8 @@ AVX2, 2 AVX-512, 3 scalar). `vrsqrtps`, `vrcpps`, all other approximation
 instructions, x87, and `rdtsc`/`rdrand`/`rdseed` are banned in `src/kernel/`,
 enforced by a forbidden-mnemonic conformance scan.
 
-**Amendment (accepted in principle 2026-07-17, design #38, maintainer
-Conditional-GO - see decision 7 for the gating sequence):** the whitelist
+**Amendment (accepted in principle 2026-07-17, design #38, my Conditional-GO -
+see decision 7 for the gating sequence):** the whitelist
 reserves one gated, opt-in, **never-auto-default** exception, to be added only
 once the path is built: `force_path = 4` ("AVX2-fast" - `vrsqrtps` + one
 Newton-Raphson refinement), selectable only by the caller, exactly like the
@@ -306,9 +306,9 @@ is what makes "bit-exact per code path" also hold cross-vendor and across CI
 runners for the auto-selectable paths: approximation-instruction lookup
 tables differ between Intel and AMD. Path 4's narrower, same-microarch-only
 guarantee is the deliberate, documented, gated exception recorded above - the
-cross-vendor guarantee is preserved for every path that runs without a
-maintainer opt-in. Worker-entry pinning is stated explicitly because it is
-the exact place the contract must be airtight.
+cross-vendor guarantee is preserved for every path that runs without an opt-in
+from me. Worker-entry pinning is stated explicitly because it is the exact
+place the contract must be airtight.
 
 What holds the pin today, named so a reader can check rather than trust.
 `SubnormalPinTests` runs the engine in the range FTZ and DAZ govern and
@@ -543,7 +543,7 @@ platform calls `swarm_pass(arena, first, last)` ranges. Matrix edits apply
 between join and signal. Gate test wired from M1: pass-split invariance;
 from M3: T=1 vs T=8 state-hash equality.
 
-**Amendment (recorded 2026-08-08, maintainer decision 2026-07-25, issue #124):**
+**Amendment (recorded 2026-08-08, my decision of 2026-07-25, issue #124):**
 the shipped distribution is the static even 16-aligned split, and this decision
 now records that instead of the chunked self-scheduling it originally pinned.
 `pool_partition` computes `q = round_up_16(ceil(n/T))` and hands worker `w` the
@@ -619,7 +619,7 @@ estimate is stated conservatively so the headline never depends on it.
 state); AVX-512 as a budget prerequisite (it is margin); requiring AVX-512BW
 (u32 species needs no byte ops).
 
-**Amendment (accepted in principle 2026-07-17, design #38, maintainer
+**Amendment (accepted in principle 2026-07-17, design #38, my
 Conditional-GO):** a fourth path, `force_path = 4` ("AVX2-fast": `vrsqrtps` +
 one Newton-Raphson step + FMA, see decision 2), is accepted in principle.
 Dispatched exactly like paths 1-3 - the `.explicit` arm in `init.inc`, stored
@@ -640,7 +640,7 @@ divider microbench (#59) and the IEEE-exact software-pipelining contingency
 headline-preset gap. Until then, `force_path = 4` is a masterplan entry with
 no corresponding code - it must not be read as implemented. Promotion of path
 4 out of caller-pinned (an auto-default) is explicitly out of scope for this
-amendment and requires its own future maintainer decision.
+amendment and requires its own future decision from me.
 
 **Resolution (2026-07-17):** the gate is resolved. #59 measured the force
 loop throughput-bound, not latency-bound, so the software-pipelining
@@ -708,7 +708,7 @@ random cache-line round trips. The matrix UI/HUD is GDI in the platform
 layer, outside the determinism surface: n × n colored cells, wheel/drag
 edits a[i][j] in [-1,1], applied at step boundaries only.
 
-**Amendment (recorded 2026-08-09, maintainer decision 2026-07-25, issue #133):**
+**Amendment (recorded 2026-08-09, my decision of 2026-07-25, issue #133):**
 the 2×2 splat is switched platform-side, on the command line or by a key, and
 not by the preset. Decision 10's grammar is untouched: no new key, so the eight
 keys required exactly once stay eight, the parser and its fuzz surface do not

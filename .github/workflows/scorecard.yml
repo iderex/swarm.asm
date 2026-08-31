@@ -8,7 +8,7 @@
 # is the one quality signal in this tree that is code-agnostic, which is why an
 # asm repository can carry it at all.
 #
-# THIS IS NOT A REVIEW SERVICE. The maintainer decision of 2026-07-17 (#50)
+# THIS IS NOT A REVIEW SERVICE. The decision I took on 2026-07-17 (#50)
 # keeps all code review and quality gating in-house, and
 # NoExternalReviewServiceConfigTests refuses the named services by name.
 # Scorecard neither reviews a diff nor gates a pull request: it never runs on
