@@ -10,8 +10,8 @@ namespace Swarm.Tests;
 /// real capture and then reads what it wrote.
 ///
 /// It costs about a minute, because that is what the measurement costs:
-/// <c>CAPTURE_FRAMES</c> is 3,600 and the loop is paced to 60 fps, so the run
-/// is the instrument at its shipped length rather than a shortened stand-in.
+/// <c>CAPTURE_FRAMES_DEFAULT</c> is 3,600 and the loop is paced to 60 fps, so
+/// the run is the instrument at its shipped length rather than a shortened one.
 /// A shortened one would not exercise the sample count every recorded figure
 /// in docs/BENCHMARKS.md was taken at.
 ///
@@ -22,7 +22,8 @@ namespace Swarm.Tests;
 /// </summary>
 public sealed class CaptureReportTests
 {
-    /// <summary>CAPTURE_FRAMES in src/swarm.asm.</summary>
+    /// <summary>CAPTURE_FRAMES_DEFAULT in src/swarm.asm, the count a run that
+    /// names none records.</summary>
     private const int CaptureFrames = 3600;
 
     /// <summary>CAP_HEADER_BYTES in src/swarm.asm.</summary>

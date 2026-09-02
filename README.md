@@ -178,6 +178,22 @@ and `-splat` can be given alongside one. A bare path that starts with `-` reads
 as a flag and is skipped; quote it and it loads, because the quote is what the
 scan dispatches on.
 
+The **second** such argument is how many samples `-capture` records:
+
+```
+.\build\swarm.exe -capture presets\headline.txt 600
+```
+
+A run that names none records 3600, which is the count every figure in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) was taken at. A count that is not a
+decimal number, is zero, or is large enough that the dump would not fit the
+single write it is made with, ends the process with exit code **2** before the
+buffer is committed and before a window exists. That code is the capture
+count's alone: every other failure exits 1, and the two say different things -
+1 that the run could not be made here, 2 that the command line was wrong. Since
+the count is the second non-flag argument, naming one means naming a preset as
+well.
+
 `-splat` draws each particle as a 2x2 block. On a dense display a 1-pixel
 particle nearly vanishes at large counts.
 

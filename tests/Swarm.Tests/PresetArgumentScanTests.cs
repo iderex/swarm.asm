@@ -3,7 +3,7 @@ using Xunit;
 namespace Swarm.Tests;
 
 /// <summary>
-/// What <c>scan_arg_path</c> in <c>src/swarm.asm</c> treats as a preset path,
+/// What <c>scan_arg_token</c> in <c>src/swarm.asm</c> treats as a preset path,
 /// asserted against the assembled exe rather than against the routine's own
 /// comment.
 ///
