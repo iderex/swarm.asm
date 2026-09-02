@@ -10,8 +10,10 @@
 ;
 ; `-capture` is the measurement instrument: the same paced live loop, timing the
 ; WORK WINDOW of every frame (step + plot + blit, never the pacing wait) and
-; dumping the raw QPC deltas to swarm-frames.bin before exiting. A paced loop
-; measured wall-to-wall reports the frame period by construction and proves
+; dumping the raw QPC deltas to swarm-frames.bin before exiting. How many
+; samples it records is the run's own, taken from the command line as the second
+; non-flag argument; a run that names none records the shipped default. A paced
+; loop measured wall-to-wall reports the frame period by construction and proves
 ; nothing, which is why the wait is outside the window. The dump stays raw: every
 ; sample in recorded order, so any statistic is recoverable from it and every
 ; published figure keeps an artifact a reader can recompute from. It takes
@@ -46,7 +48,12 @@ FRAME_W      = 1024                     ; framebuffer and client size, 1:1 blit
 FRAME_H      = 1024
 DIB_RGB_COLORS = 0                      ; not in the bundled equates
 SMOKE_FRAMES = 60                       ; frames rendered under -smoke
-CAPTURE_FRAMES = 3600                   ; work-window samples recorded under -capture
+; The capture run's sample count comes from the command line, as decision 12's
+; protocol writes it (`swarm.exe -bench preset.txt 3600`): it is the SECOND
+; argument that is not a flag, the first still being the preset path. A run
+; that names no such token records CAPTURE_FRAMES_DEFAULT samples, which is
+; the count every figure in docs/BENCHMARKS.md was taken at.
+CAPTURE_FRAMES_DEFAULT = 3600           ; work-window samples when none is named
 ; The work window is recorded as five series rather than one: the grid build,
 ; the force pass, the plot and the blit as they are timed, and the whole
 ; window they add up to. Consecutive reads, so the four phases sum to the
@@ -65,6 +72,25 @@ CAP_PASS   = 1
 CAP_PLOT   = 2
 CAP_BLIT   = 3
 CAP_FRAME  = 4
+; The upper bound on the sample count is the write path's own rather than a
+; policy: the dump is one WriteFile, whose length is a DWORD, so the whole
+; sample block has to fit in 32 bits. A count past this is refused before
+; anything is allocated, rather than truncated into a short dump that would
+; still exit 0.
+CAPTURE_FRAMES_MAX = 0FFFFFFFFh / (8*CAP_SERIES)
+; A refused sample count exits 2 rather than the 1 every other failure uses.
+; The two are different things to whoever is reading an exit code: 1 says the
+; run could not be made on this machine, 2 says the command line was wrong and
+; no machine would have run it. It is also what makes each refusal provable -
+; with one code for both, deleting the zero check leaves VirtualAlloc failing
+; on a zero-byte request and the exit code cannot tell the two apart.
+EXIT_BAD_ARG = 2
+; capture_frame walks the planes with one stride register, so the ids have to
+; be 0..CAP_SERIES-1 in the order they are stored. Nothing else in this file
+; would notice them being renumbered.
+if CAP_BUILD <> 0 | CAP_PASS <> 1 | CAP_PLOT <> 2 | CAP_BLIT <> 3 | CAP_FRAME <> 4
+        err     ; the plane ids no longer match the walk in capture_frame
+end if
 ; swarm-frames.bin header: 'SWRMFRM3' (8) + qpc_freq (8) + count (8) + n (4)
 ; + flags (4) + seed (8). Every field is naturally aligned, so a reader can
 ; map the struct rather than parse it. The layout is checked below where the
@@ -149,17 +175,29 @@ start:
         call    scan_arg_flag
         mov     [capture_mode], eax
 
+        ; The sample count is resolved before anything is sized from it, and a
+        ; token that does not name one ends the process here - ahead of the
+        ; allocation and far ahead of the window, so a refused count leaves
+        ; nothing behind at all.
+        test    eax, eax
+        jz      .args_done
+        mov     rcx, [cmd_line]
+        mov     r8d, 1                  ; the SECOND non-flag token: the first
+        call    scan_arg_token          ;   is the preset path
+        mov     rcx, rax
+        call    capture_count_apply     ; returns only on a count it accepted
+
         ; The sample buffer is committed in capture mode ONLY, so the shipped
-        ; image carries no 144,000-byte block for a mode almost no run uses.
-        ; It holds CAP_SERIES planes of CAPTURE_FRAMES samples, laid out plane
-        ; after plane so each one is the contiguous array frame_stats_core
-        ; sorts and so the dump is written with one WriteFile.
+        ; image carries no sample block for a mode almost no run uses. It holds
+        ; CAP_SERIES planes of [capture_frames] samples, laid out plane after
+        ; plane so each one is the contiguous array frame_stats_core sorts and
+        ; so the dump is written with one WriteFile. capture_bytes is that one
+        ; WriteFile's length as well as this allocation's size, so the file and
+        ; the buffer cannot disagree about how long a plane is.
         ; Fail closed: a capture that cannot record must not reach the loop and
         ; exit 0, because a green run that produced no measurement would be
         ; read as a measurement.
-        test    eax, eax
-        jz      .args_done
-        invoke  VirtualAlloc, 0, CAPTURE_FRAMES*8*CAP_SERIES, MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
+        invoke  VirtualAlloc, 0, [capture_bytes], MEM_COMMIT+MEM_RESERVE, PAGE_READWRITE
         test    rax, rax
         jz      .fail
         mov     [capture_buf], rax
@@ -176,7 +214,8 @@ start:
         ; arena: a rejected preset must not leave a window on screen, and the
         ; layout is computed from the params this may replace.
         mov     rcx, [cmd_line]
-        call    scan_arg_path
+        xor     r8d, r8d                ; the FIRST non-flag token
+        call    scan_arg_token
         test    rax, rax
         jz      .preset_done
         mov     rcx, rax
@@ -497,13 +536,18 @@ scan_arg_flag:
         ret
 
 ; ------------------------------------------------------------------
-; scan_arg_path - find the first argument that is not a flag: the preset path.
+; scan_arg_token - find the nth argument that is not a flag.
 ;   in:       rcx = zero-terminated ANSI command line in GetCommandLine
 ;             form: the program token comes first, possibly quoted
+;             r8d = 0-based index among the non-flag tokens: 0 is the preset
+;             path, 1 the capture run's sample count
 ;   out:      rax = first byte of the token and edx = its length in bytes,
 ;             or rax = 0 and edx = 0 when there is no such argument
-;   clobbers: rax, rcx, rdx, r8, flags
+;   clobbers: rax, rcx, rdx, r8, r10, r11, flags
 ;   MXCSR:    untouched
+;   note:     the index is counted over tokens the rules below ACCEPT, so a
+;             skipped flag never consumes a position and `-capture p.txt 600`
+;             and `p.txt -capture 600` name the same two tokens
 ;   note:     a token starting with '-' is a flag and is skipped, so -smoke
 ;             and -capture never read as a filename and a future flag needs
 ;             no change here. The cost falls on a BARE path beginning with
@@ -518,7 +562,8 @@ scan_arg_flag:
 ;             quoting it, and the two notes above are the whole of the rule:
 ;             bare is skipped, quoted is taken
 ; ------------------------------------------------------------------
-scan_arg_path:
+scan_arg_token:
+        mov     r10d, r8d               ; tokens still to be skipped
         cmp     byte [rcx], '"'
         jne     .skip_program
   .skip_quoted:                         ; quoted program token: to the
@@ -574,11 +619,21 @@ scan_arg_path:
         je      .found
         inc     rcx
         jmp     .in_quote
-  .found:
-        sub     rcx, r8
-        mov     edx, ecx                ; a command line is far under 4 GiB
+  .found:                               ; r8 = token start, rcx = one past its
+        mov     r11, rcx                ;   last byte: a blank, the closing
+        sub     r11, r8                 ;   quote, or the terminator
+        test    r10d, r10d
+        jnz     .skip_found
+        mov     edx, r11d               ; a command line is far under 4 GiB
         mov     rax, r8
         ret
+  .skip_found:                          ; an earlier position: step over the
+        dec     r10d                    ;   delimiter and keep scanning
+        movzx   eax, byte [rcx]
+        test    al, al
+        jz      .absent
+        inc     rcx
+        jmp     .next_arg
   .skip_token:
         movzx   eax, byte [rcx]
         test    al, al
@@ -596,6 +651,75 @@ scan_arg_path:
         xor     eax, eax
         xor     edx, edx
         ret
+
+; ------------------------------------------------------------------
+; capture_count_apply - resolve the capture run's sample count and everything
+; sized from it.
+;   in:       rcx = first byte of the count token, or 0 when the command line
+;             names none; edx = the token's length in bytes
+;   out:      [capture_frames], [capture_stride] and [capture_bytes] set;
+;             does not return on a token it refuses (ExitProcess EXIT_BAD_ARG)
+;   clobbers: rax, rcx, r8, r9, flags
+;   MXCSR:    untouched (integer only)
+;   note:     the same fail-closed treatment preset_apply gets, because this is
+;             the same kind of input. A token that is empty, carries anything
+;             but decimal digits, names zero, or names more samples than the
+;             dump's one WriteFile can carry is refused - and refused HERE,
+;             before the buffer is committed and long before a window exists,
+;             so a rejected run leaves nothing behind
+;   note:     no message box on any of those, deliberately and unlike
+;             preset_fail. A capture run is an unattended instrument by
+;             construction, so a modal box would hang the very run it refuses.
+;             The exit code is the whole report, and it is EXIT_BAD_ARG rather
+;             than the 1 the rest of this file exits with
+;   note:     the accumulator is capped against CAPTURE_FRAMES_MAX on every
+;             digit rather than after the last one, so a token of any length
+;             is refused at the digit that passes the bound and the multiply
+;             below it can never overflow
+; ------------------------------------------------------------------
+capture_count_apply:
+        sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        test    rcx, rcx
+        jz      .default                ; no such token: the shipped default
+        test    edx, edx                ; a token with no bytes names no count.
+        jz      .refuse                 ;   A bounds guard rather than the
+                                        ;   refusal that catches it: the loop
+                                        ;   below reads before it compares, so
+                                        ;   removing this line refuses an empty
+                                        ;   token anyway, on the byte past its
+                                        ;   end. Disclosed rather than claimed
+                                        ;   to bite (only a quoted "" reaches
+                                        ;   it - a bare token has a byte)
+        xor     eax, eax                ; the value so far
+        xor     r9d, r9d                ; digits consumed
+  .digit:
+        movzx   r8d, byte [rcx+r9]
+        sub     r8d, '0'
+        cmp     r8d, 9
+        ja      .refuse                 ; anything but a decimal digit
+        imul    rax, rax, 10
+        add     rax, r8
+        cmp     rax, CAPTURE_FRAMES_MAX
+        ja      .refuse                 ; past the bound, and it cannot return
+        inc     r9d
+        cmp     r9d, edx
+        jb      .digit
+        test    eax, eax
+        jz      .refuse                 ; zero samples is not a measurement
+        jmp     .apply
+  .default:
+        mov     eax, CAPTURE_FRAMES_DEFAULT
+  .apply:
+        mov     [capture_frames], eax
+        mov     ecx, eax
+        shl     rcx, 3                  ; u64 per sample: one plane's bytes
+        mov     [capture_stride], rcx
+        imul    rcx, rcx, CAP_SERIES
+        mov     [capture_bytes], rcx    ; the allocation AND the WriteFile
+        add     rsp, 8
+        ret
+  .refuse:
+        invoke  ExitProcess, EXIT_BAD_ARG
 
 ; ------------------------------------------------------------------
 ; preset_apply - read the named preset file and adopt it, or exit 1.
@@ -1298,8 +1422,9 @@ frame_pace:
 ; capture_frame - close the frame's work window and record its five lengths.
 ;   in:       [cap_t0]/[cap_t1]/[cap_t2]/[cap_t3] = QPC at the top of .step,
 ;             after the grid build, after the force pass and after the plot;
-;             [capture_buf], [capture_count]
-;   out:      eax = 0 while the run continues; 1 once CAPTURE_FRAMES samples
+;             [capture_buf], [capture_count], [capture_frames],
+;             [capture_stride]
+;   out:      eax = 0 while the run continues; 1 once [capture_frames] samples
 ;             have been recorded AND swarm-frames.bin has been written
 ;   clobbers: caller-saved, flags
 ;   MXCSR:    untouched (integer only)
@@ -1311,6 +1436,11 @@ frame_pace:
 ;             sum to the whole window exactly. The frame plane is written from
 ;             t4 - t0 rather than from that sum, so a reader comparing the two
 ;             is comparing the instrument against itself
+;   note:     the plane stride is the run's count rather than an assemble-time
+;             displacement, so the five stores index off r8. Every instruction
+;             below t4 runs AFTER the work window has closed and before the
+;             pacing wait, so what the runtime stride costs lands in the wait
+;             and in no recorded sample
 ; ------------------------------------------------------------------
 capture_frame:
         sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
@@ -1320,30 +1450,33 @@ capture_frame:
         ; it is here because the cost of being wrong about that is a write past
         ; the end, and the cost of the guard is two instructions.
         mov     ecx, [capture_count]
-        cmp     ecx, CAPTURE_FRAMES
+        cmp     ecx, [capture_frames]
         jae     .complete
         invoke  QueryPerformanceCounter, cap_t4
         mov     ecx, [capture_count]
         mov     rdx, [capture_buf]
         lea     rdx, [rdx+rcx*8]        ; the frame's slot in plane 0
+        mov     r8, [capture_stride]    ; one plane, in bytes
+        lea     r9, [r8+r8*2]           ; CAP_BLIT is the one index the
+                                        ;   addressing modes cannot scale to
         mov     rax, [cap_t1]
         sub     rax, [cap_t0]           ; build: pool_build, or nothing if paused
-        mov     [rdx+CAP_BUILD*CAPTURE_FRAMES*8], rax
+        mov     [rdx], rax                      ; CAP_BUILD
         mov     rax, [cap_t2]
         sub     rax, [cap_t1]           ; pass: pool_fanout, or nothing if paused
-        mov     [rdx+CAP_PASS*CAPTURE_FRAMES*8], rax
+        mov     [rdx+r8], rax                   ; CAP_PASS
         mov     rax, [cap_t3]
         sub     rax, [cap_t2]           ; plot: the clear and the raster
-        mov     [rdx+CAP_PLOT*CAPTURE_FRAMES*8], rax
+        mov     [rdx+r8*2], rax                 ; CAP_PLOT
         mov     rax, [cap_t4]
         sub     rax, [cap_t3]           ; blit: the DIB to the window DC
-        mov     [rdx+CAP_BLIT*CAPTURE_FRAMES*8], rax
+        mov     [rdx+r9], rax                   ; CAP_BLIT
         mov     rax, [cap_t4]
         sub     rax, [cap_t0]           ; the whole window, pacing excluded
-        mov     [rdx+CAP_FRAME*CAPTURE_FRAMES*8], rax
+        mov     [rdx+r8*4], rax                 ; CAP_FRAME
         inc     ecx
         mov     [capture_count], ecx
-        cmp     ecx, CAPTURE_FRAMES
+        cmp     ecx, [capture_frames]
         jb      .more
         call    capture_write           ; never returns unless the dump landed
         call    capture_report          ; nor unless the report landed after it
@@ -1358,7 +1491,8 @@ capture_frame:
 
 ; ------------------------------------------------------------------
 ; capture_write - dump the header and the raw samples to swarm-frames.bin.
-;   in:       [capture_buf], [capture_count], [qpc_freq], [sim_params]
+;   in:       [capture_buf], [capture_count], [capture_frames], [capture_bytes],
+;             [qpc_freq], [sim_params]
 ;   out:      nothing on success; exits the process with code 1 on any failure
 ;   clobbers: caller-saved, flags
 ;   MXCSR:    untouched (integer only)
@@ -1366,20 +1500,29 @@ capture_frame:
 ;             WriteFile that failed, and a WriteFile that reported fewer bytes
 ;             than asked for. A capture run that exits 0 has a complete file,
 ;             so an exit code can be trusted to mean a measurement exists
-;   note:     the planes are strided by CAPTURE_FRAMES, not by the sample
-;             count, so the one WriteFile below is a well-formed dump only at a
-;             full buffer. capture_frame reaches here on the sample that fills
-;             it and on no other, which is what makes the two agree
+;   note:     the header's sample count and the plane stride are the same
+;             number by construction: capture_bytes is CAP_SERIES strides and
+;             is what both the allocation and the WriteFile below use, and the
+;             refusal at the top makes a buffer that is not full unwritable.
+;             This used to be a coincidence between an assemble-time stride and
+;             a run-time count, and reads as a plain description now
 ; ------------------------------------------------------------------
 capture_write:
         sub     rsp, 8                  ; entry rsp = 8 mod 16 -> 0 for invoke
+        ; Unreachable by construction and correspondingly unproven, for the
+        ; same reason capture_frame's bounds guard is: this is called on the
+        ; sample that fills the buffer and on no other. It is here because a
+        ; partial buffer written at a full buffer's stride is a file that reads
+        ; as a measurement and is not one.
+        mov     eax, [capture_count]
+        cmp     eax, [capture_frames]
+        jne     .fail                   ; a partial buffer is not a dump
         mov     rax, [qpc_freq]         ; the header is the run's disclosure:
         mov     [cap_freq], rax         ;   the analysis needs the tick rate,
         mov     eax, [capture_count]    ;   and the scene needs n/flags/seed to
         mov     [cap_samples], rax      ;   be recomputable from the file alone
-        shl     rax, 3                  ; u64 per sample, per plane
-        imul    rax, rax, CAP_SERIES    ;   and CAP_SERIES planes behind it
-        mov     [cap_bytes], rax
+        mov     rax, [capture_bytes]    ; CAP_SERIES planes of that many
+        mov     [cap_bytes], rax        ;   samples, the size that was committed
         mov     eax, [sim_params+SP_N]
         mov     [cap_n], eax
         mov     eax, [sim_params+SP_FLAGS]
@@ -1413,7 +1556,8 @@ capture_write:
 
 ; ------------------------------------------------------------------
 ; capture_report - the run's published figures, in a file beside the dump.
-;   in:       [capture_buf], [capture_count], [qpc_freq], [sim_params]
+;   in:       [capture_buf], [capture_count], [capture_stride], [qpc_freq],
+;             [sim_params]
 ;   out:      nothing on success; exits the process with code 1 on any failure
 ;   clobbers: caller-saved, flags
 ;   MXCSR:    untouched (integer only)
@@ -1435,7 +1579,7 @@ capture_report:
         mov     dword [cap_series_i], 0
   .reduce:                              ; one reduction per plane, in place
         mov     eax, [cap_series_i]
-        imul    rax, rax, CAPTURE_FRAMES*8
+        imul    rax, [capture_stride]   ; the same stride the dump was written at
         add     rax, [capture_buf]
         mov     rcx, rax
         mov     edx, [capture_count]
@@ -1607,9 +1751,17 @@ section '.data' data readable writeable
   ; carries none of it.
   capture_mode  dd 0
   capture_count dd 0                    ; samples recorded so far
+  ; The run's own sample count and the two figures derived from it, all three
+  ; written once by capture_count_apply before anything is allocated. Outside
+  ; capture mode they stay 0, which is the state no capture routine is reached
+  ; in.
+  capture_frames dd 0                   ; samples per plane this run records
   align 8
+  capture_stride dq 0                   ; capture_frames * 8: one plane's bytes
+  capture_bytes  dq 0                   ; CAP_SERIES of those: the allocation,
+                                        ;   and the dump's one WriteFile length
   cmd_line    dq ?                      ; GetCommandLine result, scanned twice
-  capture_buf dq 0                      ; CAP_SERIES planes of CAPTURE_FRAMES
+  capture_buf dq 0                      ; CAP_SERIES planes of capture_frames
                                         ;   u64 ticks, in CAP_BUILD.. order
   cap_t0      dq ?                      ; work window open (top of .step)
   cap_t1      dq ?                      ; grid build closed, force pass opens
