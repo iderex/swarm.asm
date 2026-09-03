@@ -1355,6 +1355,127 @@ acceptance, alone or together, and the count says why: the loop is already
 examining fewer than two candidates for every one the force model requires it
 to examine.
 
+## Compacting the in-range lanes before the sqrt and divide (#335): built, measured, not pursued
+
+The section above ends by bounding the one lever that lives inside the loop
+body: 55.1% of the lanes the loop pays for at capture depth hold a candidate
+in range, and the rest run the sqrt and the divide on `r2 = 1.0` for a force
+that is masked to zero. #335 asked for that lever to be built and priced
+against the shipped body rather than derived. This section is the price.
+
+The body is commit `99c1896` in this document's own history, reverted by the
+commit after it, so the figures below can be reproduced by checking that
+commit out and running the same two commands. It packs the in-range lanes of
+each group onto four pending registers - `vmovmskps` on the valid mask, a row
+of a 256-entry compress table permuted by a rotation row for the pending
+count, four `vpermps` on dx, dy, r2 and the matrix coefficient, four blends
+by "lane < k" - and runs the sqrt, the divide and the force expression only
+once eight candidates are pending, with a masked drain per particle so the
+pass stays split-invariant. AVX2 has no `vpcompressps`; the table form is the
+one the issue named. The seven pass constants moved from registers to frame
+slots to free the four pending registers, the five FMA sites of #162 are
+unchanged, and every oracle, split-invariance, thread-sweep and
+parity-horizon test passes on it. What moved is the order the candidates
+enter the partial sums, so the README still and the wrap-pin landing would
+have needed regenerating had the body stayed.
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" run --project tests\Swarm.Bench\Swarm.Bench.csproj -c Release
+& "C:\Program Files\dotnet\dotnet.exe" run --project tests\Swarm.Bench\Swarm.Bench.csproj -c Release -- --scene --depths 0,3600 --runs 1
+```
+
+`--depths` and `--runs` land with this section: the whole ladder three times
+over is about an hour per build, and the lever is priced on two of its rungs.
+
+### The default report, shipped body against the compacted one
+
+| section                                   | shipped | compacted |        ratio |
+| ----------------------------------------- | ------: | --------: | -----------: |
+| brute, n = 16384, ns/candidate            |   0.591 |     0.433 | 1.36x faster |
+| brute, n = 16384, cycles/group at 4.9 GHz |    23.1 |      17.0 | 1.36x faster |
+| brute, n = 1024, AVX2 pass ms             |   0.652 |     0.464 | 1.41x faster |
+| grid, 500k, g = 512, serial pass ms       |  19.039 |    23.808 | 1.25x slower |
+| grid, 500k, g = 256, serial pass ms       |  32.833 |    47.058 | 1.43x slower |
+| pool, 500k, g = 512, T = 16 pass ms       |   2.136 |     2.381 | 1.11x slower |
+| 1M headline, serial pass ms               |  50.226 |    71.343 | 1.42x slower |
+| 1M dense, serial pass ms                  | 116.121 |   178.109 | 1.53x slower |
+| 1M headline, T = 16 pass ms               |   5.724 |     7.150 | 1.25x slower |
+| 1M dense, T = 16 pass ms                  |  14.051 |    18.297 | 1.30x slower |
+| scalar control, n = 16384, pass ms        | 379.910 |   364.694 |     4% apart |
+
+The scalar row runs code neither build touches, so it is the control on the
+host's noise: the two reports were taken minutes apart on the same unquiesced
+host, and the rows the change does not reach agree to 4%.
+
+### The headline scene at its two priced rungs
+
+`--scene --depths 0,3600 --runs 1`, one run per build:
+
+| steps | build     | cand/p |  pass ms | mt pass ms | mt frame ms |
+| ----: | --------- | -----: | -------: | ---------: | ----------: |
+|     0 | shipped   |   37.0 |   52.340 |      5.889 |      11.392 |
+|     0 | compacted |   37.0 |   70.579 |      6.989 |      12.438 |
+|  3600 | shipped   | 1158.5 |  812.131 |     84.988 |      90.711 |
+|  3600 | compacted | 1138.6 | 1169.980 |    122.638 |     128.325 |
+
+At capture depth the compacted pass is 1.44x slower, serial and threaded
+alike; on the opening field 1.35x serial and 1.19x threaded. The shipped
+build's 3600 row reproduces the ladder's fastest recorded run (84.659 ms
+threaded pass) to within 0.4%. The two builds' `cand/p` at 3600 differ
+because the accumulation order moved path 1's bits and a chaotic scene
+diverges from there, exactly as the fusion did in the section above; at step
+0 nothing has been stepped and the counts agree.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200, 32 logical processors. **Feature path**: `swarm_cpu_paths`
+  reports `0x1`; `force_path = 0` resolves to `PATH_AVX2` on the scene rows,
+  and the brute rows name it.
+- **Kernel commit**: the shipped body is the mainline at `1ca8b6a`, the fused
+  `force_path = 1`; the compacted body is `99c1896`. Both were assembled from
+  this tree by the harness's own `build.ps1` call, in the same session.
+  **Date**: 2026-09-03.
+- **The host was not quiesced.** Load read from
+  `Win32_PerfFormattedData_PerfOS_Processor` at `_Total`, three one-second
+  samples before and after each run: 42, 23, 5 and 7, 4, 26 percent around
+  the shipped report; 0, 14, 5 and 5, 6, 0 around the compacted one; 7, 26, 12
+  and 16, 6, 25 around the shipped scene run; 14, 16, 36 and 9, 26, 8 around
+  the compacted one. Every figure is a minimum over nine rounds, as everywhere
+  in this harness, and the scalar control above is what bounds the noise.
+- **Not measured.** No per-port or branch counters were read, so how the
+  stage's cost divides between the permutes, the blends and the flush
+  branch's mispredictions is not isolated here.
+
+### Reading it - the stage costs more than the divide it saves
+
+**Brute force is the case the lever was shaped for, and there it wins.** At
+`rmax = 0.05` on the unit torus under one lane in a hundred is in range, the
+force half almost never runs, and the group falls from 23.1 to 17.0 cycles.
+That 17.0 is therefore the cost of the stage half on its own - the loads, dx,
+dy, r2 and the mask that the shipped body also pays, plus the packing - and
+it is the number that decides the lever: the shipped group is 23.1, so the
+force half can only be run on fewer than about a quarter of the groups before
+the compacted body is the slower one.
+
+**The grid pass never gets near a quarter.** The disc count above puts the
+in-range share at 34% on the opening field and 55% at capture depth, and the
+rows follow: 1.25x to 1.43x slower at 500k and 1M on the opening field, 1.44x
+slower at 3600 steps. The threaded rows lose by less at step 0 (1.11x, 1.19x)
+and by the same 1.44x at capture depth, which is the pass dominating the
+frame once the scene has clustered.
+
+**Why the ceiling in the section above was not reachable.** That ceiling
+priced the divide half at half the group and charged nothing for the packing.
+Measured, the packing is about 17 cycles of a 23-cycle group, which is more
+than the whole divide half it competes with. The register form here is the
+cheap shape - no staging buffer, no store-forwarding stall on a partially
+written vector - and it still does not pay; a memory-staged form pays that
+stall on top.
+
+**What follows.** The compaction is not pursued and the shipped body stands,
+with decision 3's inner loop as it was. The in-range share is a fact about
+the scene, and #332's reading is unchanged by this: no lever inside the loop
+body reaches the settled scene's acceptance either.
+
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 
 Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and

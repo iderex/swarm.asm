@@ -440,6 +440,21 @@ temporal-coherence repair sorts (order-history-dependent); ghost/halo cells
 (the seam run emitter is 15 instructions); bare over-read discipline without
 tail masks (refuted above).
 
+**Lane compaction, built and measured, not pursued (recorded 2026-09-03,
+#335).** The one lever against the out-of-range lanes that lives inside the
+loop body - packing the in-range lanes onto a pending register set with
+`vmovmskps`, a compress table and `vpermps`, and running the sqrt, the divide
+and the force expression only once eight are pending - was built and timed
+against the shipped body on the reference machine. It wins only where almost
+nothing is in range (brute force at n = 16384, 1.34x) and loses on every grid
+pass: 1.44x slower at the headline scene's capture depth, 1.35x on its opening
+field, 1.28x at 500k. The stage half alone costs about 17 cycles per group
+against the shipped group's 23, so the lever can pay only below roughly a
+quarter in range, and #332 counted 55% on the acceptance scene. The figures,
+the methodology and the commit holding the body are in docs/BENCHMARKS.md;
+the inner loop above stays one broadcast i against eight contiguous j, with
+its masking rather than a compaction stage.
+
 ### 4. Internal ABI
 
 **Decision:** Two tiers. **Seam tier** (DLL exports, exe entry, thread
