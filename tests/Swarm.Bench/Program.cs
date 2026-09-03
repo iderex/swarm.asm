@@ -87,7 +87,7 @@ if (args.Contains("--plot"))
 // that belongs in front of nothing else.
 if (args.Contains("--scene"))
 {
-    SceneFrame();
+    SceneFrame(SceneDepths(args), SceneRuns(args));
     return 0;
 }
 
@@ -1420,13 +1420,44 @@ static unsafe (double Ms, double LitPct) TimePlot(
 // The blit is NOT here and cannot be. BitBlt is platform code the seam does not
 // reach, so this mode covers three of the four phases decision 11 asks for and
 // says nothing about the fourth.
-static unsafe void SceneFrame()
+// `--depths 0,3600` and `--runs 1` narrow the ladder (#335). An A/B of two
+// kernel builds at the two rungs a lever is priced on costs minutes per build
+// this way instead of the hour the whole ladder takes three times over. Absent,
+// the ladder is the recorded one, and either argument that does not parse as
+// what it claims to be is refused rather than defaulted, so a typo cannot print
+// the recorded ladder under a narrowed heading.
+static int[] SceneDepths(string[] args)
+{
+    int at = Array.IndexOf(args, "--depths");
+    if (at < 0)
+        return [0, 600, 1200, 1800, 2400, 3000, 3600];
+    if (at + 1 >= args.Length)
+        throw new ArgumentException("--depths needs a comma-separated list of step counts");
+    int[] depths = args[at + 1].Split(',').Select(d => int.Parse(d, CultureInfo.InvariantCulture)).ToArray();
+    for (int i = 0; i < depths.Length; i++)
+    {
+        if (depths[i] < 0 || (i > 0 && depths[i] <= depths[i - 1]))
+            throw new ArgumentException("--depths must be non-negative and strictly increasing");
+    }
+    return depths;
+}
+
+static int SceneRuns(string[] args)
+{
+    int at = Array.IndexOf(args, "--runs");
+    if (at < 0)
+        return 3;
+    if (at + 1 >= args.Length || !int.TryParse(args[at + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int runs) || runs < 1)
+        throw new ArgumentException("--runs needs a positive integer");
+    return runs;
+}
+
+static unsafe void SceneFrame(int[] depths, int runs)
 {
     Console.WriteLine();
     Console.WriteLine("The committed headline scene at the seam (#125): the frame along the settle depth");
     Console.WriteLine();
 
-    int[] depths = [0, 600, 1200, 1800, 2400, 3000, 3600];
     const uint FrameW = 1024,
         FrameH = 1024; // src/swarm.asm FRAME_W / FRAME_H
 
@@ -1443,6 +1474,7 @@ static unsafe void SceneFrame()
         $"framebuffer {FrameW}x{FrameH}, FLAG_GRID, force_path = {p.ForcePath} (auto); "
         + $"600 is decision 11's warm-up and 3600 is one capture"
     );
+    Console.WriteLine($"depths {string.Join(",", depths)}; {runs} run(s)");
 
     // WHAT A RUNG COSTS THE SCENE IT MEASURES, measured rather than reasoned
     // about. build_core is OUT -> IN and pass_core is IN -> OUT, so a rung's
@@ -1458,7 +1490,7 @@ static unsafe void SceneFrame()
     foreach (int steps in new[] { 600, 601, 602, 603 })
         Console.WriteLine($"  {steps,4} steps : cand/p = {SettleOnlyCandidates(p, g, steps),8:0.0}");
 
-    for (int run = 1; run <= 3; run++)
+    for (int run = 1; run <= runs; run++)
     {
         Console.WriteLine();
         Console.WriteLine($"run {run}");
