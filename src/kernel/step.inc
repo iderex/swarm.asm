@@ -658,57 +658,30 @@ pass_scalar:
 ; index against an 8-row matrix and does not move when the lane width does.
 FG_LANES  = 8
 
-; pass_avx2 frame: the scalar const cache (KP_*), the neighbour-run buffer (up
-; to 6 runs of {base, count}), then the vector block: seven FG_LANES-wide
-; broadcast constants the force expression reads as memory operands (KB_*),
-; and four spill slots that carry the compaction overflow across one force
-; expression (KA_SPILL; see force_group).
+; pass_avx2 frame: the scalar const cache (KP_*), two FG_LANES-wide spill slots
+; for dx/dy (register pressure relief across the force formula), and the
+; neighbour-run buffer (up to 6 runs of {base, count}).
 ;
-; The constants moved out of registers on purpose (#335): the four registers
-; they held now hold the pending in-range candidates, and AVX2 has no embedded
-; broadcast, so a constant that is a memory operand is a full vector in memory.
-; Every slot in the block is read and written with vmovaps or used as an
-; m256 operand, so the block and the frame must be 0 mod the vector size. They
-; are consequences of KP_FRAME and FG_LANES rather than written numbers, and
-; asserted below rather than believed: a literal would go on covering an
-; 8-lane layout after the rest had widened, and the failure would be a silent
-; write past the frame into the caller's slots rather than an assembler refusal.
-KA_RUNBUF = KP_FRAME                    ; 6 * 8 bytes after the const cache
+; The dx/dy slots are read and written with vmovaps, so both offsets and the
+; frame itself must be 0 mod the vector size. That used to be a written 32 and
+; is now a consequence of KP_FRAME and FG_LANES, which is a worse place for it
+; to live - so it is asserted below rather than believed. KA_FRAME is derived
+; for the same reason: left as a literal it is the one number in this block that
+; would go on covering an 8-lane layout after the rest had widened, and the
+; failure would be a silent write past the frame into the caller's slots rather
+; than an assembler refusal.
+KA_DX     = KP_FRAME                    ; first slot after the const cache
+KA_DY     = KA_DX + FG_LANES*4
+KA_RUNBUF = KA_DY + FG_LANES*4           ; 6 * 8 bytes
 KA_CACHE  = KA_RUNBUF + 48               ; {cx, cy, count} of the resolved cell
-KA_VEC    = ((KA_CACHE + 12 + FG_LANES*4 - 1) / (FG_LANES*4)) * (FG_LANES*4)
-KB_RMAX2   = KA_VEC                      ; the vector block, one slot each
-KB_BETA    = KB_RMAX2 + FG_LANES*4
-KB_ABSMASK = KB_BETA + FG_LANES*4
-KB_INVRMAX = KB_ABSMASK + FG_LANES*4
-KB_INVBETA = KB_INVRMAX + FG_LANES*4
-KB_INV1MB  = KB_INVBETA + FG_LANES*4
-KB_FS      = KB_INV1MB + FG_LANES*4
-KA_SPILL   = KB_FS + FG_LANES*4          ; 4 slots: dx, dy, r2, a of the overflow
-KA_FRAME   = KA_SPILL + 4*FG_LANES*4
+KA_FRAME  = ((KA_CACHE + 12 + FG_LANES*4 - 1) / (FG_LANES*4)) * (FG_LANES*4)
 
-if (KA_VEC mod (FG_LANES*4)) <> 0 | (KA_SPILL mod (FG_LANES*4)) <> 0
-  err       ; a vmovaps slot is not vector-aligned; see the note above
+if (KA_DX mod (FG_LANES*4)) <> 0 | (KA_DY mod (FG_LANES*4)) <> 0
+  err       ; a vmovaps spill slot is not vector-aligned; see the note above
 end if
 if (KA_FRAME mod 32) <> 0 | KA_FRAME < (KA_CACHE + 12)
   err       ; the frame does not cover the block, or breaks the 0-mod-32 rsp
 end if
-
-; The compaction tables (#335), one contiguous block so one register addresses
-; all four; the offsets are asserted at the tables themselves.
-;   CT_COMPRESS  256 rows of W dwords: row m lists the set bits of m in order,
-;                zero-padded - the vpermps index that packs the in-range lanes
-;                to the front. AVX2 has no vpcompressps; this is the LUT form.
-;   CT_ROTATE    W rows of W dwords: row k is the index vector that rotates a
-;                register up by k lanes, so a packed candidate m lands at
-;                lane (k + m) mod W.
-;   CT_LTMASK    W rows of W dwords: row k is all-ones in lanes < k.
-;   CT_POPCNT    256 bytes: the bit count of the mask, so no POPCNT feature
-;                bit is spent (cpuid.inc gates AVX2+FMA and nothing else).
-CT_COMPRESS = 0
-CT_ROTATE   = CT_COMPRESS + 256*FG_LANES*4
-CT_LTMASK   = CT_ROTATE + FG_LANES*FG_LANES*4
-CT_POPCNT   = CT_LTMASK + FG_LANES*FG_LANES*4
-CT_BYTES    = CT_POPCNT + 256
 
 ; The force pass as one text, parameterised by lane width W and register file V
 ; (masterplan decision 7). The 8-lane instantiation below is what ships; the
@@ -721,47 +694,23 @@ CT_BYTES    = CT_POPCNT + 256
 ; V is concatenated with a register number (V#0 .. V#15), so it names the file
 ; and never a single register: pass ymm or zmm, not ymm0.
 
-; force_consts - the pass-wide state the force loop reads without reloading:
-; the seven broadcast constants written once into the KB_* frame slots (the
-; loop reads them as memory operands), 1.0 in V#15 (the one constant used at
-; four sites, kept in a register), the pending-candidate registers V#11..V#14
-; zeroed, and r15 pointing at the compaction tables. Width-specific: the abs
-; mask is a full-register constant, so it is named and sized per width.
-;
-; The zeroing is load-bearing and not hygiene: the drain (force_group at
-; mode 2) masks the lanes above k to a zero force but still multiplies that
-; zero by whatever the pending dx/dy lanes hold, and 0 * NaN is NaN. Zeroed
-; here, every later lane is a permute of a real finite dx, dy, r2 or matrix
-; entry, so the product is a signed zero and never anything else.
+; force_consts - the persistent broadcasts that live the whole pass, in
+; V#11..V#15. Width-specific: the abs mask is a full-register constant, so it is
+; named and sized per width.
 ;   in:       rsp = the pass frame, KP_* cached
-;   out:      [rsp+KB_RMAX2 .. KB_FS] = the broadcast constants, V#15 = 1.0,
-;             V#11-14 = 0, r15 = &f_compress
-;   clobbers: V#0
+;   out:      V#11 = rmax2, V#12 = 1.0, V#13 = beta, V#14 = |.| mask,
+;             V#15 = invrmax
+;   clobbers: nothing else
 macro force_consts W, V {
-        vbroadcastss V#15, [f_one]
-        vbroadcastss V#0, [rsp+KP_RMAX2]
-        vmovaps [rsp+KB_RMAX2], V#0
-        vbroadcastss V#0, [rsp+KP_BETA]
-        vmovaps [rsp+KB_BETA], V#0
+        vbroadcastss V#11, [rsp+KP_RMAX2]
+        vbroadcastss V#12, [f_one]
+        vbroadcastss V#13, [rsp+KP_BETA]
       if W = 8
-        vmovaps V#0, yword [f_absmask256]
+        vmovaps V#14, yword [f_absmask256]
       else
         err     ; #164: the 16-lane abs mask has no constant in this tree
       end if
-        vmovaps [rsp+KB_ABSMASK], V#0
-        vbroadcastss V#0, [rsp+KP_INVRMAX]
-        vmovaps [rsp+KB_INVRMAX], V#0
-        vbroadcastss V#0, [rsp+KP_INVBETA]
-        vmovaps [rsp+KB_INVBETA], V#0
-        vbroadcastss V#0, [rsp+KP_INV1MB]
-        vmovaps [rsp+KB_INV1MB], V#0
-        vbroadcastss V#0, [rsp+KP_FS]
-        vmovaps [rsp+KB_FS], V#0
-        vxorps  V#11, V#11, V#11        ; pending dx, dy, r2, a: finite from here on
-        vxorps  V#12, V#12, V#12
-        vxorps  V#13, V#13, V#13
-        vxorps  V#14, V#14, V#14
-        lea     r15, [f_compress]
+        vbroadcastss V#15, [rsp+KP_INVRMAX]
 }
 
 ; force_tail_mask - build the mask that excludes the over-read past a run end.
@@ -811,55 +760,21 @@ macro force_particle_regs W, V {
         vxorps  V#7, V#7, V#7           ; fy partials
 }
 
-; force_group - one group of W neighbours j at [base+r9], in two halves that
-; run at different rates (#335). The STAGE half runs once per group: it forms
-; dx, dy and r2 for the W lanes, decides which are in range, and packs those
-; lanes onto the pending candidates in V#11-14 (dx, dy, r2, a). The FORCE half
-; - sqrt, divide and the whole force expression - runs only when W candidates
-; are pending, on a register holding nothing but in-range lanes, so the divide
-; unit no longer works on lanes whose force is discarded afterwards. Per group
-; that is one mask, two table loads, five permutes and four blends against a
-; force expression run on the in-range share of the lanes; whether that share
-; pays for the bookkeeping is a measurement (docs/BENCHMARKS.md), not an
-; argument.
-;
-; mode 0 is a full group, mode 1 a run's tail group (V#5 carries the tail
-; mask that excludes the over-read past the run end), mode 2 the DRAIN: no
-; loads, the k pending candidates run the force half under a lane mask, once
-; per particle. The drain is what keeps the pass split-invariant: no candidate
-; of particle i is pending when i+1 starts, so where a range split falls
-; changes nothing.
-;
-; HOW THE PACKING WORKS, because the index arithmetic is the part a reader
-; cannot reconstruct from the mnemonics. vmovmskps turns `valid` into a byte
-; m; row m of the compress table lists the set lanes of m in order, so
-; permuting by it packs the in-range lanes to the front. That row is itself
-; permuted by row k of the rotate table before it is used, so packed lane j
-; lands at lane (k + j) mod W instead: the first W - k of them fall on the
-; lanes above the k already pending, and any past that wrap to the bottom.
-; A blend by "lane < k" then merges the rotated group onto the pending
-; registers. If k + c < W the merge IS the new pending set. If k + c >= W the
-; merge holds W in-range candidates and runs the force half, and the ROTATED
-; group - whose bottom lanes are exactly the wrapped overflow - becomes the
-; new pending set, k - W of it meaningful. Lanes above k are never read as
-; candidates: the flush is full by construction and the drain masks them.
-;
-; Pinned masking survives in the one place a lane can be unwanted: the drain
-; blends r2 to 1.0 on the lanes above k BEFORE the sqrt and zeroes their
-; force, which is what makes a NaN structurally impossible there; the flush
-; has no such lane. The neighbour loads are vmovups: a run starts at
-; cell_start[c], which is not W-aligned, so the group base is unaligned
+; force_group - one group of W neighbours j at [base+r9]. dx/dy are spilled so
+; the force formula has room; V#0-5 are the working set. Pinned masking: blend
+; r2 to 1.0 on invalid lanes BEFORE the sqrt, which is what makes a NaN
+; structurally impossible. The three neighbour loads are vmovups: a run starts
+; at cell_start[c], which is not W-aligned, so the group base is unaligned
 ; (bit-identical to vmovaps when it happens to land aligned, e.g. the brute
-; single run). The spill slots are vector-aligned frame offsets, asserted
+; single run). The dx/dy spill slots are vector-aligned frame offsets, asserted
 ; where they are defined, so those stay vmovaps.
 ;   in:       rsi/rdi/r11 = &IN.x[0] / &IN.y[0] / &IN.sp[0], r9 = group byte
-;             offset (modes 0 and 1), rsp = the pass frame with the KB_* block
-;             written, r15 = &f_compress, V#8/V#9 = xi/yi, V#10 = the species
-;             row, V#15 = 1.0, V#5 = the tail mask at mode 1
-;   in/out:   edx = k, the pending in-range candidates (0 .. W-1 between
-;             groups), V#11-14 = their dx, dy, r2, a in lanes < k,
-;             V#6/V#7 = the fx/fy partials, accumulated into
-;   clobbers: V#0-5, rax, r10, flags, [rsp+KA_SPILL .. +4 slots]
+;             offset, rsp = the pass frame with KP_INVBETA/KP_INV1MB/KP_FS
+;             cached, V#8/V#9 = xi/yi, V#10 = the species row, V#11-15 = the
+;             pass constants, V#5 = the tail mask when tail=1
+;   in/out:   V#6/V#7 = the fx/fy partials, accumulated into
+;   out:      [rsp+KA_DX], [rsp+KA_DY] = this group's dx/dy
+;   clobbers: V#0-5; no GPR and no flag
 ;
 ; V#8, V#9 and V#10 are inputs, and force_particle_regs is what produces them -
 ; the per-particle prologue, once per i, where this macro runs once per group of
@@ -871,10 +786,9 @@ macro force_particle_regs W, V {
 ; number of them is deliberately not stated: at 16 lanes the dataflow changes
 ; shape rather than widening. Every vcmpps here writes a k register there, so
 ; `valid` stops being a vector and the two vandps that combine it become kandw;
-; vroundps has no 512-bit encoding at all (it is vrndscaleps); the packing is
-; one vpcompressps there and the tables have no successor. Some of those fail
-; closed as assembler refusals and the mask ANDs would not. #164 rewrites this
-; body against a golden of its own; it does not fill in else-arms.
+; vroundps has no 512-bit encoding at all (it is vrndscaleps). Some of those
+; fail closed as assembler refusals and the mask ANDs would not. #164 rewrites
+; this body against a golden of its own; it does not fill in else-arms.
 ;
 ; FIVE SITES ARE FUSED (#162): the five mul-then-add/sub pairs are one FMA
 ; each, rounding once instead of twice. That is the ARITHMETIC of PATH_AVX2
@@ -884,12 +798,8 @@ macro force_particle_regs W, V {
 ; decision 2, amended 2026-08-31). `att = tt*a` stays a lone mul - it has no
 ; add to fuse with. Fusing is not a move TOWARD the oracle: the reference is
 ; an unfused f32 op sequence, so single rounding is a DIFFERENT distance from
-; it, and the recorded parity envelope is what says how far. The compaction
-; moved the ORDER the candidates enter the partial sums and nothing about the
-; arithmetic of any one candidate; the envelope was re-measured for it.
-macro force_group W, V, mode {
-      local ..flush, ..done
-      if mode < 2
+; it, and the recorded parity envelope is what says how far.
+macro force_group W, V, tail {
         vmovups V#0, [rsi+r9]           ; dx = x[j] - xi ; min-image
         vsubps  V#0, V#0, V#8
         vroundps V#4, V#0, 0
@@ -898,107 +808,57 @@ macro force_group W, V, mode {
         vsubps  V#1, V#1, V#9
         vroundps V#4, V#1, 0
         vsubps  V#1, V#1, V#4
+        vmovaps [rsp+KA_DX], V#0        ; spill dx, dy
+        vmovaps [rsp+KA_DY], V#1
         vmulps  V#2, V#0, V#0           ; r2 = dx*dx + dy*dy (one rounding)
         vfmadd231ps V#2, V#1, V#1
         vxorps  V#4, V#4, V#4
         vcmpps  V#3, V#2, V#4, 0x0E     ; r2 > 0
-        vcmpps  V#4, V#2, [rsp+KB_RMAX2], 0x11  ; r2 < rmax2
+        vcmpps  V#4, V#2, V#11, 0x11    ; r2 < rmax2
         vandps  V#3, V#3, V#4           ; valid
-        if mode = 1
-          if W = 8
+      if tail
+        if W = 8
         vandps  V#3, V#3, V#5           ; & tail mask (exclude j >= n / pads)
-          else
+        else
         err     ; #164: the tail predicate is a k register at 16 lanes
-          end if
-        end if
-        vmovups V#5, [r11+r9]           ; sj (species indices)
-        if W = 8
-        vpermps V#5, V#5, V#10          ; a[k] = matrow[sj[k]]
-        vmovmskps eax, V#3              ; m = the in-range lanes as a byte
-        mov     r10d, edx
-        shl     r10d, 5                 ; k * 32: the row of the k-indexed tables
-        vmovups V#4, [r15+CT_ROTATE+r10]
-        shl     eax, 5                  ; m * 32: the compress row
-        vpermps V#4, V#4, [r15+CT_COMPRESS+rax] ; idx = compress[m] rotated by k
-        vpermps V#0, V#4, V#0           ; the in-range lanes, packed, at (k+j) mod W
-        vpermps V#1, V#4, V#1
-        vpermps V#2, V#4, V#2
-        vpermps V#5, V#4, V#5
-        vmovups V#3, [r15+CT_LTMASK+r10] ; lanes < k: the pending ones
-        shr     eax, 5
-        movzx   eax, byte [r15+CT_POPCNT+rax] ; c = in-range lanes this group
-        else
-        err     ; #164: vpcompressps under the k mask, and no tables
-        end if
-        add     edx, eax                ; k += c
-        cmp     edx, W
-        jae     ..flush
-        if W = 8
-        vblendvps V#11, V#0, V#11, V#3  ; pending = lane<k ? pending : packed
-        vblendvps V#12, V#1, V#12, V#3
-        vblendvps V#13, V#2, V#13, V#3
-        vblendvps V#14, V#5, V#14, V#3
-        else
-        err     ; #164: k-register merge, and not in this operand order
-        end if
-        jmp     ..done
-  ..flush:
-        if W = 8
-        vblendvps V#11, V#0, V#11, V#3  ; W in-range candidates, no other lane
-        vblendvps V#12, V#1, V#12, V#3
-        vblendvps V#13, V#2, V#13, V#3
-        vblendvps V#14, V#5, V#14, V#3
-        else
-        err     ; #164: k-register merge, and not in this operand order
-        end if
-        vmovaps [rsp+KA_SPILL], V#0     ; the packed group outlives the force
-        vmovaps [rsp+KA_SPILL+FG_LANES*4], V#1    ; expression: its bottom
-        vmovaps [rsp+KA_SPILL+2*FG_LANES*4], V#2  ; lanes are the overflow
-        vmovaps [rsp+KA_SPILL+3*FG_LANES*4], V#5
-      else
-        test    edx, edx                ; the drain: nothing pending, nothing owed
-        jz      ..done
-        mov     r10d, edx
-        shl     r10d, 5
-        vmovups V#3, [r15+CT_LTMASK+r10] ; lanes < k hold candidates
-        if W = 8
-        vblendvps V#13, V#15, V#13, V#3 ; r2' = lane<k ? r2 : 1.0 (pre-sqrt)
-        else
-        err     ; #164: k-register select, and not in this operand order
         end if
       end if
-        vsqrtps V#2, V#13               ; r
-        vmulps  V#4, V#2, [rsp+KB_INVRMAX] ; xn = r * invrmax
-        vmovaps V#0, [rsp+KB_INVBETA]
-        vfmsub213ps V#0, V#4, V#15      ; rep = invbeta*xn - 1 (mul commutes)
+      if W = 8
+        vblendvps V#2, V#12, V#2, V#3   ; r2' = valid ? r2 : 1.0 (pre-sqrt)
+      else
+        err     ; #164: k-register select, and not in this operand order
+      end if
+        vsqrtps V#2, V#2                ; r
+        vmulps  V#4, V#2, V#15          ; xn = r * invrmax
+        vbroadcastss V#0, [rsp+KP_INVBETA]
+        vfmsub213ps V#0, V#4, V#12      ; rep = invbeta*xn - 1 (mul commutes)
         vaddps  V#1, V#4, V#4           ; att: 2xn - 1 - beta
-        vsubps  V#1, V#1, V#15
-        vsubps  V#1, V#1, [rsp+KB_BETA]
-        vandps  V#1, V#1, [rsp+KB_ABSMASK] ; abs
-        vmovaps V#5, [rsp+KB_INV1MB]
-        vfnmadd213ps V#1, V#5, V#15     ; tt = 1 - |..|*inv1mb
-        vmulps  V#1, V#1, V#14          ; att = tt * a
-        vcmpps  V#5, V#4, [rsp+KB_BETA], 0x11 ; xn < beta
+        vsubps  V#1, V#1, V#12
+        vsubps  V#1, V#1, V#13
+        vandps  V#1, V#1, V#14          ; abs
+        vbroadcastss V#5, [rsp+KP_INV1MB]
+        vfnmadd213ps V#1, V#5, V#12     ; tt = 1 - |..|*inv1mb
+        vmovups V#5, [r11+r9]           ; sj (species indices)
+      if W = 8
+        vpermps V#5, V#5, V#10          ; a[k] = matrow[sj[k]]
+      else
+        err     ; #164: a wider permute table has to decide its upper elements
+      end if
+        vmulps  V#1, V#1, V#5           ; att = tt * a
+        vcmpps  V#5, V#4, V#13, 0x11    ; xn < beta
       if W = 8
         vblendvps V#0, V#1, V#0, V#5    ; f = (xn<beta) ? rep : att
       else
         err     ; #164: k-register select, and not in this operand order
       end if
-      if mode = 2
-        vandps  V#0, V#0, V#3           ; f &= lane<k (the rest -> 0)
-      end if
-        vmulps  V#0, V#0, [rsp+KB_FS]   ; q = f*fs / r  (masked: f=0, r=1 -> 0)
+        vandps  V#0, V#0, V#3           ; f &= valid (invalid -> 0)
+        vbroadcastss V#5, [rsp+KP_FS]
+        vmulps  V#0, V#0, V#5           ; q = f*fs / r  (invalid: f=0, r=1 -> 0)
         vdivps  V#0, V#0, V#2
-        vfmadd231ps V#6, V#0, V#11      ; fx += q*dx ; fy += q*dy
-        vfmadd231ps V#7, V#0, V#12
-      if mode < 2
-        vmovaps V#11, [rsp+KA_SPILL]    ; pending = the overflow, k - W of it
-        vmovaps V#12, [rsp+KA_SPILL+FG_LANES*4]
-        vmovaps V#13, [rsp+KA_SPILL+2*FG_LANES*4]
-        vmovaps V#14, [rsp+KA_SPILL+3*FG_LANES*4]
-        sub     edx, W
-      end if
-  ..done:
+        vmovaps V#5, [rsp+KA_DX]        ; fx += q*dx ; fy += q*dy
+        vfmadd231ps V#6, V#0, V#5
+        vmovaps V#5, [rsp+KA_DY]
+        vfmadd231ps V#7, V#0, V#5
 }
 
 ; force_reduce - collapse the W partial forces in V#6/V#7 to xmm6[0]/xmm7[0]
@@ -1061,11 +921,12 @@ macro avx2_pass_body {
         lea     rbx, [rcx+AH_SIZE]      ; bank base
         mov     r14d, [rcx+AH_PADDED]
         shl     r14, 2                  ; stride
+        mov     r15d, [rcx+AH_PARAMS+SP_N]
 
         cache_pass_consts               ; same KP_* layout as pass_scalar
         invalidate_run_cache KA_CACHE
 
-        ; --- the pass-wide state: KB_* constants, 1.0, the pending set, r15 --
+        ; --- ymm constants that live the whole routine -------------------
         force_consts FG_LANES, ymm
 
   .outer:
@@ -1080,12 +941,9 @@ macro avx2_pass_body {
   .single_run:
         lea     r11, [rsp+KA_RUNBUF]
         mov     dword [r11], 0           ; base = 0
-        mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_N] ; count = n (arena = bank base - header)
-        mov     [r11+4], eax
+        mov     [r11+4], r15d            ; count = n
         mov     r13d, 1
   .have_runs:
-        xor     edx, edx                 ; k = 0 pending in-range candidates (after
-                                         ;   the call above, which clobbers rdx)
         imul    rax, r14, AR_X_IN        ; group bases (recomputed after the call)
         lea     rsi, [rbx+rax]           ; &IN.x[0]
         imul    rax, r14, AR_Y_IN
@@ -1096,9 +954,10 @@ macro avx2_pass_body {
   .run_loop:
         mov     r9d, [rcx]               ; base = particle index of this run
         shl     r9, 2                    ; base byte offset = first group offset
-        mov     r10d, [rcx+4]            ; count (edx is the pending count now)
-        and     r10d, -FG_LANES          ; nfull = count & ~(W-1) (full groups)
-        lea     r8, [r9+r10*4]           ; tail group byte offset = base + nfull*4
+        mov     eax, [rcx+4]             ; count
+        mov     edx, eax
+        and     edx, -FG_LANES           ; nfull = count & ~(W-1) (full groups)
+        lea     r8, [r9+rdx*4]           ; tail group byte offset = base + nfull*4
   .g8:
         cmp     r9, r8
         jae     .g8done
@@ -1106,7 +965,6 @@ macro avx2_pass_body {
         add     r9, FG_LANES*4
         jmp     .g8
   .g8done:
-        mov     eax, [rcx+4]             ; count again: force_group clobbers rax
         and     eax, FG_LANES-1          ; tail lanes = count & (W-1)
         jz      .run_next                ; run length a lane multiple -> no tail
         force_tail_mask FG_LANES, ymm
@@ -1116,7 +974,6 @@ macro avx2_pass_body {
         dec     r13d
         jnz     .run_loop
   .reduce:
-        force_group FG_LANES, ymm, 2    ; drain: the k still pending, masked
         force_reduce FG_LANES, ymm      ; fixed shuffle-reduce, once per particle
         integrate_and_store 1           ; AVX2 path: VEX-encoded tail (issue #33)
 
@@ -1217,63 +1074,3 @@ f_one     dd 1.0
 align 32
 f_absmask256 dd 8 dup(0x7FFFFFFF)
 f_tailwin    dd 8 dup(0xFFFFFFFF), 8 dup(0)
-
-; The compaction tables (#335), generated at assembly time from their
-; definitions at CT_* so that no row is typed by hand; the sizes are asserted
-; against the offsets the loop addresses them by. Constant data outside the
-; kernel's mutable state, like the two LUTs above.
-align 32
-f_compress dd FG_LANES dup(0)           ; row 0: m = 0 sets no lane, all padding
-repeat 255
-  ct_m = %
-  ct_c = 0
-  repeat FG_LANES
-    if ct_m and (1 shl (% - 1))
-      dd % - 1                          ; the set lanes of m, in lane order
-      ct_c = ct_c + 1
-    end if
-  end repeat
-  if ct_c < FG_LANES
-    repeat FG_LANES - ct_c
-      dd 0                              ; padding; never read as a candidate
-    end repeat
-  end if
-end repeat
-if $ - f_compress <> CT_ROTATE
-  err       ; the compress table is not the size CT_ROTATE assumes
-end if
-repeat FG_LANES
-  ct_k = % - 1
-  repeat FG_LANES
-    dd ((% - 1) - ct_k) and (FG_LANES - 1) ; rotate up by k: lane p reads p - k
-  end repeat
-end repeat
-if $ - f_compress <> CT_LTMASK
-  err       ; the rotate table is not the size CT_LTMASK assumes
-end if
-repeat FG_LANES
-  ct_k = % - 1
-  repeat FG_LANES
-    if (% - 1) < ct_k
-      dd 0xFFFFFFFF                     ; lane < k
-    else
-      dd 0
-    end if
-  end repeat
-end repeat
-if $ - f_compress <> CT_POPCNT
-  err       ; the lane mask table is not the size CT_POPCNT assumes
-end if
-repeat 256
-  ct_m = % - 1
-  ct_c = 0
-  repeat FG_LANES
-    if ct_m and (1 shl (% - 1))
-      ct_c = ct_c + 1
-    end if
-  end repeat
-  db ct_c                               ; popcount(m)
-end repeat
-if $ - f_compress <> CT_BYTES
-  err       ; the tables do not end where CT_BYTES says
-end if
