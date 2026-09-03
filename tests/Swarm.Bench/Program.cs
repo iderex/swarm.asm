@@ -840,6 +840,12 @@ static double MinOfRounds(Action work)
 
 // Grid dimension for a preset, mirroring arena_dims_core (layout.inc): the
 // largest power of two with 1/g >= rmax, clamped to [4, 512].
+// #334 experiment build: the sort bins columns at g * GridCols (GRID_COL_SHIFT
+// in src/kernel/layout.inc) and the force loop walks [cx-GridCols, cx+GridCols]
+// on three rows. The candidate counter below mirrors that walk, so cand/p is
+// what THIS build's loop pays for and not the shipped 3x3's.
+const int GridCols = 4;
+
 static int GridDim(float rmax)
 {
     int g = 4;
@@ -1029,35 +1035,37 @@ static unsafe double MeanCandidatesPerParticle(void* arena, uint n, int g)
     float* vx = (float*)NativeMemory.Alloc(n, sizeof(float));
     float* vy = (float*)NativeMemory.Alloc(n, sizeof(float));
     int* s = (int*)NativeMemory.Alloc(n, sizeof(int));
-    var count = new int[(long)g * g];
+    int gx = g * GridCols;
+    var count = new int[(long)g * gx];
     try
     {
         if (Native.swarm_read_state(arena, x, y, vx, vy, s) != 0)
             throw new InvalidOperationException("swarm_read_state reported a dropped id");
 
         int mask = g - 1;
+        int mx = gx - 1;
         for (uint i = 0; i < n; i++)
         {
-            int cx = (int)(x[i] * g) & mask;
+            int cx = (int)(x[i] * gx) & mx;
             int cy = (int)(y[i] * g) & mask;
-            count[(long)cy * g + cx]++;
+            count[(long)cy * gx + cx]++;
         }
 
         double weighted = 0;
         for (int cy = 0; cy < g; cy++)
         {
-            for (int cx = 0; cx < g; cx++)
+            for (int cx = 0; cx < gx; cx++)
             {
-                int here = count[(long)cy * g + cx];
+                int here = count[(long)cy * gx + cx];
                 if (here == 0)
                     continue;
 
                 int neighbourhood = 0;
                 for (int dy = -1; dy <= 1; dy++)
                 {
-                    long row = (long)((cy + dy) & mask) * g;
-                    for (int dx = -1; dx <= 1; dx++)
-                        neighbourhood += count[row + ((cx + dx) & mask)];
+                    long row = (long)((cy + dy) & mask) * gx;
+                    for (int dx = -GridCols; dx <= GridCols; dx++)
+                        neighbourhood += count[row + ((cx + dx) & mx)];
                 }
                 weighted += (double)here * neighbourhood;
             }
@@ -1711,13 +1719,11 @@ static unsafe void InsideShare()
             {
                 var (walk, groups, runs) = WalkShape(x, y, p.N, g * rows, g * cols, rows, cols);
                 if (rows == 1 && cols == 1)
-                {
                     walk1 = walk;
-                    if (Math.Abs(walk - ladder) > 1e-9)
-                        throw new InvalidOperationException(
-                            $"1x1 walk {walk} disagrees with the ladder's count {ladder}"
-                        );
-                }
+                if (rows == 1 && cols == GridCols && Math.Abs(walk - ladder) > 1e-9)
+                    throw new InvalidOperationException(
+                        $"1x{GridCols} walk {walk} disagrees with the ladder's count {ladder}"
+                    );
                 string cells = $"{g * rows}x{g * cols}";
                 Console.WriteLine(
                     $"  {rows}x{cols,-4} {cells,10} {runs,7:0.00} {walk,9:0.0} {groups,9:0.00} "

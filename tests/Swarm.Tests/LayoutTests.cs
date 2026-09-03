@@ -39,7 +39,9 @@ public sealed class LayoutTests
         {
             g *= 2;
         }
-        ulong total = 512 + (ulong)padded * 52 + ((ulong)g * g + 1) * 4;
+        // #334 experiment: columns are binned at g << 2, so cell_start holds
+        // g * (g * 4) + 1 entries (GRID_COL_SHIFT in src/kernel/layout.inc).
+        ulong total = 512 + (ulong)padded * 52 + ((ulong)g * g * 4 + 1) * 4;
         return (total + 63) & ~63UL;
     }
 

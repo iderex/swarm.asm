@@ -41,6 +41,8 @@ KP_LAST    = 40                         ; outer-loop bound (dword)
 KP_G       = 44                         ; grid dim g (u32, M2 cell binning)
 KP_GM1     = 48                         ; g - 1 (cell wrap mask)
 KP_GF      = 52                         ; g as f32
+KP_GXM1    = 56                         ; gx - 1 (column wrap mask; #334 shape)
+KP_GXF     = 60                         ; gx = g << GRID_COL_SHIFT as f32
 KP_FRAME   = 64                         ; end of the shared const cache
 
 ; pass_scalar adds a neighbour-run buffer after the const cache: up to 6 runs
@@ -129,11 +131,12 @@ macro t_mul_from d, s, m { if TAIL_VEX
                        mulss  d, m
                      end if }
 
-; cell_id_from_coords - decision 3's binning rule, written once:
-;   cx = int(x*g) & (g-1), cy = int(y*g) & (g-1), cell = cy*g + cx.
-; Power-of-two g makes int(coord*g) exact for coord in [0,1); the & (g-1) mask
-; is the belt that keeps cell in [0, g*g) unconditionally, which is what bounds
-; the histogram and the scatter.
+; cell_id_from_coords - decision 3's binning rule, written once, in the #334
+; shape (gx = g << GRID_COL_SHIFT columns per row):
+;   cx = int(x*gx) & (gx-1), cy = int(y*g) & (g-1), cell = cy*gx + cx.
+; Power-of-two g and gx make int(coord*dim) exact for coord in [0,1); the masks
+; are the belt that keeps cell in [0, g*gx) unconditionally, which is what
+; bounds the histogram and the scatter.
 ;
 ; Every operand is a parameter because the two call sites genuinely differ in
 ; all of them, and the alternative to parameterising them is what this replaces:
@@ -150,22 +153,23 @@ macro t_mul_from d, s, m { if TAIL_VEX
 ; else in this file.
 ;   in:       vex = 1 to VEX-encode, movop = the mnemonic that brings a
 ;             coordinate into tmp, xsrc/ysrc = its two sources, gf/gm1/g = the
-;             grid triple as f32 / mask / integer, in any operand form movop's
-;             site can supply
+;             row grid triple as f32 / mask / integer, gxf/gxm1 = the column
+;             count as f32 / mask, in any operand form movop's site can supply
 ;   out:      dst = the cell id
 ;   clobbers: dst, scratch, tmp, flags
-macro cell_id_from_coords vex, movop, xsrc, ysrc, gf, gm1, g, dst, scratch, tmp {
+macro cell_id_from_coords vex, movop, xsrc, ysrc, gf, gm1, g, gxf, gxm1, dst, scratch, tmp {
         TAIL_VEX = vex
         movop   tmp, xsrc
-        t_mul   tmp, gf
-        t_cvtt  dst, tmp                ; int(x*g), truncation = floor for x>=0
-        and     dst, gm1                ; cx
+        t_mul   tmp, gxf
+        t_cvtt  dst, tmp                ; int(x*gx), truncation = floor for x>=0
+        and     dst, gxm1               ; cx
         movop   tmp, ysrc
         t_mul   tmp, gf
         t_cvtt  scratch, tmp
         and     scratch, gm1            ; cy
         imul    scratch, g              ; cy*g
-        add     dst, scratch            ; cell = cy*g + cx
+        shl     scratch, GRID_COL_SHIFT ; cy*gx
+        add     dst, scratch            ; cell = cy*gx + cx
 }
 
 ; resolve_neighbour_runs - the per-particle prologue both force passes run
@@ -226,9 +230,9 @@ macro resolve_neighbour_runs vex, runbuf, cache, countreg {
         mov     eax, [rbx-AH_SIZE+AH_PARAMS+SP_FLAGS]  ; arena = bank base - header
         test    eax, FLAG_GRID
         jz      .single_run
-        t_mul_from xmm0, xmm8, [rsp+KP_GF]  ; cx = int(xi*g) & (g-1) (reproduces
+        t_mul_from xmm0, xmm8, [rsp+KP_GXF] ; cx = int(xi*gx) & (gx-1) (reproduces
         t_cvtt  eax, xmm0                   ;   the cell id the sort used)
-        and     eax, [rsp+KP_GM1]
+        and     eax, [rsp+KP_GXM1]
         mov     ecx, eax
         t_mul_from xmm0, xmm9, [rsp+KP_GF]  ; cy = int(yi*g) & (g-1)
         t_cvtt  eax, xmm0
@@ -256,7 +260,7 @@ macro resolve_neighbour_runs vex, runbuf, cache, countreg {
 
 ; invalidate_run_cache - arm the cell cache above for a fresh pass.
 ;
-; cx lives in [0, g) and g is clamped to at most 512, so -1 is a cell
+; cx lives in [0, gx) and gx is at most 512 << GRID_COL_SHIFT, so -1 is a cell
 ; coordinate no particle can produce and the first comparison always misses.
 ; This must run once per pass entry rather than once per frame: cell_start is
 ; rebuilt by every grid_sort, so a cache surviving into the next pass would
@@ -274,7 +278,7 @@ macro invalidate_run_cache cache {
 ;   in:       xmm6 = fx, xmm7 = fy (the accumulated force for particle i, as
 ;             SCALARS), xmm8/xmm9 = xi/yi in their low lane, r12 = i,
 ;             rbx = bank base, r14 = stride, and the KP_* const cache at [rsp]
-;             (incl. KP_G/KP_GM1/KP_GF)
+;             (incl. KP_G/KP_GM1/KP_GF/KP_GXM1/KP_GXF)
 ;   out:      OUT[i] velocity and position written, plus the OUT cell id
 ;   clobbers: xmm0-4, xmm10, r9, r10, and (via the wrap routine it calls)
 ;             xmm1/3/4
@@ -337,7 +341,8 @@ macro integrate_and_store vex {
         ; cell id for next frame's grid build (M2). x' is still live in xmm10
         ; from the store above and y' in xmm4, both in [0,1) from wrap_scalar.
         cell_id_from_coords vex, t_copy, xmm10, xmm4, \
-                [rsp+KP_GF], [rsp+KP_GM1], [rsp+KP_G], r9d, r10d, xmm0
+                [rsp+KP_GF], [rsp+KP_GM1], [rsp+KP_G], \
+                [rsp+KP_GXF], [rsp+KP_GXM1], r9d, r10d, xmm0
         elem_addr r10, AR_CELLID, r12
         mov     [r10], r9d
 }
@@ -346,7 +351,7 @@ macro integrate_and_store vex {
 ; block into the KP_* stack slots. Identical prologue for both pass_scalar and
 ; pass_avx2 (they share the KP_* layout), so it lives once here (decision 5).
 ;   in:       rcx = arena, rsp = the pass frame (KP_* slots reserved)
-;   out:      [rsp+KP_RMAX2 .. KP_GF] filled
+;   out:      [rsp+KP_RMAX2 .. KP_GXF] filled
 ;   clobbers: rax (eax), r10, xmm0-6
 macro cache_pass_consts {
         lea     r10, [rcx+AH_PARAMS]
@@ -385,6 +390,12 @@ macro cache_pass_consts {
         mov     [rsp+KP_GM1], eax       ; g - 1 (cell wrap mask)
         cvtsi2ss xmm5, dword [rcx+AH_G]
         movss   [rsp+KP_GF], xmm5       ; g as f32
+        mov     eax, [rcx+AH_G]
+        shl     eax, GRID_COL_SHIFT     ; gx = g << GRID_COL_SHIFT (#334 shape)
+        cvtsi2ss xmm5, eax
+        movss   [rsp+KP_GXF], xmm5      ; gx as f32
+        dec     eax
+        mov     [rsp+KP_GXM1], eax      ; gx - 1 (column wrap mask)
 }
 
 ; ------------------------------------------------------------------

@@ -357,8 +357,9 @@ pool_build:
         mov     rbx, rcx               ; arena
         mov     [pool_arena], rbx      ; publish for the workers
         call    build_pads_core        ; the six pad tails OUT -> IN
-        mov     ecx, [rbx+AH_G]        ; W = clamp(n / (g*g), 1, T)
+        mov     ecx, [rbx+AH_G]        ; W = clamp(n / cells, 1, T)
         imul    ecx, ecx               ; g*g >= 16, so the divisor is never zero
+        shl     ecx, GRID_COL_SHIFT    ; cells = g*gx (#334 shape)
         mov     eax, [rbx+AH_PARAMS+SP_N]
         xor     edx, edx
         div     ecx

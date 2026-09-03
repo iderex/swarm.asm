@@ -10,13 +10,14 @@
 
 ; ------------------------------------------------------------------
 ; seed_cellids - cell id for the seeded reals [0, n), so the first grid build
-; sorts by valid keys. cell = cy*g + cx, cx = int(x*g) & (g-1) (decision 3).
+; sorts by valid keys. cell = cy*gx + cx, cx = int(x*gx) & (gx-1),
+; cy = int(y*g) & (g-1), gx = g << GRID_COL_SHIFT (decision 3, #334 shape).
 ;   in:       rcx = arena (OUT seeded, AH_G cached)
 ;   out:      cellid[0..n) written; cellid pads (>= n) are left uninitialized
 ;             and MUST NOT be read (the build only histograms/scatters [0,n);
 ;             a later neighbourhood pass that reads pad cells must fill them)
-;   clobbers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11, xmm0, xmm1, flags;
-;             saves+restores rbx
+;   clobbers: rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11, xmm0, xmm1, xmm2,
+;             flags; saves+restores rbx
 ;   MXCSR:    assumes the pinned seam MXCSR; cvttss2si truncates (RC-independent)
 ; ------------------------------------------------------------------
 seed_cellids:
@@ -34,13 +35,17 @@ seed_cellids:
         mov     ecx, [rbx+AH_G]         ; g
         cvtsi2ss xmm0, ecx              ; g as f32
         mov     r8d, ecx
-        dec     r8d                     ; g - 1 (cell wrap mask)
+        dec     r8d                     ; g - 1 (row wrap mask)
+        mov     r10d, ecx
+        shl     r10d, GRID_COL_SHIFT    ; gx = g << GRID_COL_SHIFT (#334)
+        cvtsi2ss xmm2, r10d             ; gx as f32
+        dec     r10d                    ; gx - 1 (column wrap mask)
   .loop:
         ; The same binning rule the integrate tail writes for every later
         ; frame; this lays down the keys for the first build, before any pass
         ; has run. Never VEX here: this is not the tail and there is no ymm
         ; state to keep clean.
-        cell_id_from_coords 0, movss, [rsi], [rdi], xmm0, r8d, ecx, eax, edx, xmm1
+        cell_id_from_coords 0, movss, [rsi], [rdi], xmm0, r8d, ecx, xmm2, r10d, eax, edx, xmm1
         mov     [r11], eax
         add     rsi, 4
         add     rdi, 4
@@ -74,7 +79,8 @@ grid_sort:
         push    r15
         mov     r12d, [rcx+AH_PARAMS+SP_N]  ; n
         mov     r10d, [rcx+AH_G]
-        imul    r10d, r10d              ; g2 = g*g (number of cells)
+        imul    r10d, r10d              ; g2 = g*g
+        shl     r10d, GRID_COL_SHIFT    ;   * columns per g = number of cells (#334)
         mov     r14d, [rcx+AH_PADDED]
         shl     r14, 2                  ; stride (bytes)
         lea     r15, [rcx+AH_SIZE]      ; OUT base
@@ -193,9 +199,10 @@ grid_sort:
 ; not move.
 ; ==================================================================
 
-GRID_CELLS_MAX   = 512*512               ; g clamps at GRID_G_MAX (layout.inc), so
-                                         ;   one histogram block is 1 MiB of dwords
-        assert GRID_CELLS_MAX = GRID_G_MAX*GRID_G_MAX
+GRID_CELLS_MAX   = (512*512) shl GRID_COL_SHIFT ; g clamps at GRID_G_MAX (layout.inc),
+                                         ;   columns at GRID_G_MAX << GRID_COL_SHIFT,
+                                         ;   so one histogram block is 4 MiB of dwords
+        assert GRID_CELLS_MAX = GRID_G_MAX*(GRID_G_MAX shl GRID_COL_SHIFT)
                                          ; The arena's own cell_start is sized from
                                          ;   the real g and follows the clamp; this
                                          ;   block is a fixed platform allocation
@@ -226,7 +233,8 @@ grid_hist_range:
         push    rsi
         push    rdi
         mov     r10d, [rcx+AH_G]
-        imul    r10d, r10d              ; g2 = g*g (number of cells)
+        imul    r10d, r10d              ; g2 = g*g
+        shl     r10d, GRID_COL_SHIFT    ;   * columns per g = number of cells (#334)
         mov     eax, [rcx+AH_PADDED]
         imul    rax, rax, AR_CELLID*4   ; 12 * stride bytes
         lea     rsi, [rcx+rax+AH_SIZE]  ; &cellid[0]
@@ -287,7 +295,8 @@ grid_cursors:
         mov     r12d, r8d               ; T
         mov     r13d, [rcx+AH_PARAMS+SP_N]  ; n
         mov     r10d, [rcx+AH_G]
-        imul    r10d, r10d              ; g2
+        imul    r10d, r10d              ; g2 = g*g
+        shl     r10d, GRID_COL_SHIFT    ;   * columns per g = number of cells (#334)
         mov     eax, [rcx+AH_PADDED]
         imul    rax, rax, AR_ARRAYS*4   ; 13 arrays * stride bytes
         lea     r14, [rcx+rax+AH_SIZE]  ; &cell_start[0]
@@ -468,29 +477,30 @@ NR_HI1    = 4                            ; column high index (exclusive) of run 
 NR_HI2    = 8                            ; column high index of run 2 (0 = no run 2)
 NR_RY     = 12                           ; current row (0..g-1)
 NR_ROWCNT = 16                           ; remaining rows to emit
-NR_LOCALS = 32                           ; 20 used, rounded up
+NR_GX     = 20                           ; gx = g << GRID_COL_SHIFT (columns per row)
+NR_LOCALS = 32                           ; 24 used, rounded up
 
 ; ------------------------------------------------------------------
-; neighbour_runs - enumerate the 3x3-neighbourhood runs of cell (cx, cy) into
-; buf (docs/MASTERPLAN.md, decision 3). For each of the three rows
-; ry = (cy-1, cy, cy+1) & (g-1) it appends the contiguous IN run(s) spanning
-; columns (cx-1, cx, cx+1) & (g-1). Cells inside a row are consecutive cell ids
-; and IN is cell-sorted, so a non-wrapping span is ONE run: base =
-; cell_start[ry*g + cx-1], count = cell_start[ry*g + cx+2] - base. The torus
-; column seam (cx == 0 or cx == g-1) splits that row into TWO runs so the
-; wrapped column becomes its own contiguous span. Disjointness (no neighbour
-; summed twice) needs the 3x3 block to name each cell once, which fails only if
-; the window folds a cell onto itself: the three columns (cx-1, cx, cx+1) & (g-1)
-; must be pairwise distinct AND so must the three rows (cy-1, cy, cy+1) & (g-1) --
-; the floor is g >= 3 on BOTH axes (at g = 2 either window folds -1 onto +1).
-; arena_dims_core clamps g to [4, 512] (layout.inc), so g >= 4 clears both floors
-; and no neighbour is double-listed. Empty runs (count 0, sparse cells) are
-; appended too -- the caller's tail logic contributes zero for a zero-count run.
-; This is a pure
-; function of (cx, cy, g, cell_start), which is what makes the neighbourhood
-; force deterministic and pass-split invariant.
-;   in:       ecx = cx (in [0, g)), edx = cy (in [0, g)), r8d = g,
-;             r9d = g-1 (cell wrap mask), r10 = &cell_start[0],
+; neighbour_runs - enumerate the 3 x (2C+1)-neighbourhood runs of cell (cx, cy)
+; into buf (docs/MASTERPLAN.md, decision 3; the #334 shape). For each of the
+; three rows ry = (cy-1, cy, cy+1) & (g-1) it appends the contiguous IN run(s)
+; spanning the fine columns [cx-C, cx+C] & (gx-1), gx = g << GRID_COL_SHIFT,
+; C = GRID_COL_HALF. Cells inside a row are consecutive cell ids and IN is
+; cell-sorted, so a non-wrapping span is ONE run: base = cell_start[ry*gx +
+; cx-C], count = cell_start[ry*gx + cx+C+1] - base. The torus column seam
+; (cx < C or cx > gx-1-C) splits that row into TWO runs so the wrapped columns
+; become their own contiguous span. Disjointness (no neighbour summed twice)
+; needs the block to name each cell once, which fails only if the window folds
+; a cell onto itself: the 2C+1 columns must be pairwise distinct AND so must the
+; three rows (cy-1, cy, cy+1) & (g-1) -- the floors are gx >= 2C+1 and g >= 3.
+; arena_dims_core clamps g to [4, 512] (layout.inc), so g >= 4 and gx >= 4C
+; clear both floors and no neighbour is double-listed. Empty runs (count 0,
+; sparse cells) are appended too -- the caller's tail logic contributes zero
+; for a zero-count run. This is a pure function of (cx, cy, g, cell_start),
+; which is what makes the neighbourhood force deterministic and pass-split
+; invariant.
+;   in:       ecx = cx (in [0, gx)), edx = cy (in [0, g)), r8d = g,
+;             r9d = g-1 (row wrap mask), r10 = &cell_start[0],
 ;             r11 = &buf (space for 6 entries of {dd base, dd count})
 ;   out:      eax = number of runs written (3..6); buf filled
 ;   clobbers: rax, rcx, rdx, r11 (buf end), flags; saves+restores rbx; reads
@@ -503,25 +513,30 @@ neighbour_runs:
         xor     ebx, ebx                ; run count
 
         ; --- column window (same for all three rows) ---------------------
-        lea     eax, [rcx-1]
-        mov     [rsp+NR_LO1], eax       ; NOWRAP default: lo1 = cx-1
-        lea     eax, [rcx+2]
-        mov     [rsp+NR_HI1], eax       ;                 hi1 = cx+2
+        mov     eax, r8d
+        shl     eax, GRID_COL_SHIFT     ; gx = columns per row (#334)
+        mov     [rsp+NR_GX], eax
+        lea     eax, [rcx-GRID_COL_HALF]
+        mov     [rsp+NR_LO1], eax       ; NOWRAP default: lo1 = cx-C
+        lea     eax, [rcx+GRID_COL_HALF+1]
+        mov     [rsp+NR_HI1], eax       ;                 hi1 = cx+C+1
         mov     dword [rsp+NR_HI2], 0   ;                 no second run
-        test    ecx, ecx
-        jnz     .chk_high
-        lea     eax, [r8-1]             ; cx == 0: run1 = col g-1, run2 = cols 0,1
-        mov     [rsp+NR_LO1], eax       ; lo1 = g-1
-        mov     [rsp+NR_HI1], r8d       ; hi1 = g
-        mov     dword [rsp+NR_HI2], 2   ; hi2 = 2
+        cmp     dword [rsp+NR_LO1], 0
+        jge     .chk_high
+        mov     eax, [rsp+NR_GX]        ; cx < C: run1 = cols [gx+cx-C, gx),
+        add     [rsp+NR_LO1], eax       ;         run2 = cols [0, cx+C+1)
+        mov     [rsp+NR_HI1], eax       ; hi1 = gx
+        lea     eax, [rcx+GRID_COL_HALF+1]
+        mov     [rsp+NR_HI2], eax       ; hi2 = cx+C+1
         jmp     .rows
   .chk_high:
-        cmp     ecx, r9d                ; cx == g-1 ?
-        jne     .rows
-        lea     eax, [r8-2]             ; run1 = cols g-2,g-1, run2 = col 0
-        mov     [rsp+NR_LO1], eax       ; lo1 = g-2
-        mov     [rsp+NR_HI1], r8d       ; hi1 = g
-        mov     dword [rsp+NR_HI2], 1   ; hi2 = 1
+        mov     eax, [rsp+NR_GX]
+        cmp     [rsp+NR_HI1], eax       ; cx+C+1 <= gx: one run
+        jbe     .rows
+        mov     [rsp+NR_HI1], eax       ; cx > gx-1-C: run1 = cols [cx-C, gx),
+        lea     eax, [rcx+GRID_COL_HALF+1] ;              run2 = cols [0, cx+C+1-gx)
+        sub     eax, [rsp+NR_GX]
+        mov     [rsp+NR_HI2], eax       ; hi2 = cx+C+1-gx
   .rows:
         lea     eax, [rdx-1]            ; ry = (cy - 1) & (g-1); three rows up
         and     eax, r9d
@@ -529,7 +544,7 @@ neighbour_runs:
         mov     dword [rsp+NR_ROWCNT], 3
   .row_loop:
         mov     eax, [rsp+NR_RY]
-        imul    eax, r8d                ; rowbase = ry * g
+        imul    eax, [rsp+NR_GX]        ; rowbase = ry * gx
         mov     ecx, eax                ; ecx = rowbase (cx no longer needed)
 
         mov     eax, ecx                ; run1: cells [rowbase+lo1, rowbase+hi1)

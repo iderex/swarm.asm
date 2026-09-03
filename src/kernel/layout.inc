@@ -10,7 +10,8 @@
 ;   12 particle arrays   x,y,vx,vy f32 + species,id u32, banks IN and OUT,
 ;                        each padded_n * 4 B, 64-aligned by construction
 ;   cellid        padded_n * 4 B  (per-particle cell id, M2)
-;   cell_start    (g*g + 1) * 4 B (exclusive prefix ends, M2)
+;   cell_start    (g*gx + 1) * 4 B (exclusive prefix ends, M2), where
+;                 gx = g << GRID_COL_SHIFT is the column count (#334)
 ;
 ; padded_n = ((n+15) & ~15) + 16 - the explicit +16 tail is load-bearing:
 ; without it, n = 0 mod 16 (including the headline 2^20) would get zero pad
@@ -31,6 +32,16 @@ GRID_G_MAX = 512                        ; the cell-dimension ceiling (decision 3
                                         ; is sized from this, so raising it here
                                         ; reddens the build rather than silently
                                         ; overrunning a fixed-size histogram.
+
+; #334 EXPERIMENT BUILD - the sort's columns refined below rmax. Rows stay at
+; g (cell height 1/g >= rmax) and columns are binned at gx = g << GRID_COL_SHIFT
+; (cell width rmax/C, C = GRID_COL_HALF). The force loop's column window widens
+; to [cx-C, cx+C], so the walk still covers the disc, and a row's fine columns
+; are one contiguous span of the sorted bank, so the run set stays decision 3's
+; three runs. Every g*g in the tree becomes g*gx through these two names;
+; GRID_COL_SHIFT = 0 restores the shipped square grid bit for bit.
+GRID_COL_SHIFT = 2                      ; gx = g << 2: four fine columns per rmax
+GRID_COL_HALF  = 1 shl GRID_COL_SHIFT   ; C: fine columns walked either side of cx
 
 ; ------------------------------------------------------------------
 ; arena_dims_core - padded_n and grid g for VALIDATED params (no revalidation).
@@ -82,6 +93,7 @@ layout_bytes_core:
         call    arena_dims_core         ; eax = padded_n, edx = g
         mov     r8d, eax                ; padded_n (zero-extended)
         imul    edx, edx                ; g*g <= 262144: no overflow
+        shl     edx, GRID_COL_SHIFT     ; cells = g*gx <= 1048576 (#334)
         mov     eax, edx                ; g*g, zero-extended to rax
         mov     rdx, r8                 ; padded_n
         imul    rdx, AR_ARRAYS*4        ; 13 arrays (12 particle + cellid) * 4
