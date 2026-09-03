@@ -1221,6 +1221,140 @@ added to it - those rows carry build plus pass and no raster. Neither figure is 
 frame rate: the blit is not in either, and both are floors over nine rounds
 rather than the p99 the acceptance asks for.
 
+## The candidate box against the interaction disc on the committed scene (#332)
+
+The two ladders above establish that the committed headline scene clusters
+and that the pass follows the candidate count. #332 asks which levers attack
+that count, and prices the largest of them by geometry: with cell = rmax the
+force loop walks a 3x3 box of `9 rmax^2` to find a disc of `pi rmax^2`, so
+under locally uniform density `9/pi = 2.86` candidates are examined for every
+one inside range, and no finer cell can do better than that limit. Whether the
+settled scene is locally uniform on the scale of `rmax` is exactly what a
+clustered scene puts in doubt, so this section counts the disc rather than
+deriving it.
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" tests\Swarm.Bench\bin\Release\net9.0\Swarm.Bench.dll --inside
+```
+
+Nothing in this mode is timed. One arena of `presets/headline.txt` is walked
+up by `swarm_step_mt` and read out at each depth through `swarm_read_state`,
+and every figure is a count over that state: the pairs with `0 < r2 < rmax2`
+per particle, using the kernel's own f32 arithmetic (minimum image by
+round-half-even, `r2 = fma(dy, dy, dx*dx)` as the fused body computes it,
+`rmax2 = rmax*rmax` in f32), and the population of the cell block each
+neighbourhood shape would hand the loop. A shape `RxC` bins the sort at
+`R*g` rows by `C*g` columns and walks the `(2R+1) x (2C+1)` block that still
+covers the disc. `1xC` keeps decision 3's three runs, one per grid row,
+because a row's fine columns are one contiguous span of the sorted bank;
+`RxR` resolves `2R+1` runs per particle. `groups/p` is what the loop pays,
+the sum over a particle's runs of `ceil(count / 8)` with the torus seam
+splitting a run exactly as `neighbour_runs` does, and at `1x1` the walk is
+asserted equal to the ladder's own `cand/p` to every digit.
+
+### The disc, along the settle
+
+| steps | walk/p (3x3) | inside rmax | walk / inside | lanes % |
+| ----: | -----------: | ----------: | ------------: | ------: |
+|     0 |         37.0 |       12.57 |          2.94 |    77.5 |
+|   600 |        223.7 |      118.15 |          1.89 |    95.6 |
+|  1800 |        831.0 |      457.83 |          1.82 |    98.6 |
+|  3600 |       1158.7 |      638.91 |          1.81 |    99.0 |
+
+### The shapes at 3600 steps
+
+| shape | cells     | runs/p | walk/p | groups/p | lanes % | walk / inside | vs 1x1 |
+| ----- | --------- | -----: | -----: | -------: | ------: | ------------: | -----: |
+| 1x1   | 512x512   |   3.01 | 1158.7 |   146.23 |    99.0 |          1.81 |  1.00x |
+| 1x2   | 512x1024  |   3.01 | 1051.4 |   132.79 |    99.0 |          1.65 |  1.10x |
+| 1x4   | 512x2048  |   3.01 |  988.7 |   124.95 |    98.9 |          1.55 |  1.17x |
+| 1x8   | 512x4096  |   3.01 |  958.1 |   121.12 |    98.9 |          1.50 |  1.21x |
+| 2x2   | 1024x1024 |   5.01 |  947.4 |   120.57 |    98.2 |          1.48 |  1.22x |
+| 4x4   | 2048x2048 |   9.02 |  837.2 |   108.27 |    96.7 |          1.31 |  1.38x |
+
+The same six shapes at step 0, where the field is still uniform, land at
+1.19x, 1.32x, 1.40x, 1.42x and 1.74x against `1x1`, which is the geometric
+series the derivation predicts and the check that the shapes count what they
+say. The 1800 and 600 tables are in the harness output.
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200. **Feature path**: `swarm_cpu_paths` reports `0x1`; the scene
+  names no path, so `force_path = 0` resolves to `PATH_AVX2`.
+- **Scene**: `presets/headline.txt`, field for field, `FLAG_GRID`, as the
+  ladder above. Settled by `swarm_step_mt` on the pool at its auto-detected
+  physical-core count, whose contract is bit-identity with `swarm_step`.
+- **Kernel commit**: `2f0d60c`, which is AFTER the fusion of `force_path = 1`
+  (#162, merged as `909b664`). The ladder above was taken on `47434aa`, before
+  it, and the two scenes are not the same trajectory: at 600 steps the count is
+  223.7 here against the 220.3 of the ladder's drift control, and the 3600 row
+  here is 3600 steps exactly where the ladder's deepest rung sits at 3612. The
+  fusion moved path 1's bits and a chaotic scene diverges from there, which is
+  the recorded parity envelope doing what it says; nothing here re-times the
+  ladder. **Date**: 2026-09-03.
+- **Two runs of the mode printed identical tables to every digit**, which is
+  what a count with no clock in it owes. The host was not quiesced and it does
+  not matter here: nothing was timed.
+- **What the disc count does not verify.** The comparison is the kernel's own
+  in f32, but it is computed by the harness over the copied-out state, not
+  read back from the kernel, so a pair sitting within an ulp of `rmax2` is not
+  proven to land on the same side as the kernel puts it. At these counts that
+  is a handful of pairs in 1.2e9; it does not move a figure printed to four
+  digits.
+
+### Reading it - the box lever's ceiling is 1.8x, not 2.9x, and its shapes buy 1.1x to 1.4x
+
+**The settled scene is not locally uniform on the scale of rmax, and the
+clustering fills the box.** On the uniform opening field the walk examines
+2.94 candidates per candidate in range, which is `9/pi` once the particle's
+own entry in the walk is taken out (`36.0 / 12.57 = 2.86`). By 600 steps it is 1.89 and by 3600 it is
+1.81: the clumps the scene forms are dense on a scale below `rmax`, so most
+of what falls in a particle's 3x3 box also falls inside its disc. The limit
+that #332 derived at 2.86x is therefore the ceiling on the field the recorded
+budget was priced on, and 1.81x is the ceiling on the field the acceptance is
+measured on. No neighbourhood shape, at any cell size, can take the walk
+below 638.9 candidates per particle at capture depth, because that is the
+number of pairs the physics needs.
+
+**The shapes that keep the three runs buy 10% to 21%.** Refining the sort's
+columns alone leaves decision 3's structure whole - three contiguous runs,
+one per grid row, consumed as `(base, count)` - and moves the walk from
+1158.7 to 1051.4 at `1x2`, 988.7 at `1x4` and 958.1 at `1x8`, with the group
+count following it because the runs are long and the lanes are 99% full. The
+build cost of the finer bins is the `O(g^2)` term the #148 sweep measured:
+`1x4` has as many cells as `g = 1024`, whose serial build was 6.8-7.4 ms
+against 5.9-6.2 at 512, and `1x8` has half as many as `g = 2048`, whose build
+was 10.9-11.5 ms. So the best three-run shape is `1x4`: 1.17x on the groups
+for about a millisecond of build.
+
+**The square shapes buy little more and cost the run structure.** `2x2`
+walks five runs per particle for 1.22x, no better than `1x8` at three runs
+and the same cell count as `g = 1024`. `4x4` walks nine runs for 1.38x on
+2048x2048 cells, which is the dimension #148 found past the build crossover at
+this count, adding four milliseconds of serial build for the pass it saves.
+
+**Put against the frame.** The fastest recorded 3600 rung has a threaded
+pass of 84.659 ms in an 89.852 ms frame. If the pass follows the group count,
+which the ladder says it does sublinearly, `1x4` lands it near 72 ms and `4x4`
+near 63 ms before their build costs are added back; both are more than four
+times the 16.67 ms line. That is the derived expectation and not a
+measurement: no finer-cell kernel exists and none was timed here.
+
+**The disc share also bounds the one lever inside the loop body.** 55.1% of
+the lanes the loop pays for at 3600 hold a candidate in range, and the rest
+run the sqrt and the divide on `r2 = 1.0` for a force that is masked to zero.
+Compacting the in-range lanes before the sqrt would run the divide half of the
+group on 55% of the lanes, and with #59 putting the divide unit at roughly half
+the loop, that is a ceiling of about 1.29x on the pass, independent of the
+grid and of decision 3. On the uniform field the same figure is 2.94x on the
+divide half, which is why it looked like the larger lever.
+
+**What follows for the acceptance.** The product of the best three-run shape
+and the compaction ceiling is about 1.5x, against a gap of 5.4x on the
+fastest run. No lever this section measures reaches the settled scene's
+acceptance, alone or together, and the count says why: the loop is already
+examining fewer than two candidates for every one the force model requires it
+to examine.
+
 ## Scatter locality under an energetic scene (risk 3's probe; #178)
 
 Masterplan open risk 3 says the scatter estimate assumes temporal coherence, and

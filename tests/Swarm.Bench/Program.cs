@@ -100,6 +100,16 @@ if (args.Contains("--m3settle"))
     return 0;
 }
 
+// The candidate box against the interaction disc on the committed headline
+// scene (#332), behind an argument for the same reason --scene is: it settles
+// a 1M scene to capture depth before it counts anything. It times nothing, so
+// it is the one mode here whose figures a loaded host cannot move.
+if (args.Contains("--inside"))
+{
+    InsideShare();
+    return 0;
+}
+
 // The README assets (#131), behind an argument because it is the only mode
 // here that writes files into the tree and measures nothing at all. It renders
 // the shipped executable's own scene through swarm_plot and encodes the
@@ -1596,6 +1606,319 @@ static unsafe double SettleOnlyCandidates(SwarmParams p, int g, int steps)
     finally
     {
         NativeMemory.AlignedFree(arena);
+    }
+}
+
+// --- the candidate box against the interaction disc (#332) -------------------
+//
+// cand/p in the ladder above counts what the force loop WALKS: the population
+// of the 3x3 cell neighbourhood at cell = 1/g. What the physics needs is the
+// population of the disc r < rmax. With cell = rmax the walk is a box of
+// 9 rmax^2 around a disc of pi rmax^2, so under locally uniform density
+// 9/pi = 2.86 candidates are examined for every one inside range. Whether the
+// settled scene is locally uniform is exactly what a clustered scene puts in
+// doubt, so the share is counted rather than assumed: the disc from the pairs
+// themselves, with the kernel's own minimum image and r2, and the walk under
+// the neighbourhood shapes a finer cell would hand the loop, all off one
+// copied-out state.
+//
+// The shapes are the ones #332 prices. RxC names the cell grid the sort would
+// bin into, as multiples of today's g on each axis, and every shape walks the
+// block of cells that still covers the disc: a cell of rmax/k on an axis needs
+// k cells either side. 1x1 is the shipped 3x3 walk and is checked against the
+// ladder's own count to every digit. 1xC keeps decision 3's three runs, one
+// per grid row, because a row's fine columns are one contiguous span in the
+// sorted bank; RxR walks 2R+1 runs per particle.
+//
+// groups/p is what the loop pays: every run's final vector is a tail group, so
+// it is the sum over a particle's runs of ceil(count / 8), with the torus seam
+// splitting a run exactly as neighbour_runs does. lanes % is the share of the
+// lanes in those groups that hold a candidate at all.
+//
+// Every figure is a count over the state with no clock in it, so the host's
+// load cannot move it, and two runs print identical tables or something is
+// wrong. The settle is one arena walked up by swarm_step_mt and read at each
+// rung with nothing timed in between, so a row's depth is exactly its label,
+// which the ladder's rows are not (see the drift control above).
+static unsafe void InsideShare()
+{
+    Console.WriteLine();
+    Console.WriteLine("The candidate box against the interaction disc on the committed headline scene (#332)");
+    Console.WriteLine();
+
+    int[] depths = [0, 600, 1800, 3600];
+    (int Rows, int Cols)[] shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (2, 2), (4, 4)];
+
+    SwarmParams p = HeadlinePreset();
+    int g = GridDim(p.RMax);
+    ulong bytes = Native.swarm_layout_bytes(in p);
+    if (bytes == 0)
+        throw new InvalidOperationException("layout rejected the committed headline scene");
+
+    Console.WriteLine(
+        $"presets/headline.txt: n = {p.N}, species {p.SpeciesN}, rmax = {p.RMax:0.000000}, "
+        + $"g = {g}, seed 0x{p.Seed:X16}, FLAG_GRID"
+    );
+    Console.WriteLine(
+        "rmax2 = rmax*rmax in f32, minimum image d - round_half_even(d), r2 = fma(dy, dy, dx*dx), as the kernel"
+    );
+    Console.WriteLine();
+
+    void* arena = NativeMemory.AlignedAlloc((nuint)bytes, 64);
+    float* x = (float*)NativeMemory.Alloc(p.N, sizeof(float));
+    float* y = (float*)NativeMemory.Alloc(p.N, sizeof(float));
+    float* vx = (float*)NativeMemory.Alloc(p.N, sizeof(float));
+    float* vy = (float*)NativeMemory.Alloc(p.N, sizeof(float));
+    int* s = (int*)NativeMemory.Alloc(p.N, sizeof(int));
+    try
+    {
+        if (Native.swarm_init(arena, bytes, in p) != 0)
+            throw new InvalidOperationException("init failed on the committed headline scene");
+
+        int taken = 0;
+        foreach (int depth in depths)
+        {
+            if (depth > taken)
+            {
+                if (Native.swarm_pool_init(0) < 1)
+                    throw new InvalidOperationException("pool_init(0) failed for the settle");
+                try
+                {
+                    Native.swarm_step_mt(arena, (uint)(depth - taken));
+                }
+                finally
+                {
+                    Native.swarm_pool_shutdown();
+                }
+                taken = depth;
+            }
+
+            if (Native.swarm_read_state(arena, x, y, vx, vy, s) != 0)
+                throw new InvalidOperationException("swarm_read_state reported a dropped id");
+
+            double ladder = MeanCandidatesPerParticle(arena, p.N, g);
+            double inside = MeanInsideRmax(x, y, p.N, g, p.RMax);
+
+            Console.WriteLine(
+                $"steps {depth}: ladder cand/p = {ladder:0.0}, inside rmax = {inside:0.00} per particle"
+            );
+            Console.WriteLine(
+                $"  {"shape",-6} {"cells",10} {"runs/p",7} {"walk/p",9} {"groups/p",9} "
+                    + $"{"lanes %",8} {"walk/inside",12} {"vs 1x1",7}"
+            );
+            double walk1 = 0;
+            foreach (var (rows, cols) in shapes)
+            {
+                var (walk, groups, runs) = WalkShape(x, y, p.N, g * rows, g * cols, rows, cols);
+                if (rows == 1 && cols == 1)
+                {
+                    walk1 = walk;
+                    if (Math.Abs(walk - ladder) > 1e-9)
+                        throw new InvalidOperationException(
+                            $"1x1 walk {walk} disagrees with the ladder's count {ladder}"
+                        );
+                }
+                string cells = $"{g * rows}x{g * cols}";
+                Console.WriteLine(
+                    $"  {rows}x{cols,-4} {cells,10} {runs,7:0.00} {walk,9:0.0} {groups,9:0.00} "
+                        + $"{100.0 * walk / (8.0 * groups),8:0.0} {walk / inside,12:0.00} {walk1 / walk,6:0.00}x"
+                );
+            }
+            Console.WriteLine();
+        }
+    }
+    finally
+    {
+        NativeMemory.Free(x);
+        NativeMemory.Free(y);
+        NativeMemory.Free(vx);
+        NativeMemory.Free(vy);
+        NativeMemory.Free(s);
+        NativeMemory.AlignedFree(arena);
+    }
+
+    Console.WriteLine(
+        "shape RxC = the cell grid as multiples of g per axis; the walk is the (2R+1) x (2C+1) block of those cells."
+    );
+    Console.WriteLine(
+        "inside = pairs with 0 < r2 < rmax2 per particle, off the copied-out state; no walk can hold fewer."
+    );
+    Console.WriteLine(
+        "walk/p = candidates the block holds per particle; groups/p = sum over its runs of ceil(count/8), seam split as neighbour_runs."
+    );
+    Console.WriteLine(
+        "lanes % = walk / (8 * groups); walk/inside = candidates examined per candidate in range; vs 1x1 = walk reduction against the shipped shape."
+    );
+    Console.WriteLine("Nothing here is timed; every figure is a count over the state.");
+}
+
+// Pairs inside rmax per particle, from the copied-out positions, walking the
+// same 3x3 cell neighbourhood at g the kernel walks so that no pair the kernel
+// could see is missed and none it cannot see is counted. The arithmetic is the
+// kernel's: f32 throughout, minimum image by round-half-even, r2 with the
+// single rounding the fused body produces, strict bounds on both sides.
+static unsafe double MeanInsideRmax(float* x, float* y, uint n, int g, float rmax)
+{
+    int mask = g - 1;
+    long cells = (long)g * g;
+    var start = new int[cells + 1];
+    var cell = new int[n];
+    for (uint i = 0; i < n; i++)
+    {
+        int cx = (int)(x[i] * g) & mask;
+        int cy = (int)(y[i] * g) & mask;
+        cell[i] = cy * g + cx;
+        start[cell[i] + 1]++;
+    }
+    for (long c = 0; c < cells; c++)
+        start[c + 1] += start[c];
+    var sx = new float[n];
+    var sy = new float[n];
+    var cursor = (int[])start.Clone();
+    for (uint i = 0; i < n; i++)
+    {
+        int k = cursor[cell[i]]++;
+        sx[k] = x[i];
+        sy[k] = y[i];
+    }
+
+    float rmax2 = rmax * rmax;
+    long total = 0;
+    Parallel.For(
+        0,
+        g,
+        () => 0L,
+        (cy, _, acc) =>
+        {
+            for (int cx = 0; cx < g; cx++)
+            {
+                int here = cy * g + cx;
+                for (int i = start[here]; i < start[here + 1]; i++)
+                {
+                    float xi = sx[i],
+                        yi = sy[i];
+                    for (int dyc = -1; dyc <= 1; dyc++)
+                    {
+                        int row = ((cy + dyc) & mask) * g;
+                        for (int dxc = -1; dxc <= 1; dxc++)
+                        {
+                            int c = row + ((cx + dxc) & mask);
+                            for (int j = start[c]; j < start[c + 1]; j++)
+                            {
+                                float dx = sx[j] - xi;
+                                dx -= MathF.Round(dx);
+                                float dy = sy[j] - yi;
+                                dy -= MathF.Round(dy);
+                                float r2 = MathF.FusedMultiplyAdd(dy, dy, dx * dx);
+                                if (r2 > 0f && r2 < rmax2)
+                                    acc++;
+                            }
+                        }
+                    }
+                }
+            }
+            return acc;
+        },
+        acc => Interlocked.Add(ref total, acc)
+    );
+    return (double)total / n;
+}
+
+// What a (2*rows+1) x (2*cols+1) block of cells on a gy x gx grid hands the
+// force loop, per particle: the candidates it walks, the runs it resolves and
+// the 8-lane groups it pays for. Exact, by weighting every cell's block by the
+// cell's own population, because every particle in a cell resolves the same
+// runs (#87). A run is one contiguous span of cells in one grid row; the torus
+// seam splits it in two exactly as neighbour_runs does, so at rows = cols = 1
+// this reproduces the shipped run set.
+static unsafe (double Walk, double Groups, double Runs) WalkShape(
+    float* x,
+    float* y,
+    uint n,
+    int gy,
+    int gx,
+    int rows,
+    int cols
+)
+{
+    int mx = gx - 1,
+        my = gy - 1;
+    var count = new int[(long)gy * gx];
+    for (uint i = 0; i < n; i++)
+    {
+        int cx = (int)(x[i] * gx) & mx;
+        int cy = (int)(y[i] * gy) & my;
+        count[(long)cy * gx + cx]++;
+    }
+
+    long walk = 0,
+        groups = 0,
+        runs = 0;
+    Parallel.For(
+        0,
+        gy,
+        () => (Walk: 0L, Groups: 0L, Runs: 0L),
+        (cy, _, acc) =>
+        {
+            for (int cx = 0; cx < gx; cx++)
+            {
+                int here = count[(long)cy * gx + cx];
+                if (here == 0)
+                    continue;
+                long w = 0,
+                    gr = 0,
+                    ru = 0;
+                for (int dy = -rows; dy <= rows; dy++)
+                {
+                    long row = (long)((cy + dy) & my) * gx;
+                    int lo = cx - cols,
+                        hi = cx + cols; // inclusive column window
+                    if (lo < 0)
+                    {
+                        RunOf(count, row, lo + gx, mx, ref w, ref gr, ref ru);
+                        RunOf(count, row, 0, hi, ref w, ref gr, ref ru);
+                    }
+                    else if (hi > mx)
+                    {
+                        RunOf(count, row, lo, mx, ref w, ref gr, ref ru);
+                        RunOf(count, row, 0, hi - gx, ref w, ref gr, ref ru);
+                    }
+                    else
+                    {
+                        RunOf(count, row, lo, hi, ref w, ref gr, ref ru);
+                    }
+                }
+                acc.Walk += here * w;
+                acc.Groups += here * gr;
+                acc.Runs += here * ru;
+            }
+            return acc;
+        },
+        acc =>
+        {
+            Interlocked.Add(ref walk, acc.Walk);
+            Interlocked.Add(ref groups, acc.Groups);
+            Interlocked.Add(ref runs, acc.Runs);
+        }
+    );
+    return ((double)walk / n, (double)groups / n, (double)runs / n);
+
+    static void RunOf(
+        int[] count,
+        long row,
+        int lo,
+        int hi,
+        ref long walk,
+        ref long groups,
+        ref long runs
+    )
+    {
+        long c = 0;
+        for (int col = lo; col <= hi; col++)
+            c += count[row + col];
+        walk += c;
+        groups += (c + 7) / 8;
+        runs++;
     }
 }
 
