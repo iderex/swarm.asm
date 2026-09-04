@@ -161,7 +161,7 @@ public sealed class CaptureSampleCountTests
     [InlineData("12x", "a token that is not all digits")]
     [InlineData("0", "zero samples is not a measurement")]
     [InlineData("107374183", "one past CAPTURE_FRAMES_MAX")]
-    public void ARefusedCountExitsOneAndLeavesNothingBehind(string argument, string why)
+    public void ARefusedCountExitsBadArgAndLeavesNothingBehind(string argument, string why)
     {
         // The bound case is only the bound case while the literal above is the
         // first count over it, so the arithmetic is checked rather than the
