@@ -19,6 +19,56 @@ corruption) privately via
 [GitHub private vulnerability reporting](https://github.com/iderex/swarm.asm/security/advisories/new)
 rather than a public issue. Reports are usually answered within a week.
 
+## What analyses this repository, and what nothing analyses
+
+CodeQL's default setup analysed this repository until 2026-09-04 and does not
+now:
+
+```
+gh api repos/iderex/swarm.asm/code-scanning/default-setup --jq '{state,languages}'
+{"languages":["actions","csharp"],"state":"not-configured"}
+```
+
+It was turned off because it could not read what this repository is. There is no
+C or C++ in the tree:
+
+```
+git ls-tree -r --name-only origin/main | grep -icE '\.(c|cc|cpp|cxx|h|hh|hpp)$'
+0
+```
+
+The `.inc` files under `src/` are FASM assembler includes, and the language
+autodetect read them as C/C++ headers. The extractor then refused the tree it
+had been pointed at, in its own words `found 0 source files, 13 header files`,
+so the job failed for the shape of the tree rather than for anything it found. A
+job that cannot succeed by construction is not a control, and a status that is
+always red teaches a reader to stop reading statuses, which costs more than the
+analysis it was standing in for.
+
+CODEQL NEVER READ THIS PROJECT'S SUBSTANCE, AND THAT DID NOT CHANGE WHEN IT WAS
+TURNED OFF. There is no CodeQL extractor for x64 assembly, so everything under
+`src/` was outside its reach while it ran and is outside it now. What the
+shutdown removed is a result over the workflow files and the C# harness. What it
+did not remove is coverage of the engine, because there was none to remove - and
+a green tick that a reader takes for a statement about the assembly is the same
+defect as a red one that means nothing.
+
+What goes on reading this tree is the workflow set the section below derives,
+together with the conformance suite that judges the shipped image - the import
+allowlist, the absence of a CRT, the kernel-purity scans - which runs under
+`dotnet test` on every pull request.
+
+WHAT WOULD BRING CODEQL BACK. A C or C++ harness landing in this tree, analysed
+by an advanced setup whose committed workflow names `languages: c-cpp` with
+`paths` scoped to that harness, so that it reads what exists instead of guessing
+from a file extension. Until then the correct configuration is the absent one.
+
+WHAT THIS SECTION CANNOT HOLD ON ITS OWN. Default setup is a repository setting
+and not a tracked byte, so nothing here refuses it being switched back on, and
+these sentences would go stale in silence if it were. The reading at the top is
+the command that falsifies them, and it is the only thing standing behind them.
+The decision and the readings that led to it are on issue #325.
+
 ## How dependencies reach this repository
 
 The paths below were enumerated from the tree first and this section describes
