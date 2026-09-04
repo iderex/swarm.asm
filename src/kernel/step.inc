@@ -810,8 +810,9 @@ macro force_group W, V, tail {
         vsubps  V#1, V#1, V#4
         vmovaps [rsp+KA_DX], V#0        ; spill dx, dy
         vmovaps [rsp+KA_DY], V#1
-        vmulps  V#2, V#0, V#0           ; r2 = dx*dx + dy*dy (one rounding)
-        vfmadd231ps V#2, V#1, V#1
+        vmulps  V#2, V#0, V#0           ; r2 = dx*dx + dy*dy
+        vmulps  V#4, V#1, V#1
+        vaddps  V#2, V#2, V#4
         vxorps  V#4, V#4, V#4
         vcmpps  V#3, V#2, V#4, 0x0E     ; r2 > 0
         vcmpps  V#4, V#2, V#11, 0x11    ; r2 < rmax2
@@ -831,13 +832,15 @@ macro force_group W, V, tail {
         vsqrtps V#2, V#2                ; r
         vmulps  V#4, V#2, V#15          ; xn = r * invrmax
         vbroadcastss V#0, [rsp+KP_INVBETA]
-        vfmsub213ps V#0, V#4, V#12      ; rep = invbeta*xn - 1 (mul commutes)
+        vmulps  V#0, V#4, V#0           ; rep = xn*invbeta - 1
+        vsubps  V#0, V#0, V#12
         vaddps  V#1, V#4, V#4           ; att: 2xn - 1 - beta
         vsubps  V#1, V#1, V#12
         vsubps  V#1, V#1, V#13
         vandps  V#1, V#1, V#14          ; abs
         vbroadcastss V#5, [rsp+KP_INV1MB]
-        vfnmadd213ps V#1, V#5, V#12     ; tt = 1 - |..|*inv1mb
+        vmulps  V#1, V#1, V#5
+        vsubps  V#1, V#12, V#1          ; tt = 1 - |..|*inv1mb
         vmovups V#5, [r11+r9]           ; sj (species indices)
       if W = 8
         vpermps V#5, V#5, V#10          ; a[k] = matrow[sj[k]]
@@ -856,9 +859,11 @@ macro force_group W, V, tail {
         vmulps  V#0, V#0, V#5           ; q = f*fs / r  (invalid: f=0, r=1 -> 0)
         vdivps  V#0, V#0, V#2
         vmovaps V#5, [rsp+KA_DX]        ; fx += q*dx ; fy += q*dy
-        vfmadd231ps V#6, V#0, V#5
+        vmulps  V#5, V#0, V#5
+        vaddps  V#6, V#6, V#5
         vmovaps V#5, [rsp+KA_DY]
-        vfmadd231ps V#7, V#0, V#5
+        vmulps  V#0, V#0, V#5
+        vaddps  V#7, V#7, V#0
 }
 
 ; force_reduce - collapse the W partial forces in V#6/V#7 to xmm6[0]/xmm7[0]
