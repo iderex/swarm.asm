@@ -2648,3 +2648,135 @@ other, and only part of that difference is the shape. Nothing here is a claim
 about accuracy, and no oracle, invariance or golden result is quoted: what the
 `C = 4` build does to the suite is recorded on #334 and is not re-measured here.
 No blit is in any frame column; the seam does not reach it.
+
+## What the FMA fusion bought, against a reconstructed unfused arm (#162)
+
+#324 fused the five mul-then-add/sub pairs of `force_group` inside
+`force_path = 1` and retired the opt-in path id, so from `909b664` on the
+mainline carries no unfused body to compare against and every row recorded above
+that merge describes arithmetic the kernel no longer performs. This section is
+the A/B that was owed, with the second arm rebuilt.
+
+### The two arms
+
+| arm     | kernel                                                                 |
+| ------- | ---------------------------------------------------------------------- |
+| fused   | `origin/main` `ac01606`                                                |
+| unfused | `62b2d70` (`origin/perf/162-af14-unfused-measure`), one commit over it |
+
+The unfused arm is a revert of the arithmetic, not a rewrite of it: the five
+sites carry the exact `else` arms the pre-fusion macro held at `909b664^1`, and
+`force_group`'s instruction sequence there equals that macro's unfused arm line
+for line. The only lines of the pre-fusion listing absent from it are the ones
+that lived behind `if fused`.
+
+### The instrument, and why five interleaved rounds
+
+```powershell
+& "C:\Program Files\dotnet\dotnet.exe" tests\Swarm.Bench\bin\Release\net9.0\Swarm.Bench.dll
+```
+
+The default report, run alternately on the two builds, five rounds each, in one
+session. The alternation is the whole design: the host carries a second workload
+and the scalar column is the control that prices it, because `force_path = 3`
+is identical in both arms - a difference that shows up there is the host and
+never the change.
+
+### n = 16384, brute, `force_path = 1`
+
+`avx2 ms` is the table row; `cyc/group` is the #59 section's own re-timing of the
+same quantity later in the same run, so the two columns are independent samples
+of one thing.
+
+| round | arm     | scalar ms | avx2 ms | cyc/group |
+| ----: | ------- | --------: | ------: | --------: |
+|     1 | fused   |   482.379 | 196.801 |      28.5 |
+|     1 | unfused |   453.094 | 233.103 |      36.6 |
+|     2 | fused   |   582.904 | 218.036 |      27.8 |
+|     2 | unfused |   419.332 | 195.936 |      37.0 |
+|     3 | fused   |   404.617 | 190.529 |      33.0 |
+|     3 | unfused |   558.881 | 253.274 |      34.2 |
+|     4 | fused   |   548.883 | 219.270 |      34.2 |
+|     4 | unfused |   430.209 | 224.240 |      35.5 |
+|     5 | fused   |   484.348 | 194.922 |      25.9 |
+|     5 | unfused |   505.353 | 245.177 |      41.3 |
+
+Medians over the five rounds:
+
+| quantity                  |   fused | unfused | unfused / fused |
+| ------------------------- | ------: | ------: | --------------: |
+| scalar ms (**control**)   | 484.348 | 453.094 |       **0.935** |
+| avx2 ms                   | 196.801 | 233.103 |           1.184 |
+| ns/candidate, derived     |   0.733 |   0.868 |           1.184 |
+| cyc/group at RefGhz = 4.9 |    28.5 |    36.6 |           1.284 |
+
+### The grid, serial pass and frame
+
+| quantity                    | fused median | unfused median | ratio | sample sets  |
+| --------------------------- | -----------: | -------------: | ----: | ------------ |
+| 500k, g = 512, pass ms      |       26.805 |         27.131 | 1.012 | overlap      |
+| 1M headline, pass ms        |       62.635 |         77.614 | 1.239 | overlap      |
+| 1M headline, frame ms       |       71.126 |         86.345 | 1.214 | overlap      |
+| 1M dense, g = 256, pass ms  |      132.006 |        166.947 | 1.265 | **disjoint** |
+| 1M dense, g = 256, frame ms |      140.351 |        175.552 | 1.251 | **disjoint** |
+
+Disjoint means every one of the five fused samples is below every one of the five
+unfused ones: 125.261-161.118 against 163.248-184.409 on the dense pass.
+
+### Reading it - the fusion is worth about a quarter of the force loop, and the control says so
+
+**The control moves the wrong way for the sceptical reading.** The scalar median
+ratio is 0.935, so the rounds that ran the unfused arm sat on a host that was
+marginally FASTER, not slower. Every ratio below therefore understates rather
+than flatters.
+
+**About 1.28x on the group.** 28.5 cyc/group fused against 36.6 unfused, on the
+instrument #59 used and at the RefGhz that section records. The unfused median is
+above the ~31 cyc/group #59 measured on a quieter host, which is what a loaded
+machine does to an absolute figure and is why the ratio is the reading here.
+
+**The mechanism predicted this size.** #59 called the loop throughput-bound with
+the divider at roughly half of it and "the ~33 non-divide FP ops co-limit
+throughput". Five mul-then-add pairs collapsing to five FMAs removes about five
+FP uops, and a quarter off the group is the order that predicts. The divider
+floor of 11-15 cyc/group is untouched and still there.
+
+**The dense 1M scene is where it is cleanest**, and for the reason the mechanism
+gives: `rmax = 1/256` puts about 50 candidates in a neighbourhood, so the group
+loop is nearly all of the pass and the per-particle prologue is amortised away.
+1.265x on the pass, with disjoint sample sets over five interleaved rounds.
+
+**At 500k with g = 512 it buys nothing**, 1.012x, and that is not a
+contradiction. Those cells hold about two particles each, so the pass is
+dominated by the per-particle run resolution and tail masking rather than by
+full 8-lane groups, and a lever on group arithmetic has little to act on.
+
+### Disclosure
+
+- **Machine**: AMD Ryzen 9 5950X (Zen 3, 16C/32T), Windows 11 Enterprise build
+  10.0.26200, 32 logical processors, `swarm_cpu_paths` = `0x1`. **Kernel commit**:
+  `ac01606` and `62b2d70`. **Date**: 2026-09-05. Every figure is a minimum over
+  nine rounds inside the harness, and the tables above are five such minima per
+  arm.
+- **Seed**: the harness's own `0x5EED`, 6 species, `force_path = 1`, and not the
+  seed 1 #162's acceptance names. No instrument in this tree times a brute pass
+  at seed 1, and a brute pass walks `n^2` candidates whatever the field is, so
+  the seed is not a term in the quantity - but it is a departure from the
+  acceptance's words and is stated rather than quietly substituted.
+- **The host was NOT quiesced.** That is why the control column exists, why the
+  arms are interleaved, and why every claim above is a ratio of medians rather
+  than an absolute figure. The single largest excursion in the control is
+  404.617 to 582.904 ms, 1.44x, on code neither arm changes - larger than the
+  effect being measured, which is exactly what the interleaving and the median
+  are for.
+- **MXCSR** is the pinned seam MXCSR in both arms; neither build touches it.
+
+### What this does not establish
+
+No accuracy claim is made or re-made here. Whether the fused body stays inside
+the oracle tier and keeps `PassSplitInvariance` and `GridPassSplitInvariance`
+bit-exact was established when #324 landed, with its own commands, and is not
+re-run for this section. The unfused arm is a measurement build with no pull
+request: it reverses a decision recorded on #162, and the source scan asserting
+`force_group` holds exactly five FMA sites fails on it by construction. Nothing
+here times the threaded pass, the plot or the blit.
