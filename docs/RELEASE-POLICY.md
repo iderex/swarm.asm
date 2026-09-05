@@ -8,9 +8,12 @@ one under pressure.
 Every release falls into exactly one class. The class decides **which digit
 is bumped** and **how often it may ship**.
 
-Version numbers are three-part `X.Y.Z`. swarm.asm ships a single Windows
-executable - there is no plugin manifest, no update channel, and no host
-generation to encode; the git tag `X.Y.Z` is the release, full stop.
+Version numbers are three-part `X.Y.Z`, and the git tag that releases one is
+`vX.Y.Z`: the `v` is the form the release workflow's trigger and the
+version-truth check accept, and a tag pushed as bare `X.Y.Z` starts no run.
+swarm.asm ships a single Windows executable - there is no plugin manifest, no
+update channel, and no host generation to encode; the tag is the release, full
+stop.
 
 | Digit | Meaning                                                                   | Example           |
 | ----- | ------------------------------------------------------------------------- | ----------------- |
@@ -27,7 +30,7 @@ corruption - see [SECURITY.md](../SECURITY.md)). Ships as fast as it is
 green - **never batched, never rate-limited**, no matter how many happen in
 one day.
 
-- **Version:** patch on the released line, bump `Z`, tag `X.Y.Z`.
+- **Version:** patch on the released line, bump `Z`, tag `vX.Y.Z`.
 - **Still required:** a green CI gate and the adversarial-review pass -
   security is exactly what that gate exists for. I give the final go and
   push the tag; security is never delayed by cadence.
@@ -36,7 +39,7 @@ one day.
 
 Non-security fixes and small robustness or correctness corrections.
 
-- **Version:** bump `Z`, tag `X.Y.Z`.
+- **Version:** bump `Z`, tag `vX.Y.Z`.
 - **Cadence:** **≤ 1 bug-fix release per calendar day.** If one already went
   out today, further fixes collect for tomorrow. (A same-day security
   release does not count against this - different class.)
@@ -46,7 +49,7 @@ Non-security fixes and small robustness or correctness corrections.
 A new capability - a new kernel path, a new preset option, a new milestone
 deliverable.
 
-- **Version:** bump `Y`, tag `X.Y.Z`.
+- **Version:** bump `Y`, tag `vX.Y.Z`.
 - **Cadence:** **≤ 1 feature release per calendar month.** Further features
   fold into the next one.
 
@@ -55,7 +58,7 @@ deliverable.
 A change to the kernel ABI, the P/Invoke seam the test harness relies on, or
 the on-disk preset/config format, in a way that is not backward compatible.
 
-- **Version:** bump `X`, reset `Y` and `Z` to `0`, tag `X.Y.Z`.
+- **Version:** bump `X`, reset `Y` and `Z` to `0`, tag `vX.Y.Z`.
 - **Cadence:** none fixed - a breaking release happens only when the change
   genuinely requires it, and only by my explicit decision.
 
