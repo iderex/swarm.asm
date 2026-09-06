@@ -15,78 +15,105 @@ namespace Swarm.Tests;
 /// their comments:
 ///
 /// <list type="bullet">
-///   <item>every workflow whose job runs <c>./tools/get-fasm.ps1</c> restores
-///         <c>tools/fasm-archive</c> before that step, under one key derived
-///         from the script's bytes, and every copy is identical,</item>
-///   <item>except <c>release.yml</c>, which restores nothing - the job that
-///         attests what it builds must not take bytes out of a cache a pull
-///         request could have written, which <c>ReleaseGateTests</c> refuses
-///         from its own side.</item>
+///   <item>before every step that runs <c>./tools/get-fasm.ps1</c>, a step
+///         pinned to one commit of <c>actions/cache</c> restores
+///         <c>tools/fasm-archive</c> under one key derived from the script's
+///         bytes, with no <c>restore-keys</c> - the script refuses a restored
+///         mismatch rather than downloading over it, so a prefix hit after a
+///         pin bump would be a red run - and the same commit and the same two
+///         scalars in every copy,</item>
+///   <item>except <c>release.yml</c>, which restores nothing through either
+///         entry point of the action - the job that attests what it builds
+///         must not take bytes out of a cache a pull request could have
+///         written, which <c>ReleaseGateTests</c> refuses from its own
+///         side.</item>
 /// </list>
 ///
 /// WHAT THIS DOES NOT COVER. It reads workflow text, not a run: whether a
 /// scheduled job actually ends green and saves, and which scope a run reads,
-/// are facts about GitHub's cache service that only its logs establish.
+/// are facts about GitHub's cache service that only its logs establish. The
+/// pairing is by position in the file, the nearest cache step above each
+/// bootstrap, so a cache step in one job paired with a bootstrap in a later
+/// job of the same file would pass; every bootstrapping workflow is one job
+/// today. The rest of a copy's <c>with:</c> block is not compared beyond the
+/// two scalars and the absence of <c>restore-keys</c>.
 /// </summary>
 public sealed class FasmArchiveCacheTests
 {
     private const string Bootstrap = "run: ./tools/get-fasm.ps1";
     private const string CachePath = "path: tools/fasm-archive";
     private const string CacheKey = "key: fasm-archive-${{ hashFiles('tools/get-fasm.ps1') }}";
-    private static readonly Regex CacheUses = new(@"^\s*uses:\s*actions/cache@[0-9a-f]{40}\b", RegexOptions.Compiled);
+    private static readonly Regex CacheUses = new(@"^\s*uses:\s*(actions/cache(?:/restore|/save)?@[0-9a-f]{40})\b", RegexOptions.Compiled);
 
     [Fact]
-    public void EveryBootstrappingWorkflowRestoresTheArchiveUnderOneKeyExceptTheRelease()
+    public void EveryBootstrapRestoresTheArchiveUnderOneKeyExceptTheRelease()
     {
         var dir = Path.Combine(Build.RepoRoot, ".github", "workflows");
         Assert.True(Directory.Exists(dir), "expected .github/workflows to exist");
 
         var offenders = new List<string>();
+        var pins = new SortedSet<string>(StringComparer.Ordinal);
         var covered = 0;
-        foreach (var path in Directory.GetFiles(dir, "*.yml").OrderBy(f => f, StringComparer.Ordinal))
+        var files = Directory.GetFiles(dir, "*.yml")
+            .Concat(Directory.GetFiles(dir, "*.yaml"))
+            .OrderBy(f => f, StringComparer.Ordinal);
+        foreach (var path in files)
         {
             var name = Path.GetFileName(path);
             var lines = File.ReadAllLines(path);
-            int bootstrap = Array.FindIndex(lines, l => l.Trim() == Bootstrap);
-            if (bootstrap < 0)
-            {
-                continue;
-            }
+            var bootstraps = Enumerable.Range(0, lines.Length).Where(i => lines[i].Trim() == Bootstrap).ToArray();
+            var caches = Enumerable.Range(0, lines.Length).Where(i => CacheUses.IsMatch(lines[i])).ToArray();
 
-            int cache = Array.FindIndex(lines, l => CacheUses.IsMatch(l));
             if (name == "release.yml")
             {
-                if (cache >= 0)
+                foreach (var c in caches)
                 {
-                    offenders.Add($"{name}:{cache + 1}: the release gate restores a cache");
+                    offenders.Add($"{name}:{c + 1}: the release gate restores a cache");
                 }
                 continue;
             }
 
-            covered++;
-            if (cache < 0 || cache > bootstrap)
+            foreach (var bootstrap in bootstraps)
             {
-                offenders.Add($"{name}: no SHA-pinned actions/cache step before the bootstrap at line {bootstrap + 1}");
-                continue;
-            }
+                covered++;
+                var cache = caches.Where(c => c < bootstrap).DefaultIfEmpty(-1).Max();
+                if (cache < 0)
+                {
+                    offenders.Add($"{name}:{bootstrap + 1}: no SHA-pinned actions/cache step before this bootstrap");
+                    continue;
+                }
 
-            // The step's `with:` block sits between the uses: line and the
-            // bootstrap step; both scalars must be there, verbatim.
-            var block = lines[(cache + 1)..bootstrap].Select(l => l.Trim()).ToArray();
-            if (!block.Contains(CachePath))
-            {
-                offenders.Add($"{name}:{cache + 1}: the cache step does not restore `{CachePath}`");
+                pins.Add(CacheUses.Match(lines[cache]).Groups[1].Value);
+
+                // The step's `with:` block sits between the uses: line and the
+                // bootstrap step; both scalars must be there, verbatim, and no
+                // prefix fallback.
+                var block = lines[(cache + 1)..bootstrap].Select(l => l.Trim()).ToArray();
+                if (!block.Contains(CachePath))
+                {
+                    offenders.Add($"{name}:{cache + 1}: the cache step does not restore `{CachePath}`");
+                }
+                if (!block.Contains(CacheKey))
+                {
+                    offenders.Add($"{name}:{cache + 1}: the cache step's key is not `{CacheKey}`");
+                }
+                var fallback = Array.FindIndex(block, l => l.StartsWith("restore-keys", StringComparison.Ordinal));
+                if (fallback >= 0)
+                {
+                    offenders.Add($"{name}:{cache + 1 + fallback + 1}: the cache step carries restore-keys; a prefix hit the script refuses is a red run, not a re-fetch");
+                }
             }
-            if (!block.Contains(CacheKey))
-            {
-                offenders.Add($"{name}:{cache + 1}: the cache step's key is not `{CacheKey}`");
-            }
+        }
+
+        if (pins.Count > 1)
+        {
+            offenders.Add("the cache steps pin different commits of the action: " + string.Join(", ", pins));
         }
 
         Assert.True(covered >= 2, "expected at least the pull-request gate and a scheduled job to bootstrap the assembler; found " + covered);
         Assert.True(
             offenders.Count == 0,
-            "the assembler-archive cache is keyed or pathed differently across workflows, or reaches the release gate (issue #344):\n  "
+            "the assembler-archive cache is keyed, pathed or pinned differently across workflows, carries a prefix fallback, or reaches the release gate (issue #344):\n  "
                 + string.Join("\n  ", offenders));
     }
 }

@@ -76,7 +76,7 @@ try {
     try { $actual = ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
     finally { $stream.Dispose(); $sha.Dispose() }
 } catch {
-    throw "fasm archive at $Archive could not be read ($($_.Exception.Message)) - refusing to unpack. A CI cache restores only what this script saved, so this is a local leftover: remove it and run again."
+    throw "fasm archive at $Archive could not be read ($($_.Exception.Message)) - refusing to unpack. A CI cache restores only what this script saved, so what sits there is a leftover or a lock on this machine: remove or release it, then run again."
 }
 if ($actual -ne $Sha256) {
     # The verdict is the message; whether the refused file could be removed

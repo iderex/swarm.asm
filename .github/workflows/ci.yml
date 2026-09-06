@@ -59,7 +59,9 @@ jobs:
         # resilience, not time: on run 34046430460 the miss cost 1 s to look
         # up and 2 s to save, while the download it removes is under 1 s of
         # the 2 s bootstrap step, whose host start, hash and unpack a hit still
-        # pays. The key is derived from the script that
+        # pays. What a hit costs on the runner, fetching and unpacking the
+        # entry, has not been measured: no hosted run has hit yet. The key is
+        # derived from the script that
         # carries the pin: a bumped version or hash is a new key, with no
         # second copy of the hash here to drift. What this restores is NOT
         # trusted on its key: the script compares the restored archive against
@@ -79,7 +81,8 @@ jobs:
         # of one of them on main. Until that has happened since the last edit
         # of this script, every pull request's first run still downloads, and
         # a vendor outage fails it exactly as before. An entry nothing has
-        # restored for seven days is evicted, so a quiet week ends cold too.
+        # restored for seven days is evicted; the scheduled restores keep it
+        # warm while they run each week, so it goes cold when they miss one.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: tools/fasm-archive
