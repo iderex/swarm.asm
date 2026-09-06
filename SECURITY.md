@@ -351,7 +351,9 @@ run before it had saved, verified it, and never contacted the origin:
 
 ```
 gh run view 34058810136 --repo iderex/swarm.asm --log | grep -E 'Cache restored from key: fasm|Using the archive|SHA-256 verified'
-``` And a bad
+```
+
+And a bad
 entry - refused by the hash - is a red run on every restore until the entry is
 deleted or the script changes, because the script refuses a mismatch rather
 than downloading over it; who can write `main`'s scope is a workflow running on
