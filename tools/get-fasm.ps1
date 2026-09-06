@@ -30,28 +30,35 @@ if (Test-Path -LiteralPath $Exe) {
 if (Test-Path -LiteralPath $Archive) {
     Write-Host "Using the archive at $Archive"
 } else {
-    # A per-process temporary name: two cold bootstraps on one machine must
-    # not write and move the same file.
+    # A per-process temporary name: two cold bootstraps on one machine do
+    # not write the same download. They still race for the archive path
+    # and the toolchain directory, and the loser fails closed.
     $zip = Join-Path ([IO.Path]::GetTempPath()) ("fasmw-$Version-" + [IO.Path]::GetRandomFileName() + '.zip')
     Write-Host "Downloading fasm $Version from $Url"
     # -TimeoutSec bounds the connect/first-response wait (a mid-body stall is
     # bounded separately by the stream read timeout); either way a stalled
     # origin fails hard instead of hanging every caller, e.g. the test harness.
     try {
-        Invoke-WebRequest -Uri $Url -OutFile $zip -TimeoutSec 120
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $zip -TimeoutSec 120
+        } catch {
+            # The origin server's TLS configuration is legacy and current CI
+            # runners refuse the handshake. Integrity does not depend on the
+            # channel - the pinned SHA-256 below is the gate - so plain HTTP is
+            # a sound fallback.
+            $fallback = $Url -replace '^https:', 'http:'
+            Write-Host "https failed ($($_.Exception.Message)); retrying via $fallback"
+            Invoke-WebRequest -Uri $fallback -OutFile $zip -TimeoutSec 120
+        }
+        # Only a completed download reaches the archive directory; a failed
+        # one leaves nothing behind, in the archive directory or in TEMP, for
+        # the next run to refuse or to pile up.
+        New-Item -ItemType Directory -Force (Split-Path -LiteralPath $Archive) | Out-Null
+        Move-Item -LiteralPath $zip -Destination $Archive -Force
     } catch {
-        # The origin server's TLS configuration is legacy and current CI
-        # runners refuse the handshake. Integrity does not depend on the
-        # channel - the pinned SHA-256 below is the gate - so plain HTTP is a
-        # sound fallback.
-        $fallback = $Url -replace '^https:', 'http:'
-        Write-Host "https failed ($($_.Exception.Message)); retrying via $fallback"
-        Invoke-WebRequest -Uri $fallback -OutFile $zip -TimeoutSec 120
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        throw
     }
-    # Only a completed download reaches the archive directory; a failed one
-    # leaves nothing behind for the next run to refuse.
-    New-Item -ItemType Directory -Force (Split-Path -LiteralPath $Archive) | Out-Null
-    Move-Item -LiteralPath $zip -Destination $Archive -Force
 }
 
 # SHA-256 through .NET rather than Get-FileHash. That cmdlet is a function
@@ -69,7 +76,7 @@ try {
     try { $actual = ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
     finally { $stream.Dispose(); $sha.Dispose() }
 } catch {
-    throw "fasm archive at $Archive could not be read ($($_.Exception.Message)) - refusing to unpack. Remove it and run again."
+    throw "fasm archive at $Archive could not be read ($($_.Exception.Message)) - refusing to unpack. A CI cache restores only what this script saved, so this is a local leftover: remove it and run again."
 }
 if ($actual -ne $Sha256) {
     # The verdict is the message; whether the refused file could be removed

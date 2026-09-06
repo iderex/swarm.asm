@@ -228,9 +228,9 @@ WHAT THIS SUBSECTION DOES NOT REACH. The rung analysis below is still the
 reading taken at the sha at the top of this section, so the ingestion paths
 that arrived with `dco.yml`, `mutation.yml`, `parser-fuzz.yml` and
 `scorecard.yml` are not placed on a rung: the actions they call, the
-`.config/dotnet-tools.json` manifest that `mutation.yml:142`
-`run: dotnet tool restore` consumes (`:131` on `origin/main` before #344, whose
-cache step moved it; the file does not exist at the sha above), and the `tests/Swarm.Oracle` project and
+`.config/dotnet-tools.json` manifest that `mutation.yml:131`
+`run: dotnet tool restore` consumes (`:142` at the last commit that touched
+`tools/get-fasm.ps1`, whose cache step moved it), and the `tests/Swarm.Oracle` project and
 its lock file. Their credentials are above and their pins are not analysed
 here. That is a gap in the rung analysis, it is stated rather than implied, and
 it is what issue #312 leaves open for whoever re-takes the enumeration.
@@ -290,16 +290,16 @@ Not every line that returns is a call site: some are prose inside comments,
 which is why the entries above name their lines individually rather than
 resting on the size of that output.
 
-The FASM archive, fetched by `ci.yml:87` `run: ./tools/get-fasm.ps1` and
+The FASM archive, fetched by `ci.yml:89` `run: ./tools/get-fasm.ps1` and
 reached locally through `build.ps1`'s
 `& (Join-Path $Root 'tools\get-fasm.ps1')`. The pin is
 `tools/get-fasm.ps1:17` `$Version = '1.73.35'`, `:18` the URL and `:19` the
-SHA-256. The hash is computed at `:67-70` and compared at `:74`, and `:84`
-throws before `:87` `Expand-Archive`, so the archive is verified before anything in it is
+SHA-256. The hash is computed at `:73-80` and compared at `:81`, and `:91`
+throws before `:94` `Expand-Archive`, so the archive is verified before anything in it is
 unpacked, let alone executed. Two properties of this path are recorded rather
-than assumed. The transport falls back to plain HTTP at `:47`
+than assumed. The transport falls back to plain HTTP at `:49`
 `$fallback = $Url -replace '^https:', 'http:'`, for the reason given at
-`:43-46`, so integrity rests on the pinned hash and not on the channel. And
+`:45-48`, so integrity rests on the pinned hash and not on the channel. And
 the archive contributes more than the assembler binary: `build.ps1:33`
 `$env:INCLUDE = Join-Path $Root 'tools\fasm\INCLUDE'` puts the archive's
 include directory on the assembler's search path, so macro text from the
@@ -308,8 +308,9 @@ path: there is no manifest, the version is a literal in a PowerShell script,
 and no ecosystem covers it, so no cooldown applies and a bump is a human
 editing two lines. Credentials in scope: the `build` job's contents-read
 token, no secret. THE CITATIONS IN THIS PARAGRAPH AND THE TWO BELOW IT ARE
-TAKEN AT THE COMMIT THAT LANDED #344, later than the sha at the top of this
-section, because that change moved every line they cite.
+TAKEN AT THE LAST COMMIT THAT TOUCHED `tools/get-fasm.ps1`, which
+`git log -1 --format=%H origin/main -- tools/get-fasm.ps1` names, later than
+the sha at the top of this section, because #344 moved every line they cite.
 
 The archive has a second source since #344, and it is the same gate. The
 script keeps the archive it verified in `tools/fasm-archive/`, and the
@@ -326,14 +327,15 @@ grep -rn 'actions/cache@' .github/workflows/
 builds restores no cache, which `ReleaseGateTests` refuses from inside the tree
 and zizmor's cache-poisoning audit from outside it. A restored archive is not
 trusted on its key. `tools/get-fasm.ps1:30` takes whatever sits at the archive
-path and hands it to the same comparison at `:74`, so a restored archive is
+path and hands it to the same comparison at `:81`, so a restored archive is
 verified before anything is unpacked exactly as a download is, and
 `FasmBootstrapTests` proves that comparison refuses an archive of the wrong
 bytes and unpacks the right one. So what the cache changes is how often the
 origin server is contacted, and not what is accepted from it.
 
 What it buys is availability, and only between seedings. A pull-request run
-reads `main`'s entry and saves only into its own scope; `main`'s entry is
+reads its own scope first, so a re-push with the script unchanged hits, then
+`main`'s, and saves only into its own scope; `main`'s entry is
 written by a scheduled job that bootstraps the assembler and ends green -
 `parser-fuzz.yml` weekly, `mutation.yml` only on a week its verdict passes - or
 by a manual run of one of them on `main`, and the key changes with every edit
@@ -511,8 +513,8 @@ git show origin/main:tests/Swarm.Bench/packages.lock.json | grep -c '"resolved"'
 
 The half of the old sentence that survives is the load-bearing half. The build
 step for this project still does not restore in locked mode - at that sha it is
-`ci.yml:130`, and `ci.yml:160` at the commit that landed #344, whose cache step moved
-it: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
+`ci.yml:130`, and `ci.yml:162` at the last commit that touched `tools/get-fasm.ps1`,
+whose cache step moved it: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
 with no `-p:RestoreLockedMode=true`, unlike the harness step. So the lock file
 is present and is not enforced, and a package added here would still have the
 cooldown as its only hold. That is the residual, it is a property of the build

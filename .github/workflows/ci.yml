@@ -57,8 +57,9 @@ jobs:
         # tools/get-fasm.ps1 keeps the archive it verified in this directory,
         # so a hit here never contacts the origin server (#344). This buys
         # resilience, not time: on run 34046430460 the miss cost 1 s to look
-        # up and 2 s to save against the 2 s download it replaces, and a hit
-        # has not been measured yet. The key is derived from the script that
+        # up and 2 s to save, while the download it removes is under 1 s of
+        # the 2 s bootstrap step, whose host start, hash and unpack a hit still
+        # pays. The key is derived from the script that
         # carries the pin: a bumped version or hash is a new key, with no
         # second copy of the hash here to drift. What this restores is NOT
         # trusted on its key: the script compares the restored archive against
@@ -70,7 +71,8 @@ jobs:
         # The same refusal is the way a bad entry ever shows up: it stays red
         # until the entry is deleted (`gh cache delete`) or the script changes.
         #
-        # WHEN IT HELPS. A pull-request run reads main's entry and saves only
+        # WHEN IT HELPS. A pull-request run reads its own scope first, so a
+        # re-push with the script unchanged hits, then main's; it saves only
         # into its own scope. Main's entry is written by a scheduled job that
         # bootstraps the assembler and ends green - parser-fuzz.yml weekly,
         # mutation.yml only on a week its verdict passes - or by a manual run

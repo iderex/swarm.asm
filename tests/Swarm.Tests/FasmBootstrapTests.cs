@@ -94,9 +94,9 @@ public sealed class FasmBootstrapTests : IDisposable
     private string ExePath => Path.Combine(ToolsDir, "fasm", "FASM.EXE");
 
     // Both hosts that run this script in anger: build.ps1 (and so Build.cs)
-    // starts Windows PowerShell, the workflows start pwsh. A host that is not
-    // on PATH is skipped by name; on a hosted runner both are present, and a
-    // start failure there is refused rather than skipped.
+    // starts Windows PowerShell, the workflows start pwsh. A host that cannot
+    // be started here is skipped with the reason; on a hosted runner both are
+    // present, and a start failure there is refused rather than skipped.
     [Theory]
     [InlineData("powershell")]
     [InlineData("pwsh")]
@@ -193,7 +193,7 @@ public sealed class FasmBootstrapTests : IDisposable
                 // to skip the refusal proof.
                 throw new InvalidOperationException("on a hosted runner, " + host + " did not start: " + e.Message, e);
             }
-            Assert.Skip(host + " is not on PATH");
+            Assert.Skip(host + " could not be started here: " + e.Message);
             throw; // unreachable: Assert.Skip throws
         }
         using var _ = p;

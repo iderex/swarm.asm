@@ -3,10 +3,11 @@ using System.Diagnostics;
 namespace Swarm.Tests;
 
 /// <summary>
-/// The PowerShell host the script-running tests start: <c>pwsh</c> where it is
-/// on PATH, else Windows PowerShell. Resolved once per test process, because
-/// the probe starts a process and per call it would be most of a test's wall
-/// time.
+/// The PowerShell host <c>DcoSignOffTests</c> and <c>VersionTruthTests</c>
+/// start for their scripts: <c>pwsh</c> where it is on PATH, else Windows
+/// PowerShell. Resolved once per test process, because the probe starts a
+/// process and per call it would be most of a test's wall time.
+/// (<c>FasmBootstrapTests</c> names both hosts itself, on purpose.)
 /// </summary>
 internal static class PowerShellHost
 {
