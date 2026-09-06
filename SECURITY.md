@@ -290,7 +290,7 @@ Not every line that returns is a call site: some are prose inside comments,
 which is why the entries above name their lines individually rather than
 resting on the size of that output.
 
-The FASM archive, fetched by `ci.yml:92` `run: ./tools/get-fasm.ps1` and
+The FASM archive, fetched by `ci.yml:93` `run: ./tools/get-fasm.ps1` and
 reached locally through `build.ps1`'s
 `& (Join-Path $Root 'tools\get-fasm.ps1')`. The pin is
 `tools/get-fasm.ps1:17` `$Version = '1.73.35'`, `:18` the URL and `:19` the
@@ -344,9 +344,14 @@ by a manual run of one of them on `main`, and the key changes with every edit
 of the script. Until such a run has happened since
 the last edit, every pull request's first run downloads as before. An entry
 nothing has restored for seven days is evicted; the scheduled restores keep it
-warm while they run each week, so it goes cold when they miss one. And no
-hosted run has restored the entry yet: the restore-then-verify path is proven by
-`FasmBootstrapTests` placing an archive where a restore would, not by a run. And a bad
+warm while they run each week, so it goes cold when they miss one. The
+restore-then-verify path has run on a hosted runner once, on the pull request
+that landed this, where a run whose script was unchanged restored the entry the
+run before it had saved, verified it, and never contacted the origin:
+
+```
+gh run view 34058810136 --repo iderex/swarm.asm --log | grep -E 'Cache restored from key: fasm|Using the archive|SHA-256 verified'
+``` And a bad
 entry - refused by the hash - is a red run on every restore until the entry is
 deleted or the script changes, because the script refuses a mismatch rather
 than downloading over it; who can write `main`'s scope is a workflow running on
@@ -518,7 +523,7 @@ git show origin/main:tests/Swarm.Bench/packages.lock.json | grep -c '"resolved"'
 
 The half of the old sentence that survives is the load-bearing half. The build
 step for this project still does not restore in locked mode - at that sha it is
-`ci.yml:130`, and `ci.yml:165` at the last commit that touched `tools/get-fasm.ps1`,
+`ci.yml:130`, and `ci.yml:166` at the last commit that touched `tools/get-fasm.ps1`,
 whose cache step moved it: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
 with no `-p:RestoreLockedMode=true`, unlike the harness step. So the lock file
 is present and is not enforced, and a package added here would still have the

@@ -59,9 +59,10 @@ jobs:
         # resilience, not time: on run 34046430460 the miss cost 1 s to look
         # up and 2 s to save, while the download it removes is under 1 s of
         # the 2 s bootstrap step, whose host start, hash and unpack a hit still
-        # pays. What a hit costs on the runner, fetching and unpacking the
-        # entry, has not been measured: no hosted run has hit yet. The key is
-        # derived from the script that
+        # pays. On run 34058810136, the first hosted hit, the restore took 1 s
+        # for the 1 MB entry, the bootstrap 1 s with the origin never
+        # contacted, and the post step saved nothing. The key is derived from
+        # the script that
         # carries the pin: a bumped version or hash is a new key, with no
         # second copy of the hash here to drift. What this restores is NOT
         # trusted on its key: the script compares the restored archive against
