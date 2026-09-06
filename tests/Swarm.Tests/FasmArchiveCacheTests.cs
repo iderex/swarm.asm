@@ -91,11 +91,11 @@ public sealed class FasmArchiveCacheTests
                 var block = lines[(cache + 1)..bootstrap].Select(l => l.Trim()).ToArray();
                 if (!block.Contains(CachePath))
                 {
-                    offenders.Add($"{name}:{cache + 1}: the cache step does not restore `{CachePath}`");
+                    offenders.Add($"{name}:{ScalarLine(block, cache, "path:")}: the cache step does not restore `{CachePath}`");
                 }
                 if (!block.Contains(CacheKey))
                 {
-                    offenders.Add($"{name}:{cache + 1}: the cache step's key is not `{CacheKey}`");
+                    offenders.Add($"{name}:{ScalarLine(block, cache, "key:")}: the cache step's key is not `{CacheKey}`");
                 }
                 var fallback = Array.FindIndex(block, l => l.StartsWith("restore-keys", StringComparison.Ordinal));
                 if (fallback >= 0)
@@ -115,5 +115,13 @@ public sealed class FasmArchiveCacheTests
             offenders.Count == 0,
             "the assembler-archive cache is keyed, pathed or pinned differently across workflows, carries a prefix fallback, or reaches the release gate (issue #344):\n  "
                 + string.Join("\n  ", offenders));
+    }
+
+    // The 1-based line of the scalar named by `key` inside the step's block,
+    // or the step's `uses:` line when the scalar is absent altogether.
+    private static int ScalarLine(string[] block, int cache, string key)
+    {
+        int i = Array.FindIndex(block, l => l.StartsWith(key, StringComparison.Ordinal));
+        return i < 0 ? cache + 1 : cache + 1 + i + 1;
     }
 }
