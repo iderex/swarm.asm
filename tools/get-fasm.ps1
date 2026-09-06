@@ -22,7 +22,7 @@ $Dest    = Join-Path $PSScriptRoot 'fasm'
 $Exe     = Join-Path $Dest 'FASM.EXE'
 $Archive = Join-Path (Join-Path $PSScriptRoot 'fasm-archive') "fasmw-$Version.zip"
 
-if (Test-Path $Exe) {
+if (Test-Path -LiteralPath $Exe) {
     Write-Host "fasm $Version already bootstrapped at $Exe"
     exit 0
 }
@@ -30,7 +30,9 @@ if (Test-Path $Exe) {
 if (Test-Path -LiteralPath $Archive) {
     Write-Host "Using the archive at $Archive"
 } else {
-    $zip = Join-Path ([IO.Path]::GetTempPath()) "fasmw-$Version.zip"
+    # A per-process temporary name: two cold bootstraps on one machine must
+    # not write and move the same file.
+    $zip = Join-Path ([IO.Path]::GetTempPath()) ("fasmw-$Version-" + [IO.Path]::GetRandomFileName() + '.zip')
     Write-Host "Downloading fasm $Version from $Url"
     # -TimeoutSec bounds the connect/first-response wait (a mid-body stall is
     # bounded separately by the stream read timeout); either way a stalled
@@ -48,31 +50,44 @@ if (Test-Path -LiteralPath $Archive) {
     }
     # Only a completed download reaches the archive directory; a failed one
     # leaves nothing behind for the next run to refuse.
-    New-Item -ItemType Directory -Force (Split-Path $Archive) | Out-Null
+    New-Item -ItemType Directory -Force (Split-Path -LiteralPath $Archive) | Out-Null
     Move-Item -LiteralPath $zip -Destination $Archive -Force
 }
 
 # SHA-256 through .NET rather than Get-FileHash. That cmdlet is a function
 # Windows PowerShell resolves through its module path, and a Windows
-# PowerShell started from a pwsh-launched process inherits pwsh's module
-# path and does not find it - measured on the hosted runner and locally
-# (#344). The .NET call needs no module under either host.
-$sha = [Security.Cryptography.SHA256]::Create()
-$stream = [IO.File]::OpenRead($Archive)
-try { $actual = ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
-finally { $stream.Dispose(); $sha.Dispose() }
+# PowerShell started by a non-PowerShell child of pwsh (the test host under
+# a pwsh step, Build.cs under a pwsh terminal) inherits pwsh's module path
+# and does not find it, while Expand-Archive below still resolves - both
+# measured on the hosted runner and locally (#344). The .NET call needs no
+# module under either host. An archive that cannot be read at all - a
+# directory at the path, a file held without sharing - is refused too,
+# and the message says that rather than pretending to a hash verdict.
+try {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Archive)
+    try { $actual = ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+} catch {
+    throw "fasm archive at $Archive could not be read ($($_.Exception.Message)) - refusing to unpack. Remove it and run again."
+}
 if ($actual -ne $Sha256) {
     # The verdict is the message; whether the refused file could be removed
-    # is reported beside it rather than allowed to replace it.
-    try { Remove-Item -LiteralPath $Archive -Force; $fate = 'The archive was deleted.' }
-    catch { $fate = "The archive could not be deleted and is still at $Archive." }
-    throw "fasm archive hash mismatch: expected $Sha256, got $actual - refusing to unpack. $fate A downloaded archive is fetched again on the next run; one restored from a CI cache comes back identical until that cache entry is deleted or this script changes."
+    # is reported beside it rather than allowed to replace it, and each
+    # branch says what the next run will do.
+    try {
+        Remove-Item -LiteralPath $Archive -Force
+        $fate = 'The archive was deleted: a downloaded one is fetched again on the next run, one restored from a CI cache comes back identical until that cache entry is deleted or this script changes.'
+    } catch {
+        $fate = "The archive could not be deleted and is still at $Archive; every run refuses it again until it is removed."
+    }
+    throw "fasm archive hash mismatch: expected $Sha256, got $actual - refusing to unpack. $fate"
 }
 
 Expand-Archive -LiteralPath $Archive -DestinationPath $Dest -Force
 # The archive stays: it is what the CI cache saves, and only a verified one gets here.
 
-if (-not (Test-Path $Exe)) {
+if (-not (Test-Path -LiteralPath $Exe)) {
     throw "unexpected archive layout: $Exe not found after extraction."
 }
 Write-Host "fasm $Version bootstrapped (SHA-256 verified)."

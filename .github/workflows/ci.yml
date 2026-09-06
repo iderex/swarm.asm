@@ -56,8 +56,9 @@ jobs:
       - name: Restore the verified assembler archive
         # tools/get-fasm.ps1 keeps the archive it verified in this directory,
         # so a hit here never contacts the origin server (#344). This buys
-        # resilience, not time: restore and save cost about as much as the
-        # ~1 MB download they replace. The key is derived from the script that
+        # resilience, not time: on run 34046430460 the miss cost 1 s to look
+        # up and 2 s to save against the 2 s download it replaces, and a hit
+        # has not been measured yet. The key is derived from the script that
         # carries the pin: a bumped version or hash is a new key, with no
         # second copy of the hash here to drift. What this restores is NOT
         # trusted on its key: the script compares the restored archive against
@@ -75,7 +76,8 @@ jobs:
         # mutation.yml only on a week its verdict passes - or by a manual run
         # of one of them on main. Until that has happened since the last edit
         # of this script, every pull request's first run still downloads, and
-        # a vendor outage fails it exactly as before.
+        # a vendor outage fails it exactly as before. An entry nothing has
+        # restored for seven days is evicted, so a quiet week ends cold too.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: tools/fasm-archive

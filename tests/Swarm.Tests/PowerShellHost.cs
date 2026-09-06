@@ -35,7 +35,14 @@ internal static class PowerShellHost
                 {
                     continue;
                 }
-                p.WaitForExit(30_000);
+                if (!p.WaitForExit(30_000))
+                {
+                    // A host that hangs on `exit 0` is no use to any caller;
+                    // kill it and try the next rather than caching a throw.
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit();
+                    continue;
+                }
                 if (p.ExitCode == 0)
                 {
                     return candidate;

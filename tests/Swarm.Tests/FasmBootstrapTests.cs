@@ -13,8 +13,8 @@ namespace Swarm.Tests;
 /// or out of a CI cache, so the pinned SHA-256 comparison is the whole of the
 /// integrity story. A gate never shown to refuse anything is indistinguishable
 /// from no gate, so both legs below run the real script, from a copy whose
-/// archive directory the test controls, and assert the verdict, the refusal
-/// under each PowerShell host that runs the script in anger:
+/// archive directory the test controls, and assert the verdict, each under
+/// both PowerShell hosts that run the script in anger:
 ///
 /// <list type="bullet">
 ///   <item>an archive of the wrong bytes reds, nothing is unpacked, and the
@@ -44,9 +44,10 @@ namespace Swarm.Tests;
 /// </summary>
 public sealed class FasmBootstrapTests : IDisposable
 {
-    // Derived from the script rather than typed here: a pin bump that left a
-    // literal behind would have the refusal leg plant its archive at a name
-    // the script no longer looks for, and the script would go to the network.
+    // The version is read out of the script and the name around it mirrors
+    // the script's own `fasmw-$Version.zip`: a pin bump that left a literal
+    // behind would have the refusal leg plant its archive at a name the
+    // script no longer looks for, and the script would go to the network.
     private static readonly string ArchiveName = ArchiveNameFromScript();
 
     private static string ArchiveNameFromScript()
@@ -82,7 +83,7 @@ public sealed class FasmBootstrapTests : IDisposable
                 Directory.Delete(_root, recursive: true);
             }
         }
-        catch (IOException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // A leftover temp directory is not a test failure.
         }
@@ -112,12 +113,17 @@ public sealed class FasmBootstrapTests : IDisposable
         Assert.False(File.Exists(ArchivePath), "the refused archive was left in place, so every later run would refuse it again instead of downloading");
     }
 
-    [Fact]
-    public void TheRealArchiveUnpacksAndIsKeptForTheCache()
+    // Under both hosts as well: the acceptance path under Windows PowerShell
+    // is the one Build.cs takes on a cold clone, and a module the script can
+    // no longer resolve shows up there and not in the refusal rows.
+    [Theory]
+    [InlineData("powershell")]
+    [InlineData("pwsh")]
+    public void TheRealArchiveUnpacksAndIsKeptForTheCache(string host)
     {
         PlaceArchive(File.ReadAllBytes(RequireRealArchive()));
 
-        var (exit, output) = RunBootstrap(PowerShellHost.Exe);
+        var (exit, output) = RunBootstrap(host);
 
         Assert.True(exit == 0, "the real archive was refused:\n" + output);
         Assert.Contains("SHA-256 verified", output, StringComparison.Ordinal);
