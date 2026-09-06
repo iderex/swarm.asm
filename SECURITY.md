@@ -230,7 +230,7 @@ that arrived with `dco.yml`, `mutation.yml`, `parser-fuzz.yml` and
 `scorecard.yml` are not placed on a rung: the actions they call, the
 `.config/dotnet-tools.json` manifest that `mutation.yml:131`
 `run: dotnet tool restore` consumes (`:142` at the last commit that touched
-`tools/get-fasm.ps1`, whose cache step moved it), and the `tests/Swarm.Oracle` project and
+this document; #344's cache step moved it), and the `tests/Swarm.Oracle` project and
 its lock file. Their credentials are above and their pins are not analysed
 here. That is a gap in the rung analysis, it is stated rather than implied, and
 it is what issue #312 leaves open for whoever re-takes the enumeration.
@@ -308,11 +308,11 @@ path: there is no manifest, the version is a literal in a PowerShell script,
 and no ecosystem covers it, so no cooldown applies and a bump is a human
 editing two lines. Credentials in scope: the `build` job's contents-read
 token, no secret. THE CITATIONS IN THIS PARAGRAPH AND THE TWO BELOW IT ARE
-TAKEN AT THE LAST COMMIT THAT TOUCHED `tools/get-fasm.ps1`, which
-`git log -1 --format=%H origin/main -- tools/get-fasm.ps1` names, later than
-the sha at the top of this section, because #344 moved most of the lines they
-cite and the rest had moved before it; a later edit of that script re-anchors
-them, and is where they are re-read.
+TAKEN AT THE LAST COMMIT THAT TOUCHED THIS DOCUMENT, which
+`git log -1 --format=%H origin/main -- SECURITY.md` names, later than the sha
+at the top of this section, because #344 moved most of the lines they cite and
+the rest had moved before it; every edit of this document re-reads them at
+its own commit.
 
 The archive has a second source since #344, and it is the same gate. The
 script keeps the archive it verified in `tools/fasm-archive/`, and the
@@ -337,28 +337,27 @@ origin server is contacted, and not what is accepted from it.
 
 What it buys is availability, and only between seedings. A pull-request run
 reads its own scope first, so a re-push with the script unchanged hits, then
-`main`'s, and saves only into its own scope; `main`'s entry is
-written by a scheduled job that bootstraps the assembler and ends green -
-`parser-fuzz.yml` weekly, `mutation.yml` only on a week its verdict passes - or
-by a manual run of one of them on `main`, and the key changes with every edit
-of the script. Until such a run has happened since
-the last edit, every pull request's first run downloads as before. An entry
-nothing has restored for seven days is evicted; the scheduled restores keep it
-warm while they run each week, so it goes cold when they miss one. The
-restore-then-verify path has run on a hosted runner once, on the pull request
-that landed this, where a run whose script was unchanged restored the entry the
-run before it had saved, verified it, and never contacted the origin:
+`main`'s, and saves only into its own scope; `main`'s entry is written by a
+scheduled job that bootstraps the assembler and ends green - `parser-fuzz.yml`
+weekly, `mutation.yml` only on a week its verdict passes - or by a manual run of
+one of them on `main`, and the key changes with every edit of the script. Until
+such a run has happened since the last edit, every pull request's first run
+downloads as before. An entry nothing has restored for seven days is evicted;
+the scheduled restores keep it warm while they run each week, so it goes cold
+when they miss one. The restore-then-verify path has run on a hosted runner, on
+the pull request that landed this, first on a run whose script was unchanged
+from the run before it: it restored the entry that run had saved, verified it,
+and never contacted the origin:
 
 ```
 gh run view 34058810136 --repo iderex/swarm.asm --log | grep -E 'Cache restored from key: fasm|Using the archive|SHA-256 verified'
 ```
 
-And a bad
-entry - refused by the hash - is a red run on every restore until the entry is
-deleted or the script changes, because the script refuses a mismatch rather
-than downloading over it; who can write `main`'s scope is a workflow running on
-`main`, never a pull request, so that residual is a denial of service by a
-compromised action, not a way past the hash.
+And a bad entry - refused by the hash - is a red run on every restore until the
+entry is deleted or the script changes, because the script refuses a mismatch
+rather than downloading over it; who can write `main`'s scope is a workflow
+running on `main`, never a pull request, so that residual is a denial of
+service by a compromised action, not a way past the hash.
 
 The plain-HTTP fallback is unchanged. Before #344 landed I read the bootstrap
 step out of the twelve most recent successful `ci.yml` runs, and every one of
@@ -525,8 +524,8 @@ git show origin/main:tests/Swarm.Bench/packages.lock.json | grep -c '"resolved"'
 
 The half of the old sentence that survives is the load-bearing half. The build
 step for this project still does not restore in locked mode - at that sha it is
-`ci.yml:130`, and `ci.yml:166` at the last commit that touched `tools/get-fasm.ps1`,
-whose cache step moved it: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
+`ci.yml:130`, and `ci.yml:166` at the last commit that touched this document,
+which #344's cache step moved it to: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
 with no `-p:RestoreLockedMode=true`, unlike the harness step. So the lock file
 is present and is not enforced, and a package added here would still have the
 cooldown as its only hold. That is the residual, it is a property of the build

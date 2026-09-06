@@ -36,14 +36,18 @@ namespace Swarm.Tests;
 /// bootstrap, so a cache step in one job paired with a bootstrap in a later
 /// job of the same file would pass; every bootstrapping workflow is one job
 /// today. The rest of a copy's <c>with:</c> block is not compared beyond the
-/// two scalars and the absence of <c>restore-keys</c>.
+/// two scalars and the absence of <c>restore-keys</c>. A save-only entry point
+/// of the action is not a restore and does not pair with a bootstrap.
 /// </summary>
 public sealed class FasmArchiveCacheTests
 {
     private const string Bootstrap = "run: ./tools/get-fasm.ps1";
     private const string CachePath = "path: tools/fasm-archive";
     private const string CacheKey = "key: fasm-archive-${{ hashFiles('tools/get-fasm.ps1') }}";
-    private static readonly Regex CacheUses = new(@"^\s*uses:\s*(actions/cache(?:/restore|/save)?@[0-9a-f]{40})\b", RegexOptions.Compiled);
+    // Any entry point of the action counts against the release gate; only the
+    // ones that restore count as the step paired with a bootstrap.
+    private static readonly Regex CacheAny = new(@"^\s*uses:\s*actions/cache(?:/restore|/save)?@[0-9a-f]{40}\b", RegexOptions.Compiled);
+    private static readonly Regex CacheRestores = new(@"^\s*uses:\s*(actions/cache(?:/restore)?@[0-9a-f]{40})\b", RegexOptions.Compiled);
 
     [Fact]
     public void EveryBootstrapRestoresTheArchiveUnderOneKeyExceptTheRelease()
@@ -62,28 +66,27 @@ public sealed class FasmArchiveCacheTests
             var name = Path.GetFileName(path);
             var lines = File.ReadAllLines(path);
             var bootstraps = Enumerable.Range(0, lines.Length).Where(i => lines[i].Trim() == Bootstrap).ToArray();
-            var caches = Enumerable.Range(0, lines.Length).Where(i => CacheUses.IsMatch(lines[i])).ToArray();
-
             if (name == "release.yml")
             {
-                foreach (var c in caches)
+                foreach (var c in Enumerable.Range(0, lines.Length).Where(i => CacheAny.IsMatch(lines[i])))
                 {
                     offenders.Add($"{name}:{c + 1}: the release gate restores a cache");
                 }
                 continue;
             }
 
+            var caches = Enumerable.Range(0, lines.Length).Where(i => CacheRestores.IsMatch(lines[i])).ToArray();
             foreach (var bootstrap in bootstraps)
             {
                 covered++;
                 var cache = caches.Where(c => c < bootstrap).DefaultIfEmpty(-1).Max();
                 if (cache < 0)
                 {
-                    offenders.Add($"{name}:{bootstrap + 1}: no SHA-pinned actions/cache step before this bootstrap");
+                    offenders.Add($"{name}:{bootstrap + 1}: no SHA-pinned restoring actions/cache step before this bootstrap");
                     continue;
                 }
 
-                pins.Add(CacheUses.Match(lines[cache]).Groups[1].Value);
+                pins.Add(CacheRestores.Match(lines[cache]).Groups[1].Value);
 
                 // The step's `with:` block sits between the uses: line and the
                 // bootstrap step; both scalars must be there, verbatim, and no
