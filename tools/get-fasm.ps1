@@ -27,7 +27,7 @@ if (Test-Path $Exe) {
     exit 0
 }
 
-if (Test-Path $Archive) {
+if (Test-Path -LiteralPath $Archive) {
     Write-Host "Using the archive at $Archive"
 } else {
     $zip = Join-Path ([IO.Path]::GetTempPath()) "fasmw-$Version.zip"
@@ -49,16 +49,27 @@ if (Test-Path $Archive) {
     # Only a completed download reaches the archive directory; a failed one
     # leaves nothing behind for the next run to refuse.
     New-Item -ItemType Directory -Force (Split-Path $Archive) | Out-Null
-    Move-Item -Path $zip -Destination $Archive -Force
+    Move-Item -LiteralPath $zip -Destination $Archive -Force
 }
 
-$actual = (Get-FileHash $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+# SHA-256 through .NET rather than Get-FileHash. That cmdlet is a function
+# Windows PowerShell resolves through its module path, and a Windows
+# PowerShell started from a pwsh-launched process inherits pwsh's module
+# path and does not find it - measured on the hosted runner and locally
+# (#344). The .NET call needs no module under either host.
+$sha = [Security.Cryptography.SHA256]::Create()
+$stream = [IO.File]::OpenRead($Archive)
+try { $actual = ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
+finally { $stream.Dispose(); $sha.Dispose() }
 if ($actual -ne $Sha256) {
-    Remove-Item $Archive -Force
-    throw "fasm archive hash mismatch: expected $Sha256, got $actual - refusing to unpack. The archive was deleted. A downloaded archive is fetched again on the next run; one restored from a CI cache comes back identical until that cache entry is deleted or this script changes."
+    # The verdict is the message; whether the refused file could be removed
+    # is reported beside it rather than allowed to replace it.
+    try { Remove-Item -LiteralPath $Archive -Force; $fate = 'The archive was deleted.' }
+    catch { $fate = "The archive could not be deleted and is still at $Archive." }
+    throw "fasm archive hash mismatch: expected $Sha256, got $actual - refusing to unpack. $fate A downloaded archive is fetched again on the next run; one restored from a CI cache comes back identical until that cache entry is deleted or this script changes."
 }
 
-Expand-Archive -Path $Archive -DestinationPath $Dest -Force
+Expand-Archive -LiteralPath $Archive -DestinationPath $Dest -Force
 # The archive stays: it is what the CI cache saves, and only a verified one gets here.
 
 if (-not (Test-Path $Exe)) {

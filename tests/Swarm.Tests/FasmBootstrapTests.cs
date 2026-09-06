@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Swarm.Tests;
@@ -43,7 +44,21 @@ namespace Swarm.Tests;
 /// </summary>
 public sealed class FasmBootstrapTests : IDisposable
 {
-    private const string ArchiveName = "fasmw-1.73.35.zip";
+    // Derived from the script rather than typed here: a pin bump that left a
+    // literal behind would have the refusal leg plant its archive at a name
+    // the script no longer looks for, and the script would go to the network.
+    private static readonly string ArchiveName = ArchiveNameFromScript();
+
+    private static string ArchiveNameFromScript()
+    {
+        var script = File.ReadAllText(Path.Combine(Build.RepoRoot, "tools", "get-fasm.ps1"));
+        var m = Regex.Match(script, @"^\$Version\s*=\s*'([^']+)'", RegexOptions.Multiline);
+        if (!m.Success)
+        {
+            throw new InvalidOperationException("tools/get-fasm.ps1 no longer declares $Version = '...', so the archive name cannot be derived");
+        }
+        return "fasmw-" + m.Groups[1].Value + ".zip";
+    }
 
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -79,7 +94,8 @@ public sealed class FasmBootstrapTests : IDisposable
 
     // Both hosts that run this script in anger: build.ps1 (and so Build.cs)
     // starts Windows PowerShell, the workflows start pwsh. A host that is not
-    // on PATH is skipped by name; on a hosted runner both are present.
+    // on PATH is skipped by name; on a hosted runner both are present, and a
+    // start failure there is refused rather than skipped.
     [Theory]
     [InlineData("powershell")]
     [InlineData("pwsh")]
@@ -162,8 +178,15 @@ public sealed class FasmBootstrapTests : IDisposable
             p = Process.Start(psi)
                 ?? throw new InvalidOperationException("could not start " + host);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception e)
         {
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+            {
+                // Both hosts ship on the hosted runner, so a start failure
+                // there is a broken image or a blocked host, never a reason
+                // to skip the refusal proof.
+                throw new InvalidOperationException("on a hosted runner, " + host + " did not start: " + e.Message, e);
+            }
             Assert.Skip(host + " is not on PATH");
             throw; // unreachable: Assert.Skip throws
         }
