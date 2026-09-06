@@ -145,6 +145,15 @@ jobs:
           [IO.File]::WriteAllText($oversized, $text + ("`n" * (8193 - $text.Length)))
           Invoke-Preset $oversized 1 'one byte past the read cap'
 
+      - name: Diagnostic for #344 (reverted in the next commit)
+        # dotnet test under Microsoft.Testing.Platform prints a failure count
+        # and no test name; the executable prints both. Run once to read the
+        # name, then this step goes.
+        continue-on-error: true
+        run: |
+          dotnet build tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+          & tests/Swarm.Tests/bin/Release/net9.0/Swarm.Tests.exe
+
       - name: Test (conformance harness)
         # Locked-mode restore: a dependency drifting from the committed lock
         # file fails the build instead of floating silently.
