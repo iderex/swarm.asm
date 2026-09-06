@@ -22,11 +22,11 @@ namespace Swarm.Tests;
 ///         mismatch rather than downloading over it, so a prefix hit after a
 ///         pin bump would be a red run - and the same commit and the same two
 ///         scalars in every copy,</item>
-///   <item>except <c>release.yml</c>, which restores nothing through either
+///   <item>except <c>release.yml</c>, which restores nothing through any
 ///         entry point of the action - the job that attests what it builds
 ///         must not take bytes out of a cache a pull request could have
-///         written, which <c>ReleaseGateTests</c> refuses from its own
-///         side.</item>
+///         written. <c>ReleaseGateTests</c> refuses the action's main entry
+///         point there; this lock refuses the others too.</item>
 /// </list>
 ///
 /// WHAT THIS DOES NOT COVER. It reads workflow text, not a run: whether a
@@ -37,7 +37,11 @@ namespace Swarm.Tests;
 /// job of the same file would pass; every bootstrapping workflow is one job
 /// today. The rest of a copy's <c>with:</c> block is not compared beyond the
 /// two scalars and the absence of <c>restore-keys</c>. A save-only entry point
-/// of the action is not a restore and does not pair with a bootstrap.
+/// of the action is not a restore and does not pair with a bootstrap. And the
+/// bootstrap is matched by its own step line: a job that reached the script
+/// only through <c>build.ps1</c>, which runs it when the toolchain is absent,
+/// would download uncached and be seen by nothing here; every job that runs
+/// <c>build.ps1</c> today carries the explicit bootstrap step before it.
 /// </summary>
 public sealed class FasmArchiveCacheTests
 {

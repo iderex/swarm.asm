@@ -65,9 +65,11 @@ if (Test-Path -LiteralPath $Archive) {
 # Windows PowerShell resolves through its module path, and a Windows
 # PowerShell started by a non-PowerShell child of pwsh (the test host under
 # a pwsh step, Build.cs under a pwsh terminal) inherits pwsh's module path
-# and does not find it, while Expand-Archive below still resolves - both
-# measured on hosted run 34042336148 and locally through a Python child
-# of pwsh (#344). The .NET call needs no module under either host. An archive that cannot be read at all - a
+# and does not find it, while Expand-Archive below still resolves. The
+# failure showed on hosted run 34042336148 as a refusal leg under that
+# host printing no verdict; both halves were measured locally through a
+# Python child of pwsh (#344). The .NET call needs no module under either
+# host. An archive that cannot be read at all - a
 # directory at the path, a file held without sharing - is refused too,
 # and the message says that rather than pretending to a hash verdict.
 try {
