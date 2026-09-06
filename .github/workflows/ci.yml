@@ -53,6 +53,22 @@ jobs:
           cache: true
           cache-dependency-path: tests/Swarm.Tests/packages.lock.json
 
+      - name: Restore the verified assembler archive
+        # tools/get-fasm.ps1 keeps the archive it verified in this directory,
+        # so a hit here never contacts the origin server and a vendor outage
+        # fails nothing. The key is derived from the script that carries the
+        # pin: a bumped version or hash is a new key, with no second copy of
+        # the hash here to drift. No restore-keys, because a near-miss archive
+        # would only be refused by the script's hash check. What this restores
+        # is NOT trusted on its key: the script compares the restored archive
+        # against the pinned SHA-256 before unpacking, exactly as it does a
+        # download (#344). A pull-request run saves into its own scope and
+        # reads main's; the scheduled jobs are what write main's entry.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tools/fasm-archive
+          key: fasm-archive-${{ hashFiles('tools/get-fasm.ps1') }}
+
       - name: Bootstrap the pinned assembler (SHA-256-verified)
         run: ./tools/get-fasm.ps1
 

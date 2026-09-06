@@ -216,7 +216,7 @@ public sealed class VersionTruthTests : IDisposable
 
     private static (int Exit, string Output) RunCheck(string tag, string changelogPath, int abiVersion)
     {
-        var psi = new ProcessStartInfo(PowerShellHost.Value)
+        var psi = new ProcessStartInfo(PowerShellHost.Exe)
         {
             WorkingDirectory = Build.RepoRoot,
             RedirectStandardOutput = true,
@@ -245,45 +245,5 @@ public sealed class VersionTruthTests : IDisposable
         var stderr = p.StandardError.ReadToEndAsync();
         Assert.True(p.WaitForExit(60_000), "version-truth.ps1 did not exit within 60s");
         return (p.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
-    }
-
-    // Resolved once: the probe starts a process, and per-RunCheck that would be
-    // most of this class's wall time.
-    private static readonly Lazy<string> PowerShellHost = new(FindPowerShellExe);
-
-    private static string FindPowerShellExe()
-    {
-        foreach (var candidate in new[] { "pwsh", "powershell" })
-        {
-            try
-            {
-                var psi = new ProcessStartInfo(candidate)
-                {
-                    WorkingDirectory = Build.RepoRoot,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                };
-                psi.ArgumentList.Add("-NoProfile");
-                psi.ArgumentList.Add("-Command");
-                psi.ArgumentList.Add("exit 0");
-                using var p = Process.Start(psi);
-                if (p is null)
-                {
-                    continue;
-                }
-                p.WaitForExit(30_000);
-                if (p.ExitCode == 0)
-                {
-                    return candidate;
-                }
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                // Not on PATH; try the next.
-            }
-        }
-
-        throw new InvalidOperationException("neither pwsh nor powershell is on PATH");
     }
 }

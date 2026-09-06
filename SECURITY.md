@@ -308,6 +308,30 @@ and no ecosystem covers it, so no cooldown applies and a bump is a human
 editing two lines. Credentials in scope: the `build` job's contents-read
 token, no secret.
 
+A SECOND ROUTE INTO THIS PATH EXISTS SINCE #344, AND THE PARAGRAPH ABOVE
+PREDATES IT. The script now keeps the archive it verified in
+`tools/fasm-archive/`, and the pull-request gate and both scheduled jobs
+restore that directory from the Actions cache before the bootstrap step, on a
+key derived from the script that carries the pin. The call sites are derived
+rather than cited by line:
+
+```
+grep -rn 'actions/cache@' .github/workflows/
+```
+
+`release.yml` is deliberately not among them: the job that attests what it
+builds restores no cache, which `ReleaseGateTests` refuses from inside the tree
+and zizmor's cache-poisoning audit from outside it. A restored archive is not
+trusted on its key. It reaches the same SHA-256 comparison as a download, before
+anything is unpacked, and `FasmBootstrapTests` proves that comparison refuses
+an archive of the wrong bytes and the real archive with one byte flipped. So
+what the cache changes is how often the origin server is contacted, and not
+what is accepted from it. The plain-HTTP fallback is unchanged: measured over
+the twelve most recent successful `ci.yml` runs before this landed, every one
+reported `https failed (The SSL connection could not be established)` and
+fetched over HTTP, so the fallback is today the only route a cold cache can be
+filled through. Whether it stays is #344's open half and is not decided here.
+
 The test harness's NuGet packages. `tests/Swarm.Tests/Swarm.Tests.csproj:28`
 `<PackageReference Include="xunit.v3" Version="3.2.2" />` and
 `tests/Swarm.Tests/Swarm.Tests.csproj:29`
