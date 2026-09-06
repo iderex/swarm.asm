@@ -55,11 +55,11 @@ if (Test-Path $Archive) {
 $actual = (Get-FileHash $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $Sha256) {
     Remove-Item $Archive -Force
-    throw "fasm archive hash mismatch: expected $Sha256, got $actual - refusing to unpack. The archive was deleted; the next run downloads it again."
+    throw "fasm archive hash mismatch: expected $Sha256, got $actual - refusing to unpack. The archive was deleted. A downloaded archive is fetched again on the next run; one restored from a CI cache comes back identical until that cache entry is deleted or this script changes."
 }
 
 Expand-Archive -Path $Archive -DestinationPath $Dest -Force
-# The archive stays: it is what the CI cache saves.
+# The archive stays: it is what the CI cache saves, and only a verified one gets here.
 
 if (-not (Test-Path $Exe)) {
     throw "unexpected archive layout: $Exe not found after extraction."

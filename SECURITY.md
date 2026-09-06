@@ -289,31 +289,32 @@ Not every line that returns is a call site: some are prose inside comments,
 which is why the entries above name their lines individually rather than
 resting on the size of that output.
 
-The FASM archive, fetched by `ci.yml:57` `run: ./tools/get-fasm.ps1` and
-reached locally through `build.ps1:12`
+The FASM archive, fetched by `ci.yml:84` `run: ./tools/get-fasm.ps1` and
+reached locally through `build.ps1:21`
 `& (Join-Path $Root 'tools\get-fasm.ps1')`. The pin is
-`tools/get-fasm.ps1:11` `$Version = '1.73.35'`, `:12` the URL and `:13` the
-SHA-256. The hash is compared at `:39-40` and `:42` throws before `:45`
+`tools/get-fasm.ps1:17` `$Version = '1.73.35'`, `:18` the URL and `:19` the
+SHA-256. The hash is compared at `:55-56` and `:58` throws before `:61`
 `Expand-Archive`, so the archive is verified before anything in it is
 unpacked, let alone executed. Two properties of this path are recorded rather
-than assumed. The transport falls back to plain HTTP at `:34`
+than assumed. The transport falls back to plain HTTP at `:45`
 `$fallback = $Url -replace '^https:', 'http:'`, for the reason given at
-`:32-33`, so integrity rests on the pinned hash and not on the channel. And
-the archive contributes more than the assembler binary: `build.ps1:19`
+`:41-44`, so integrity rests on the pinned hash and not on the channel. And
+the archive contributes more than the assembler binary: `build.ps1:33`
 `$env:INCLUDE = Join-Path $Root 'tools\fasm\INCLUDE'` puts the archive's
 include directory on the assembler's search path, so macro text from the
 download is assembled into the shipped executable. Dependabot cannot see this
 path: there is no manifest, the version is a literal in a PowerShell script,
 and no ecosystem covers it, so no cooldown applies and a bump is a human
 editing two lines. Credentials in scope: the `build` job's contents-read
-token, no secret.
+token, no secret. THE CITATIONS IN THIS PARAGRAPH ARE TAKEN AT THE COMMIT THAT
+LANDED #344, later than the sha at the top of this section, because that
+change moved every line it cites.
 
-A SECOND ROUTE INTO THIS PATH EXISTS SINCE #344, AND THE PARAGRAPH ABOVE
-PREDATES IT. The script now keeps the archive it verified in
-`tools/fasm-archive/`, and the pull-request gate and both scheduled jobs
-restore that directory from the Actions cache before the bootstrap step, on a
-key derived from the script that carries the pin. The call sites are derived
-rather than cited by line:
+The archive has a second source since #344, and it is the same gate. The
+script keeps the archive it verified in `tools/fasm-archive/`, and the
+pull-request gate and both scheduled jobs restore that directory from the
+Actions cache before the bootstrap step, on a key derived from the script that
+carries the pin. The call sites are derived rather than cited by line:
 
 ```
 grep -rn 'actions/cache@' .github/workflows/
@@ -322,15 +323,37 @@ grep -rn 'actions/cache@' .github/workflows/
 `release.yml` is deliberately not among them: the job that attests what it
 builds restores no cache, which `ReleaseGateTests` refuses from inside the tree
 and zizmor's cache-poisoning audit from outside it. A restored archive is not
-trusted on its key. It reaches the same SHA-256 comparison as a download, before
-anything is unpacked, and `FasmBootstrapTests` proves that comparison refuses
-an archive of the wrong bytes and the real archive with one byte flipped. So
-what the cache changes is how often the origin server is contacted, and not
-what is accepted from it. The plain-HTTP fallback is unchanged: measured over
-the twelve most recent successful `ci.yml` runs before this landed, every one
-reported `https failed (The SSL connection could not be established)` and
-fetched over HTTP, so the fallback is today the only route a cold cache can be
-filled through. Whether it stays is #344's open half and is not decided here.
+trusted on its key. `tools/get-fasm.ps1:30` takes whatever sits at the archive
+path and hands it to the same comparison at `:55-56`, so a restored archive is
+verified before anything is unpacked exactly as a download is, and
+`FasmBootstrapTests` proves that comparison refuses an archive of the wrong
+bytes and unpacks the right one. So what the cache changes is how often the
+origin server is contacted, and not what is accepted from it.
+
+What it buys is availability, and only between seedings. A pull-request run
+reads `main`'s entry and saves only into its own scope; `main`'s entry is
+written by a scheduled job that ends green, or by a manual run of one, and the
+key changes with every edit of the script. Until such a run has happened since
+the last edit, every pull request's first run downloads as before. And a bad
+entry - refused by the hash - is a red run on every restore until the entry is
+deleted or the script changes, because the script refuses a mismatch rather
+than downloading over it; who can write `main`'s scope is a workflow running on
+`main`, never a pull request, so that residual is a denial of service by a
+compromised action, not a way past the hash.
+
+The plain-HTTP fallback is unchanged. Before #344 landed I read the bootstrap
+step out of the twelve most recent successful `ci.yml` runs, and every one of
+them reported the https failure and fetched over HTTP:
+
+```
+for id in $(gh run list --repo iderex/swarm.asm --workflow ci.yml --status success --limit 12 --json databaseId --jq '.[].databaseId'); do
+  gh run view $id --repo iderex/swarm.asm --log | grep -c 'https failed (The SSL connection could not be established'
+done
+```
+
+printed `1` twelve times. So the fallback is today the only route a cold cache
+can be filled through. Whether it stays is #344's open half and is not decided
+here.
 
 The test harness's NuGet packages. `tests/Swarm.Tests/Swarm.Tests.csproj:28`
 `<PackageReference Include="xunit.v3" Version="3.2.2" />` and

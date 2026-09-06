@@ -55,15 +55,26 @@ jobs:
 
       - name: Restore the verified assembler archive
         # tools/get-fasm.ps1 keeps the archive it verified in this directory,
-        # so a hit here never contacts the origin server and a vendor outage
-        # fails nothing. The key is derived from the script that carries the
-        # pin: a bumped version or hash is a new key, with no second copy of
-        # the hash here to drift. No restore-keys, because a near-miss archive
-        # would only be refused by the script's hash check. What this restores
-        # is NOT trusted on its key: the script compares the restored archive
-        # against the pinned SHA-256 before unpacking, exactly as it does a
-        # download (#344). A pull-request run saves into its own scope and
-        # reads main's; the scheduled jobs are what write main's entry.
+        # so a hit here never contacts the origin server (#344). This buys
+        # resilience, not time: restore and save cost about as much as the
+        # ~1 MB download they replace. The key is derived from the script that
+        # carries the pin: a bumped version or hash is a new key, with no
+        # second copy of the hash here to drift. What this restores is NOT
+        # trusted on its key: the script compares the restored archive against
+        # the pinned SHA-256 before unpacking, exactly as it does a download.
+        #
+        # No restore-keys, on purpose. The script refuses a restored archive
+        # whose hash does not match and does not download in its place, so a
+        # prefix match after a pin bump would be a red run, not a re-fetch.
+        # The same refusal is the way a bad entry ever shows up: it stays red
+        # until the entry is deleted (`gh cache delete`) or the script changes.
+        #
+        # WHEN IT HELPS. A pull-request run reads main's entry and saves only
+        # into its own scope. Main's entry is written by a scheduled job that
+        # ends green (mutation.yml, parser-fuzz.yml) or by a manual run of
+        # one of them. Until that has happened since the last edit of this
+        # script, every pull request's first run still downloads, and a vendor
+        # outage fails it exactly as before.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: tools/fasm-archive
