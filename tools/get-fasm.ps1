@@ -32,7 +32,12 @@ if (Test-Path -LiteralPath $Archive) {
 } else {
     # A per-process temporary name: two cold bootstraps on one machine do
     # not write the same download. They still race for the archive path
-    # and the toolchain directory, and the loser fails closed.
+    # and the toolchain directory, and that race is NOT closed: the hash
+    # below reads the archive by path and Expand-Archive reopens it by
+    # path, so a second bootstrap moving its own download over the path
+    # between the two would have the first unpack bytes it never hashed.
+    # One bootstrap per checkout is the supported mode, which is what CI
+    # runs on a fresh checkout and what build.ps1 runs once.
     $zip = Join-Path ([IO.Path]::GetTempPath()) ("fasmw-$Version-" + [IO.Path]::GetRandomFileName() + '.zip')
     Write-Host "Downloading fasm $Version from $Url"
     # -TimeoutSec bounds the connect/first-response wait (a mid-body stall is

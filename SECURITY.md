@@ -294,12 +294,12 @@ The FASM archive, fetched by `ci.yml:93` `run: ./tools/get-fasm.ps1` and
 reached locally through `build.ps1`'s
 `& (Join-Path $Root 'tools\get-fasm.ps1')`. The pin is
 `tools/get-fasm.ps1:17` `$Version = '1.73.35'`, `:18` the URL and `:19` the
-SHA-256. The hash is computed at `:75-82` and compared at `:83`, and `:93`
-throws before `:96` `Expand-Archive`, so the archive is verified before anything in it is
+SHA-256. The hash is computed at `:80-87` and compared at `:88`, and `:98`
+throws before `:101` `Expand-Archive`, so the archive is verified before anything in it is
 unpacked, let alone executed. Two properties of this path are recorded rather
-than assumed. The transport falls back to plain HTTP at `:49`
+than assumed. The transport falls back to plain HTTP at `:54`
 `$fallback = $Url -replace '^https:', 'http:'`, for the reason given at
-`:45-48`, so integrity rests on the pinned hash and not on the channel. And
+`:50-53`, so integrity rests on the pinned hash and not on the channel. And
 the archive contributes more than the assembler binary: `build.ps1:33`
 `$env:INCLUDE = Join-Path $Root 'tools\fasm\INCLUDE'` puts the archive's
 include directory on the assembler's search path, so macro text from the
@@ -330,7 +330,7 @@ builds restores no cache, which `ReleaseGateTests` refuses from inside the tree
 for the action's main entry point, `FasmArchiveCacheTests` for its other entry
 points, and zizmor's cache-poisoning audit from outside it. A restored archive is not
 trusted on its key. `tools/get-fasm.ps1:30` takes whatever sits at the archive
-path and hands it to the same comparison at `:83`, so a restored archive is
+path and hands it to the same comparison at `:88`, so a restored archive is
 verified before anything is unpacked exactly as a download is, and
 `FasmBootstrapTests` proves that comparison refuses an archive of the wrong
 bytes and unpacks the right one. So what the cache changes is how often the
