@@ -76,14 +76,16 @@ jobs:
         #
         # WHEN IT HELPS. A pull-request run reads its own scope first, so a
         # re-push with the script unchanged hits, then main's; it saves only
-        # into its own scope. Main's entry is written by a scheduled job that
+        # into its own scope. Main's entry is written by seed-fasm-cache.yml
+        # on the push to main that changes the script, so the entry exists
+        # the moment its key does (#346), and by any scheduled job that
         # bootstraps the assembler and ends green - parser-fuzz.yml weekly,
-        # mutation.yml only on a week its verdict passes - or by a manual run
-        # of one of them on main. Until that has happened since the last edit
-        # of this script, every pull request's first run still downloads, and
-        # a vendor outage fails it exactly as before. An entry nothing has
-        # restored for seven days is evicted; the scheduled restores keep it
-        # warm while they run each week, so it goes cold when they miss one.
+        # mutation.yml only on a week its verdict passes. Until the seed has
+        # run green for the script at main, every pull request's first run
+        # still downloads, and a vendor outage fails it exactly as before. An
+        # entry nothing has restored for seven days is evicted; the scheduled
+        # restores keep it warm while they run each week, so it goes cold
+        # when they miss one.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: tools/fasm-archive
