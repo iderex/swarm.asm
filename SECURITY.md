@@ -360,17 +360,20 @@ rather than downloading over it; who can write `main`'s scope is a workflow
 running on `main`, never a pull request, so that residual is a denial of
 service by a compromised action, not a way past the hash.
 
-The plain-HTTP fallback is unchanged. Before #344 landed I read the bootstrap
-step out of the twelve most recent successful `ci.yml` runs, and every one of
-them reported the https failure and fetched over HTTP:
+The plain-HTTP fallback is unchanged. On 2026-09-06, before the first run of
+the pull request that landed #344, I read the bootstrap step out of the twelve
+most recent successful `ci.yml` runs, and every one of them downloaded, reported
+the https failure, and fetched over HTTP:
 
 ```
 for id in $(gh run list --repo iderex/swarm.asm --workflow ci.yml --status success --limit 12 --json databaseId --jq '.[].databaseId'); do
-  gh run view $id --repo iderex/swarm.asm --log | grep -c 'https failed (The SSL connection could not be established'
+  gh run view $id --repo iderex/swarm.asm --log | grep -cE 'Downloading fasm|https failed \(The SSL connection could not be established'
 done
 ```
 
-printed `1` twelve times. So the fallback is today the only route a cold cache
+printed `2` twelve times then. Run today it lists newer runs: one that restored
+the archive from the cache downloads nothing and prints `0`, and every run that
+downloaded has printed `2`. So the fallback is today the only route a cold cache
 can be filled through. Whether it stays is #344's open half and is not decided
 here.
 

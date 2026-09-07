@@ -32,10 +32,12 @@ namespace Swarm.Tests;
 /// a second leg would add a PowerShell launch to every suite run for no path
 /// the first does not take. The four launches this class does make cost
 /// between ten and twenty-five seconds of serial test time on the reference
-/// machine, most of it host start-up, and cannot be resolved inside the
-/// runner's noise: the harness's own reported duration ranged from 1m07s to
-/// 1m24s over the seven green runs of the pull request that landed this,
-/// against 1m07s to 1m14s on the three runs before it.
+/// machine at rest, most of it host start-up, and have reached forty under
+/// load. On the hosted runner they cannot be resolved inside the noise: the
+/// harness's own reported duration over the green runs of the pull request
+/// that landed this, read when this sentence was written, ranged from 1m07s
+/// to 1m24s, the earliest four above the 1m07s to 1m14s of the three runs
+/// before it and the later ones inside that band.
 ///
 /// WHAT THIS DOES NOT COVER. Neither leg downloads anything: the archive is
 /// placed where the script keeps one, so the network path - https, the http

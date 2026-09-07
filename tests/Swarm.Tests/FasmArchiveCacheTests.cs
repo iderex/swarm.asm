@@ -48,9 +48,10 @@ public sealed class FasmArchiveCacheTests
     private const string Bootstrap = "run: ./tools/get-fasm.ps1";
     private const string CachePath = "path: tools/fasm-archive";
     private const string CacheKey = "key: fasm-archive-${{ hashFiles('tools/get-fasm.ps1') }}";
-    // Any entry point of the action counts against the release gate; only the
-    // ones that restore count as the step paired with a bootstrap.
-    private static readonly Regex CacheAny = new(@"^\s*uses:\s*actions/cache(?:/restore|/save)?@[0-9a-f]{40}\b", RegexOptions.Compiled);
+    // Any reference to the action, pinned or not, counts against the release
+    // gate; only a SHA-pinned restoring entry point counts as the step paired
+    // with a bootstrap.
+    private static readonly Regex CacheAny = new(@"^\s*uses:\s*actions/cache(?:/restore|/save)?@\S+", RegexOptions.Compiled);
     private static readonly Regex CacheRestores = new(@"^\s*uses:\s*(actions/cache(?:/restore)?@[0-9a-f]{40})\b", RegexOptions.Compiled);
 
     [Fact]
