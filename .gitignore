@@ -2,8 +2,10 @@
 build/
 
 # Bootstrapped toolchain - tools/get-fasm.ps1 re-creates it deterministically
-# (SHA-256-pinned download); the binaries never enter history.
+# (SHA-256-pinned download); the binaries never enter history. The verified
+# archive stays beside it for the CI cache to save (#344).
 tools/fasm/
+tools/fasm-archive/
 
 # Future .NET test-harness output.
 bin/

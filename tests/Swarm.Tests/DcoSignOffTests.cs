@@ -372,32 +372,9 @@ public sealed class DcoSignOffTests : IDisposable
 
     // pwsh where it exists (what the workflow invokes), and Windows PowerShell
     // otherwise. The script is written to the intersection of the two so either
-    // host reaches the same verdict. Resolved once: the probe below starts a
-    // process, and per-RunCheck that was most of this class's wall time.
-    private static readonly Lazy<string> PowerShellHost = new(FindPowerShellExe);
-
-    private static string PowerShellExe() => PowerShellHost.Value;
-
-    private static string FindPowerShellExe()
-    {
-        foreach (var candidate in new[] { "pwsh", "powershell" })
-        {
-            try
-            {
-                var probe = Run(candidate, Build.RepoRoot, "-NoProfile", "-Command", "exit 0");
-                if (probe.Exit == 0)
-                {
-                    return candidate;
-                }
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                // Not on PATH; try the next.
-            }
-        }
-
-        throw new InvalidOperationException("neither pwsh nor powershell is on PATH");
-    }
+    // host reaches the same verdict. Resolved once per test process by the
+    // probe the script-running tests share.
+    private static string PowerShellExe() => PowerShellHost.Exe;
 
     private static string Git(string cwd, params string[] args)
     {

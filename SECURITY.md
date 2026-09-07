@@ -229,7 +229,8 @@ reading taken at the sha at the top of this section, so the ingestion paths
 that arrived with `dco.yml`, `mutation.yml`, `parser-fuzz.yml` and
 `scorecard.yml` are not placed on a rung: the actions they call, the
 `.config/dotnet-tools.json` manifest that `mutation.yml:131`
-`run: dotnet tool restore` consumes, and the `tests/Swarm.Oracle` project and
+`run: dotnet tool restore` consumes (`:142` at the last commit that touched
+this document; #344's cache step moved it), and the `tests/Swarm.Oracle` project and
 its lock file. Their credentials are above and their pins are not analysed
 here. That is a gap in the rung analysis, it is stated rather than implied, and
 it is what issue #312 leaves open for whoever re-takes the enumeration.
@@ -289,24 +290,92 @@ Not every line that returns is a call site: some are prose inside comments,
 which is why the entries above name their lines individually rather than
 resting on the size of that output.
 
-The FASM archive, fetched by `ci.yml:57` `run: ./tools/get-fasm.ps1` and
-reached locally through `build.ps1:12`
+The FASM archive, fetched by `ci.yml:93` `run: ./tools/get-fasm.ps1` and
+reached locally through `build.ps1`'s
 `& (Join-Path $Root 'tools\get-fasm.ps1')`. The pin is
-`tools/get-fasm.ps1:11` `$Version = '1.73.35'`, `:12` the URL and `:13` the
-SHA-256. The hash is compared at `:39-40` and `:42` throws before `:45`
-`Expand-Archive`, so the archive is verified before anything in it is
+`tools/get-fasm.ps1:17` `$Version = '1.73.35'`, `:18` the URL and `:19` the
+SHA-256. The hash is computed at `:80-87` and compared at `:88`, and `:98`
+throws before `:101` `Expand-Archive`, so the archive is verified before anything in it is
 unpacked, let alone executed. Two properties of this path are recorded rather
-than assumed. The transport falls back to plain HTTP at `:34`
+than assumed. The transport falls back to plain HTTP at `:54`
 `$fallback = $Url -replace '^https:', 'http:'`, for the reason given at
-`:32-33`, so integrity rests on the pinned hash and not on the channel. And
-the archive contributes more than the assembler binary: `build.ps1:19`
+`:50-53`, so integrity rests on the pinned hash and not on the channel. And
+the archive contributes more than the assembler binary: `build.ps1:33`
 `$env:INCLUDE = Join-Path $Root 'tools\fasm\INCLUDE'` puts the archive's
 include directory on the assembler's search path, so macro text from the
 download is assembled into the shipped executable. Dependabot cannot see this
 path: there is no manifest, the version is a literal in a PowerShell script,
 and no ecosystem covers it, so no cooldown applies and a bump is a human
 editing two lines. Credentials in scope: the `build` job's contents-read
-token, no secret.
+token, no secret. THE CITATIONS IN THIS PARAGRAPH AND THE TWO BELOW IT ARE
+TAKEN AT THE LAST COMMIT THAT TOUCHED THIS DOCUMENT, which
+`git log -1 --format=%H origin/main -- SECURITY.md` names, later than the sha
+at the top of this section, because #344 moved most of the lines they cite and
+the rest had moved before it; every edit of this document re-reads them at
+its own commit.
+
+The archive has a second source since #344, and it is the same gate. The
+script keeps the archive it verified in `tools/fasm-archive/`, and the
+pull-request gate and the scheduled jobs that bootstrap the assembler restore
+that directory from the
+Actions cache before the bootstrap step, on a key derived from the script that
+carries the pin. The call sites are derived rather than cited by line:
+
+```
+grep -rn 'actions/cache@' .github/workflows/
+```
+
+`release.yml` is deliberately not among them: the job that attests what it
+builds restores no cache, which `ReleaseGateTests` refuses from inside the tree
+for the action's main entry point, `FasmArchiveCacheTests` for its other entry
+points, and zizmor's cache-poisoning audit from outside it. A restored archive is not
+trusted on its key. `tools/get-fasm.ps1:30` takes whatever sits at the archive
+path and hands it to the same comparison at `:88`, so a restored archive is
+verified before anything is unpacked exactly as a download is, and
+`FasmBootstrapTests` proves that comparison refuses an archive of the wrong
+bytes and unpacks the right one. So what the cache changes is how often the
+origin server is contacted, and not what is accepted from it.
+
+What it buys is availability, and only between seedings. A pull-request run
+reads its own scope first, so a re-push with the script unchanged hits, then
+`main`'s, and saves only into its own scope; `main`'s entry is written by a
+scheduled job that bootstraps the assembler and ends green - `parser-fuzz.yml`
+weekly, `mutation.yml` only on a week its verdict passes - or by a manual run of
+one of them on `main`, and the key changes with every edit of the script. Until
+such a run has happened since the last edit, every pull request's first run
+downloads as before. An entry nothing has restored for seven days is evicted;
+the scheduled restores keep it warm while they run each week, so it goes cold
+when they miss one. The restore-then-verify path has run on a hosted runner, on
+the pull request that landed this, first on a run whose script was unchanged
+from the run before it: it restored the entry that run had saved, verified it,
+and never contacted the origin:
+
+```
+gh run view 34058810136 --repo iderex/swarm.asm --log | grep -E 'Cache restored from key: fasm|Using the archive|SHA-256 verified'
+```
+
+And a bad entry - refused by the hash - is a red run on every restore until the
+entry is deleted or the script changes, because the script refuses a mismatch
+rather than downloading over it; who can write `main`'s scope is a workflow
+running on `main`, never a pull request, so that residual is a denial of
+service by a compromised action, not a way past the hash.
+
+The plain-HTTP fallback is unchanged. On 2026-09-06, before the first run of
+the pull request that landed #344, I read the bootstrap step out of the twelve
+most recent successful `ci.yml` runs, and every one of them downloaded, reported
+the https failure, and fetched over HTTP:
+
+```
+for id in $(gh run list --repo iderex/swarm.asm --workflow ci.yml --status success --limit 12 --json databaseId --jq '.[].databaseId'); do
+  gh run view $id --repo iderex/swarm.asm --log | grep -cE 'Downloading fasm|https failed \(The SSL connection could not be established'
+done
+```
+
+printed `2` twelve times then. Run today it lists newer runs: one that restored
+the archive from the cache downloads nothing and prints `0`, and every run that
+downloaded has printed `2`. So the fallback is today the only route a cold cache
+can be filled through. Whether it stays is #344's open half and is not decided
+here.
 
 The test harness's NuGet packages. `tests/Swarm.Tests/Swarm.Tests.csproj:28`
 `<PackageReference Include="xunit.v3" Version="3.2.2" />` and
@@ -459,7 +528,8 @@ git show origin/main:tests/Swarm.Bench/packages.lock.json | grep -c '"resolved"'
 
 The half of the old sentence that survives is the load-bearing half. The build
 step for this project still does not restore in locked mode - at that sha it is
-`ci.yml:130` `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
+`ci.yml:130`, and `ci.yml:166` at the last commit that touched this document,
+which #344's cache step moved it to: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
 with no `-p:RestoreLockedMode=true`, unlike the harness step. So the lock file
 is present and is not enforced, and a package added here would still have the
 cooldown as its only hold. That is the residual, it is a property of the build
