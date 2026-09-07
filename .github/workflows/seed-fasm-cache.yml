@@ -1,0 +1,76 @@
+# Seeds main's assembler-archive cache entry the moment its key exists.
+#
+# ci.yml, mutation.yml and parser-fuzz.yml restore tools/fasm-archive from the
+# Actions cache before the bootstrap step, keyed on the bytes of
+# tools/get-fasm.ps1 (#344). A pull-request run reads main's entry and saves
+# only into its own scope, and ci.yml runs on pull_request only, so nothing
+# wrote main's entry when a change landed: it waited for the next scheduled
+# job that bootstraps the assembler and ends green, or for a manual run of one
+# of them on main. Measured on the pull request that landed #344: every push
+# that touched the script was a new key and a miss, five keys in one day, and
+# no run of it could write main's scope (#346).
+#
+# This job is the seed and nothing else. It runs on a push to main that
+# changes the script - a new key - or this file, restores under the same key,
+# bootstraps, which verifies the archive against the pinned SHA-256 and keeps
+# it, and lets the cache step's post action save the entry into main's scope.
+# The next pull-request run restores it. A hit here means main's entry already
+# exists under this key, and the post action saves nothing.
+#
+# NOT FOLDED INTO ci.yml. That file is the pull-request gate: its job name is
+# the required check in the branch ruleset and its run: blocks are what
+# ReleaseGateTests requires verbatim in release.yml, and a seed is neither.
+# Not a release trigger either: release.yml runs on a v* tag only and restores
+# no cache, so zizmor's cache-poisoning audit does not reach this file. The
+# job holds contents: read and is handed no secret.
+
+name: Seed the assembler-archive cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/get-fasm.ps1
+      - .github/workflows/seed-fasm-cache.yml
+  # A manual run seeds the scope of the branch it is dispatched on, so the
+  # one that matters is dispatched on main.
+  workflow_dispatch:
+
+# Fail closed: no ambient token scope at the top level; the job re-grants the
+# minimum it needs.
+permissions: {}
+
+# Two pushes to main in quick succession queue rather than cancel: the older
+# key's entry is still what an open pull request based before the newer push
+# restores.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: seed the assembler-archive cache
+    runs-on: windows-latest
+    # Restore, a one-megabyte download at most, hash, unpack, save: seconds.
+    # This bound is the runaway catch, not the expected duration.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the verified assembler archive
+        # Same step, same key and same reason as ci.yml's, where the reason is
+        # argued. On a push to main this step's post action is the only thing
+        # in the repository that writes main's entry the moment the key
+        # changes (#346).
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tools/fasm-archive
+          key: fasm-archive-${{ hashFiles('tools/get-fasm.ps1') }}
+
+      - name: Bootstrap the pinned assembler (SHA-256-verified)
+        run: ./tools/get-fasm.ps1

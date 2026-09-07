@@ -125,8 +125,9 @@ jobs:
         # Same step, same key and same reason as ci.yml's, where the reason is
         # argued. Scheduled, this job runs on main, so an entry it saves - which
         # happens only when the job ends green - is the one every pull request
-        # restores; a manual run seeds main's entry only when dispatched on
-        # main (#344).
+        # restores, and its weekly restore keeps main's entry from being
+        # evicted; seed-fasm-cache.yml writes that entry when the script
+        # changes, so this job seeds only what the seed has not (#344, #346).
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: tools/fasm-archive

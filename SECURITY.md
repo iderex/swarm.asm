@@ -200,6 +200,16 @@ sets `permissions: {}` at workflow level and grants per job, except
   `scorecard.yml:104` `security-events: write` and `scorecard.yml:105`
   `contents: read`. Both set `persist-credentials: false`
   (`scorecard.yml:79`, `scorecard.yml:110`).
+- `seed-fasm-cache.yml:41` `permissions: {}`; the `seed` job
+  (`seed-fasm-cache.yml:51`) gets `seed-fasm-cache.yml:58` `contents: read`,
+  with `seed-fasm-cache.yml:63` `persist-credentials: false` and no secret.
+  It runs on a push to `main` that changes the bootstrap script or the
+  workflow itself (`seed-fasm-cache.yml:30-34`) and on dispatch
+  (`seed-fasm-cache.yml:37`), checks out, restores the assembler-archive
+  cache, bootstraps, and lets the cache step save `main`'s entry; it builds
+  nothing and runs nothing but the bootstrap (#346). THESE LINE CITATIONS ARE
+  TAKEN AT THE COMMIT THAT ADDS THE FILE, for the reason `release.yml`'s
+  entry gives.
 - `unicode-guard.yml:12-13` grant `contents: read` at workflow level, with no
   job-level block and no secret. The `bidi` job is at `unicode-guard.yml:22`.
 - `zizmor.yml:53` `permissions: {}`. The `zizmor` audit job
@@ -229,8 +239,8 @@ reading taken at the sha at the top of this section, so the ingestion paths
 that arrived with `dco.yml`, `mutation.yml`, `parser-fuzz.yml` and
 `scorecard.yml` are not placed on a rung: the actions they call, the
 `.config/dotnet-tools.json` manifest that `mutation.yml:131`
-`run: dotnet tool restore` consumes (`:142` at the last commit that touched
-this document; #344's cache step moved it), and the `tests/Swarm.Oracle` project and
+`run: dotnet tool restore` consumes (`:143` at the last commit that touched
+this document; #344's cache step and #346's comment moved it), and the `tests/Swarm.Oracle` project and
 its lock file. Their credentials are above and their pins are not analysed
 here. That is a gap in the rung analysis, it is stated rather than implied, and
 it is what issue #312 leaves open for whoever re-takes the enumeration.
@@ -290,7 +300,7 @@ Not every line that returns is a call site: some are prose inside comments,
 which is why the entries above name their lines individually rather than
 resting on the size of that output.
 
-The FASM archive, fetched by `ci.yml:93` `run: ./tools/get-fasm.ps1` and
+The FASM archive, fetched by `ci.yml:95` `run: ./tools/get-fasm.ps1` and
 reached locally through `build.ps1`'s
 `& (Join-Path $Root 'tools\get-fasm.ps1')`. The pin is
 `tools/get-fasm.ps1:17` `$Version = '1.73.35'`, `:18` the URL and `:19` the
@@ -338,12 +348,15 @@ origin server is contacted, and not what is accepted from it.
 
 What it buys is availability, and only between seedings. A pull-request run
 reads its own scope first, so a re-push with the script unchanged hits, then
-`main`'s, and saves only into its own scope; `main`'s entry is written by a
-scheduled job that bootstraps the assembler and ends green - `parser-fuzz.yml`
-weekly, `mutation.yml` only on a week its verdict passes - or by a manual run of
-one of them on `main`, and the key changes with every edit of the script. Until
-such a run has happened since the last edit, every pull request's first run
-downloads as before. An entry nothing has restored for seven days is evicted;
+`main`'s, and saves only into its own scope. `main`'s entry is written by
+`seed-fasm-cache.yml` on the push to `main` that changes the script, so it
+exists the moment its key does (#346), and by any scheduled job that bootstraps
+the assembler and ends green - `parser-fuzz.yml` weekly, `mutation.yml` only on
+a week its verdict passes. Before the seed existed, `main`'s entry waited for
+one of those, or for a manual run of one of them on `main`, which is the state
+the first hosted runs below were read in. Until the seed has run green for the
+script at `main`, every pull request's first run downloads as before. An entry
+nothing has restored for seven days is evicted;
 the scheduled restores keep it warm while they run each week, so it goes cold
 when they miss one. The restore-then-verify path has run on a hosted runner, on
 the pull request that landed this, first on a run whose script was unchanged
@@ -528,7 +541,7 @@ git show origin/main:tests/Swarm.Bench/packages.lock.json | grep -c '"resolved"'
 
 The half of the old sentence that survives is the load-bearing half. The build
 step for this project still does not restore in locked mode - at that sha it is
-`ci.yml:130`, and `ci.yml:166` at the last commit that touched this document,
+`ci.yml:130`, and `ci.yml:168` at the last commit that touched this document,
 which #344's cache step moved it to: `run: dotnet build tests/Swarm.Bench/Swarm.Bench.csproj -c Release --nologo`,
 with no `-p:RestoreLockedMode=true`, unlike the harness step. So the lock file
 is present and is not enforced, and a package added here would still have the
