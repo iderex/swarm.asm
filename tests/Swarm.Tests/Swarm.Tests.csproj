@@ -18,14 +18,23 @@
     <!-- Microsoft Testing Platform, not VSTest. VSTest spawns a freshly built
          testhost.exe, which Device Guard / Smart App Control blocks on the dev
          machine; the MTP runner executes in-process under the trusted dotnet
-         host, so `dotnet test` behaves identically here and in CI. -->
+         host, so `dotnet test` behaves identically here and in CI.
+
+         Exe is the whole of it now. xunit.v3 4.x carries the platform runner
+         and nothing else - the dependency renamed from xunit.v3.mtp-v1 to
+         xunit.v3.mtp-v2 across the major - so the two properties that used to
+         select it here, UseMicrosoftTestingPlatformRunner and
+         TestingPlatformDotnetTestSupport, no longer select anything. The
+         second one was worse than inert: it imported the VSTest bridge, which
+         the platform refuses outright on the .NET 10 SDK, and that refusal is
+         what turned the 4.0.0 bump into a migration (#343). What replaces
+         both is `test.runner` in the repository's global.json, because the
+         opt-in is now the SDK's rather than the project's. -->
     <OutputType>Exe</OutputType>
-    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
-    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.v3" Version="4.0.0" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 

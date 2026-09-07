@@ -252,7 +252,7 @@ public sealed unsafe class BoundaryPropertyTests
         // set from: 1,638,400 samples, 0 exactly 0, 1 within 2^-20 of 0, 1
         // within 2^-20 of 1, closest approach to 0 = 8.060888e-07, gap to 1 =
         // 2.3841858e-07, which is two ulps at 1.0. Reproduce with
-        //   dotnet test tests/Swarm.Tests -- --filter-method "*BoundaryCoverageIsNotVacuous*"
+        //   dotnet test --project tests/Swarm.Tests -- --filter-method "*BoundaryCoverageIsNotVacuous*"
         // after replacing the assertion below with Assert.True(false, ...).
         //
         // The threshold is 1e-5 rather than the measured figure: the sweep is

@@ -119,7 +119,12 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: "9.0.x"
+          # 9.0.x for the runtime the harness targets, 10.0.x for the SDK
+          # whose `dotnet test` reads global.json's runner opt-in; ci.yml
+          # carries the argument (#343).
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
       - name: Restore the verified assembler archive
         # Same step, same key and same reason as ci.yml's, where the reason is
@@ -168,7 +173,7 @@ jobs:
         # command and runner image in ci.yml's "Test (conformance harness)"
         # over its five most recent runs: 90s, 88s, 96s, 104s, 96s. The bound's
         # own comment above carries what that leaves the mutate step.
-        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+        run: dotnet test --project tests/Swarm.Tests/Swarm.Tests.csproj -c Release -p:RestoreLockedMode=true
 
       - name: Mutate the oracle
         id: mutate

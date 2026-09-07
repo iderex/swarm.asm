@@ -422,11 +422,12 @@ That produces `build/swarm.exe` and `build/swarm.kernel.dll`. Both are assembled
 from the same kernel sources, so the tested kernel is the shipped kernel rather
 than a copy of it.
 
-The tests need the .NET 9 SDK, and they load the freshly built DLL through
-P/Invoke:
+The tests target net9.0, need the .NET 10 SDK or newer to run - `global.json`
+declares that floor and the runner opt-in xunit.v3 4.x requires - and they load
+the freshly built DLL through P/Invoke:
 
 ```powershell
-dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
+dotnet test --project tests\Swarm.Tests\Swarm.Tests.csproj
 ```
 
 The benchmark harness is in the same tree and is deliberately dependency-free:

@@ -98,16 +98,24 @@ git ls-tree -r --name-only origin/main | grep -E 'csproj$|packages.lock.json$'
 ```
 
 The negatives are the half a derivation cannot state on its own, so they are
-written out instead, each naming the command that would falsify it. There is
-no `global.json` and no `nuget.config`, and no npm, Python, Go, Rust or
-submodule manifest anywhere in the tree:
+written out instead, each naming the command that would falsify it. THERE IS A
+`global.json` NOW AND THIS PARAGRAPH SAID THERE WAS NONE. It arrived with the
+xunit.v3 4.x migration, #343, because that release ships only the
+Microsoft.Testing.Platform runner and the .NET 10 SDK reads the opt-in for it
+out of that file; it carries an SDK floor and the runner name, and it names no
+package version. The rest of the sentence still holds: there is no
+`nuget.config`, and no npm, Python, Go, Rust or submodule manifest anywhere in
+the tree:
 
 ```
 git ls-tree -r --name-only origin/main \
-  | grep -E 'global.json$|nuget.config$|package.json$|pyproject.toml$|uv.lock$|requirements.txt$|go.mod$|Cargo.toml$|.gitmodules$'
+  | grep -E 'nuget.config$|package.json$|pyproject.toml$|uv.lock$|requirements.txt$|go.mod$|Cargo.toml$|.gitmodules$'
 ```
 
-returns nothing. THERE IS A RELEASE WORKFLOW NOW AND THIS PARAGRAPH SAID THERE
+returns nothing, and adding `global.json$` back to that pattern returns the one
+path. What that file leaves unpinned is rung 3 below rather than here.
+
+THERE IS A RELEASE WORKFLOW NOW AND THIS PARAGRAPH SAID THERE
 WAS NONE. `release.yml` landed on #181: a `v*` tag push assembles, runs the
 whole pull-request gate, refuses a tag that disagrees with `CHANGELOG.md` or
 with the ABI version the built DLL reports, and attests the artifact's digest.
@@ -465,21 +473,23 @@ five audits skip.
 
 ### Rung 3: not pinned at all
 
-The .NET SDK that `setup-dotnet` downloads, at `ci.yml:50`
-`dotnet-version: "9.0.x"`, with no `global.json` anywhere in the tree. The
-action is pinned and what it installs is not. The version string is a floating
-range rather than a version, so what is installed is whatever is newest in the
-9.0 feature band on the day the job runs, and nothing in the repository
-records which build that was. It executes in the required `build` job:
-`ci.yml:82`
-`run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true`
+The .NET SDKs that `setup-dotnet` downloads, at `ci.yml:56-58`
+`dotnet-version: |` `9.0.x` `10.0.x`. The action is pinned and what it
+installs is not. Both version strings are floating ranges rather than
+versions, so what is installed is whatever is newest in each feature band on
+the day the job runs, and nothing in the repository records which builds those
+were. `global.json` exists now and does not close this: it declares a floor,
+`10.0.100` with `latestMajor`, which refuses an SDK older than the one
+xunit.v3 4.x's runner opt-in needs and names no build above it. They execute
+in the required `build` job: `ci.yml:178`
+`run: dotnet test --project tests/Swarm.Tests/Swarm.Tests.csproj -c Release -p:RestoreLockedMode=true`
 compiles and runs the conformance harness, which is the merge gate, so a
 compromised SDK is a compromised gate rather than a compromised shipped
 binary. Nothing verifies it: no hash, no lock file and no manifest covers this
 path. Dependabot does not see it either, because the `github-actions`
-ecosystem reads `uses:` refs and not a `with:` input, so `9.0.x` is invisible
-to the updater and no cooldown applies. The counter-argument is stated rather
-than dropped: the SDK never touches the shipped `swarm.exe`, which is produced
+ecosystem reads `uses:` refs and not a `with:` input, so both ranges are
+invisible to the updater and no cooldown applies. The counter-argument is
+stated rather than dropped: the SDK never touches the shipped `swarm.exe`, which is produced
 entirely by FASM at `build.ps1:21`
 `& $Fasm (Join-Path $Root 'src\swarm.asm') (Join-Path $BuildDir 'swarm.exe')`,
 which bounds the blast radius to the gate and to whatever the gate's workspace

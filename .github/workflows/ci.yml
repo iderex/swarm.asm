@@ -47,7 +47,15 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: "9.0.x"
+          # Two, and neither is spare. 9.0.x carries the runtime the harness
+          # targets; 10.0.x carries the SDK whose `dotnet test` reads the
+          # global.json opt-in, which xunit.v3 4.x requires because it ships
+          # only the platform runner. The 10 SDK is on the runner image today
+          # and this asks for it rather than inheriting it, so the day the
+          # image changes the job says what is missing (#343).
+          dotnet-version: |
+            9.0.x
+            10.0.x
           # Keyed on the committed lock file; restore runs in locked mode
           # below, so the cache can never mask a drifted dependency.
           cache: true
@@ -159,7 +167,15 @@ jobs:
       - name: Test (conformance harness)
         # Locked-mode restore: a dependency drifting from the committed lock
         # file fails the build instead of floating silently.
-        run: dotnet test tests/Swarm.Tests/Swarm.Tests.csproj -c Release --nologo -p:RestoreLockedMode=true
+        #
+        # `--project` rather than a bare path, and no `--nologo`. Under the
+        # opt-in that global.json now declares, `dotnet test` is the
+        # Microsoft.Testing.Platform command rather than the VSTest one, and it
+        # takes the project as a named option; a bare path is not an error
+        # there, it is an argument the command ignores, and the run reports
+        # "no tests were run" with exit code 5. Measured while landing #343:
+        # the same tree runs 455 tests with the option and 0 without it.
+        run: dotnet test --project tests/Swarm.Tests/Swarm.Tests.csproj -c Release -p:RestoreLockedMode=true
 
       - name: Build the micro-bench (compile-check only)
         # The benchmark is run by hand - timing numbers never gate CI (flake).
