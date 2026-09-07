@@ -88,7 +88,7 @@ the docs formatting gate below - not for building or running the engine.
 
 ```powershell
 .\build.ps1                                            # bootstraps the pinned FASM on first run, assembles to build/
-dotnet test tests\Swarm.Tests\Swarm.Tests.csproj       # reference equivalence + conformance fitness tests
+dotnet test --project tests\Swarm.Tests\Swarm.Tests.csproj  # reference equivalence + conformance fitness tests
 npx --yes prettier@3.9.5 --check "**/*.{md,yml,yaml}"  # docs formatting gate
 ```
 

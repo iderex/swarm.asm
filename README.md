@@ -158,11 +158,14 @@ shipped exe, `swarm_dll.asm` (kernel + seam shims) assembles to the DLL the
 test harness P/Invokes; both include the same `src/kernel/*.inc`, so the
 tested kernel is the shipped kernel.
 
-The test harness (from M0 onward) needs the .NET 9 SDK. Run `.\build.ps1`
+The test harness (from M0 onward) targets net9.0 and needs the .NET 10 SDK or
+newer to run, which `global.json` declares: xunit.v3 4.x ships only the
+Microsoft.Testing.Platform runner, and that SDK's `dotnet test` takes its
+opt-in from there and the project from `--project`. Run `.\build.ps1`
 first - `dotnet test` loads the freshly built `swarm.kernel.dll`:
 
 ```powershell
-dotnet test tests\Swarm.Tests\Swarm.Tests.csproj
+dotnet test --project tests\Swarm.Tests\Swarm.Tests.csproj
 ```
 
 ## Running
